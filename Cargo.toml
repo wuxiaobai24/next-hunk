@@ -1,0 +1,33 @@
+[package]
+name = "next-hunk"
+version = "0.1.0"
+edition = "2021"
+description = "High-performance terminal review engine for large changesets"
+license = "MIT"
+readme = "README.md"
+keywords = ["diff", "git", "tui", "review", "performance"]
+categories = ["command-line-utilities", "development-tools"]
+rust-version = "1.85"
+
+[lib]
+name = "next_hunk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "next-hunk"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+gix = "0.85"
+ratatui = "0.29"
+thiserror = "2"
+unicode-width = "0.2"
+
+# Release profile: optimize for runtime speed of the review path.
+# Binary size is not a product goal — do not use panic="abort"/extreme strip
+# policies as architecture constraints.
+[profile.release]
+lto = "thin"
