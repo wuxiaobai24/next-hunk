@@ -219,21 +219,21 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 
 ### Phase 1 — Engine is falsifiable (~1 week)
 
-- [ ] Robust unified parse (rename, binary placeholder, no newline)
-- [ ] `ViewportQuery` with binary search on file spans (initial version exists)
+- [x] Robust unified parse (rename, binary placeholder, no newline)
+- [x] `ViewportQuery` with binary search on file spans (initial version exists)
 - [x] Sources: gix worktree / staged / show / range (patch file / stdin via CLI)
-- [ ] Benches: parse + viewport materialization
+- [x] Benches: parse + viewport materialization
 
 **Exit:** huge fixture parses without OOM; random viewport queries meet gates in PERF.md.
 
 ### Phase 2 — TUI MVP (~1–1.5 weeks)
 
-- [ ] ratatui: left file rail + right continuous stream
-- [ ] Virtual scroll (`scroll_y` + viewport)
-- [ ] Keys: j/k, next/prev file, g/G, q, Tab
-- [ ] Status line: file count / position / mode
-- [ ] Friendly empty-diff and non-git errors
-- [ ] `next-hunk` / `next-hunk diff` interactive by default
+- [x] ratatui: left file rail + right continuous stream
+- [x] Virtual scroll (`scroll_y` + viewport)
+- [x] Keys: j/k, next/prev file, g/G, q, Tab
+- [x] Status line: file count / position / mode
+- [x] Friendly empty-diff and non-git errors
+- [x] `next-hunk` / `next-hunk diff` interactive by default
 
 **Exit:** daily-driver for working-tree review on medium fixtures; huge opens and scrolls (highlight optional).
 

@@ -2,8 +2,8 @@
 //!
 //! Layers:
 //! - [`ir`] — compact runtime diff IR + viewport queries
-//! - [`source`] — load unified diffs (git CLI, later patch/stdin, optional libs)
-//! - [`tui`] — interactive review UI (Phase 2)
+//! - [`source`] — load unified diffs (gix; no `git` CLI fallback)
+//! - [`tui`] — interactive review UI
 
 pub mod ir;
 pub mod source;

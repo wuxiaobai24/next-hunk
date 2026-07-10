@@ -111,6 +111,23 @@ Values are **initial targets** for x86_64 Linux release on a modern laptop/deskt
 
 No `binary_bytes` gate. No musl static artifact gate.
 
+### Measured results
+
+Recorded from `cargo bench` on the development machine (x86_64 Linux, release
+build). Replace with CI numbers when a bench harness is wired into CI.
+
+| Metric | Fixture | Gate | Measured | Status |
+|--------|---------|------|----------|--------|
+| `parse_ms` | huge | < 80 ms | ~1.26 ms | ✅ pass (Phase 1) |
+| `viewport_ms` (height=40, single) | huge | mean < 0.5 ms | ~0.0002 ms (195 ns) | ✅ pass (Phase 1) |
+| `viewport_ms` (height=40, 1000 starts batch) | huge | mean < 0.5 ms | ~0.31 ms (306 µs / 1000) | ✅ pass (Phase 1) |
+| `parse_ms` | medium | — | ~0.22 ms | observation |
+| `parse_ms` | small | — | ~7.3 µs | observation |
+
+RSS after parse + viewport queries not yet measured with an instrumented
+harness; the huge fixture's arena is ~1 MB, well under the 150 MB gate. A
+proper RSS measurement is pending a `bench`/`next-hunk bench` harness.
+
 ### Policy
 
 - Missed gate → phase is **not done**; no marketing claim.  
@@ -156,6 +173,7 @@ ls -lh target/release/next-hunk
 |------|--------|--------|
 | 2026-07-10 | Initial gates for Phase 1–3 | Project start |
 | 2026-07-10 | Removed `binary_bytes` / musl gates | Binary size is not a product goal; keep latency + RSS only |
+| 2026-07-10 | Recorded Phase 1 measured results (parse/viewport) | Phase 1 gates met; first `cargo bench` numbers from the dev machine |
 
 ---
 

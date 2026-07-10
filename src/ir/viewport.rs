@@ -122,6 +122,39 @@ impl ViewportQuery {
             Some(review.files.len() - 1)
         }
     }
+
+    /// Stream row where the given file's header begins.
+    ///
+    /// Used by the TUI to jump-to-file. Returns the clamped last file start if
+    /// the index is out of range (matches `file_at_row` clamping semantics).
+    pub fn file_start_row(review: &Review, file_idx: usize) -> usize {
+        review
+            .files
+            .get(file_idx)
+            .map(|f| f.stream_start)
+            .unwrap_or_else(|| {
+                review
+                    .files
+                    .last()
+                    .map(|f| f.stream_start)
+                    .unwrap_or(0)
+            })
+    }
+
+    /// Advance `file_idx` to the next/previous file, wrapping or clamping.
+    /// Returns the new index and its stream start row.
+    pub fn jump_file(review: &Review, file_idx: usize, forward: bool) -> Option<(usize, usize)> {
+        if review.files.is_empty() {
+            return None;
+        }
+        let n = review.files.len();
+        let next = if forward {
+            (file_idx + 1) % n
+        } else {
+            file_idx.checked_sub(1).unwrap_or(n - 1)
+        };
+        Some((next, Self::file_start_row(review, next)))
+    }
 }
 
 #[cfg(test)]
@@ -129,17 +162,29 @@ mod tests {
     use super::*;
     use crate::ir::parse_unified_diff;
 
-    #[test]
-    fn viewport_materializes_subset() {
-        let sample = "\
+    fn two_file_review() -> Review {
+        parse_unified_diff(
+            "\
 diff --git a/a.rs b/a.rs
 --- a/a.rs
 +++ b/a.rs
 @@ -1 +1 @@
 -old
 +new
-";
-        let review = parse_unified_diff(sample).unwrap();
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-foo
++bar
+",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn viewport_materializes_subset() {
+        let review = two_file_review();
         let rows = ViewportQuery::rows(
             &review,
             Viewport {
@@ -149,5 +194,104 @@ diff --git a/a.rs b/a.rs
         );
         assert_eq!(rows.len(), 2);
         assert!(matches!(rows[0], StreamRow::FileHeader { .. }));
+    }
+
+    #[test]
+    fn viewport_clamps_past_end() {
+        let review = two_file_review();
+        let total = review.stream_len;
+        // A start past the end is clamped to the last row, so we get that row.
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: total + 10,
+                height: 5,
+            },
+        );
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn viewport_spanning_two_files() {
+        let review = two_file_review();
+        let f0_end = review.files[0].stream_start + review.files[0].stream_len;
+        // start a couple rows before the boundary, take enough to cross into file 1
+        let start = f0_end.saturating_sub(1);
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start,
+                height: 4,
+            },
+        );
+        // should contain a FileHeader for file 1 somewhere
+        assert!(rows.iter().any(|r| matches!(
+            r,
+            StreamRow::FileHeader {
+                file_idx: 1,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn file_at_row_boundaries() {
+        let review = two_file_review();
+        let f0 = &review.files[0];
+        let f1 = &review.files[1];
+        // first row of file 0
+        assert_eq!(ViewportQuery::file_at_row(&review, f0.stream_start), Some(0));
+        // last row of file 0
+        assert_eq!(
+            ViewportQuery::file_at_row(&review, f0.stream_start + f0.stream_len - 1),
+            Some(0)
+        );
+        // first row of file 1
+        assert_eq!(ViewportQuery::file_at_row(&review, f1.stream_start), Some(1));
+    }
+
+    #[test]
+    fn zero_height_returns_empty() {
+        let review = two_file_review();
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: 0,
+                height: 0,
+            },
+        );
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn file_start_row_helper() {
+        let review = two_file_review();
+        assert_eq!(ViewportQuery::file_start_row(&review, 0), review.files[0].stream_start);
+        assert_eq!(ViewportQuery::file_start_row(&review, 1), review.files[1].stream_start);
+        // out of range clamps to last file start
+        assert_eq!(ViewportQuery::file_start_row(&review, 99), review.files[1].stream_start);
+    }
+
+    #[test]
+    fn jump_file_wraps_and_clamps() {
+        let review = two_file_review();
+        // forward from last wraps to first
+        let (idx, _) = ViewportQuery::jump_file(&review, 1, true).unwrap();
+        assert_eq!(idx, 0);
+        // backward from first wraps to last
+        let (idx, _) = ViewportQuery::jump_file(&review, 0, false).unwrap();
+        assert_eq!(idx, 1);
+        // forward from first
+        let (idx, row) = ViewportQuery::jump_file(&review, 0, true).unwrap();
+        assert_eq!(idx, 1);
+        assert_eq!(row, review.files[1].stream_start);
+    }
+
+    #[test]
+    fn empty_review_helpers() {
+        let review = Review::default();
+        assert_eq!(ViewportQuery::file_at_row(&review, 0), None);
+        assert_eq!(ViewportQuery::jump_file(&review, 0, true), None);
+        assert_eq!(ViewportQuery::file_start_row(&review, 0), 0);
     }
 }

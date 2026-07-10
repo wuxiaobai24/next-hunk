@@ -219,21 +219,21 @@ next-hunk/
 
 ### Phase 1 — 引擎可证伪（约 1 周）
 
-- [ ] 稳健 unified parse（rename、binary 占位、no newline）
-- [ ] `ViewportQuery`：按文件 span 二分（已有初版）
+- [x] 稳健 unified parse（rename、binary 占位、no newline）
+- [x] `ViewportQuery`：按文件 span 二分（已有初版）
 - [x] Source：gix worktree / staged / show / range（patch 文件 / stdin 已可走 CLI）
-- [ ] Bench：parse + viewport 物化
+- [x] Bench：parse + viewport 物化
 
 **退出：** huge fixture 解析不 OOM；随机 viewport 查询达到 [PERF_zh.md](./PERF_zh.md) 门禁。
 
 ### Phase 2 — TUI MVP（约 1–1.5 周）
 
-- [ ] ratatui：左文件 rail + 右连续 stream
-- [ ] 虚拟滚动（`scroll_y` + viewport）
-- [ ] 键位：j/k、下一/上一文件、g/G、q、Tab
-- [ ] 状态栏：文件数 / 位置 / 模式
-- [ ] 空 diff、非 git 仓库友好提示
-- [ ] `next-hunk` / `next-hunk diff` 默认可交互
+- [x] ratatui：左文件 rail + 右连续 stream
+- [x] 虚拟滚动（`scroll_y` + viewport）
+- [x] 键位：j/k、下一/上一文件、g/G、q、Tab
+- [x] 状态栏：文件数 / 位置 / 模式
+- [x] 空 diff、非 git 仓库友好提示
+- [x] `next-hunk` / `next-hunk diff` 默认可交互
 
 **退出：** medium 可日常用；huge 能打开能滚（高亮可选）。
 

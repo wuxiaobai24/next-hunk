@@ -1,1 +1,7 @@
 /target
+
+# Generated fixture tiers (regenerate via scripts/gen_fixtures.sh).
+# Golden tiny_* patches are committed.
+fixtures/small.patch
+fixtures/medium.patch
+fixtures/huge.patch

@@ -1,0 +1,21 @@
+diff --git a/no-newline.txt b/no-newline.txt
+index 111..222 100644
+--- a/no-newline.txt
++++ b/no-newline.txt
+@@ -1 +1 @@
+-old
+\ No newline at end of file
++new
+\ No newline at end of file
+diff --git a/bin.dat b/bin.dat
+index 111..222 100644
+Binary files a/bin.dat and b/bin.dat differ
+diff --git a/old.rs b/new.rs
+similarity index 90%
+rename from old.rs
+rename to new.rs
+--- a/old.rs
++++ b/new.rs
+@@ -1 +1 @@
+-x
++y

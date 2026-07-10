@@ -24,9 +24,11 @@
 早期原型（`v0.1.0-dev`）：
 
 - [x] 项目骨架 + 紧凑 unified-diff IR（运行时模型）
-- [x] 视口查询骨架
-- [ ] 虚拟化多文件 TUI
+- [x] 视口查询（基于文件 span 的二分查找）
+- [x] 虚拟化多文件 TUI（ratatui）
 - [x] gix 驱动的 worktree / staged / show（+ patch stdin）
+- [x] 健壮的 unified 解析（重命名、二进制占位、无换行符、CRLF）
+- [x] 基准测试：解析 + 视口物化
 - [ ] 异步语法高亮
 - [ ] Agent 导出（JSON / Markdown）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
@@ -39,13 +41,42 @@ cargo install --path .
 cargo run --release -- diff
 ```
 
-## 用法（规划）
+## 用法
 
 ```bash
 next-hunk                  # 工作区 diff
 next-hunk diff --staged
 next-hunk show HEAD
 git diff | next-hunk patch -
+next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
+```
+
+### 快捷键
+
+| 按键 | 动作 |
+|-----|------|
+| `j` / `↓` | 向下滚动一行 |
+| `k` / `↑` | 向上滚动一行 |
+| `J` / `PgDn` | 向下滚动半屏 |
+| `K` / `PgUp` | 向上滚动半屏 |
+| `g` / `Home` | 跳到顶部 |
+| `G` / `End` | 跳到底部 |
+| `Tab` / `l` / `→` | 下一个文件 |
+| `Shift+Tab` / `h` / `←` | 上一个文件 |
+| `q` / `Esc` / `Ctrl+C` | 退出 |
+
+## 测试与基准
+
+```bash
+# 单元 + 集成 + 无头 TUI 测试
+cargo test
+
+# 生成 fixture（small / medium / huge）
+./scripts/gen_fixtures.sh
+
+# 基准测试（PERF.md 指标）
+cargo bench --bench parse
+cargo bench --bench viewport
 ```
 
 ## 架构（简）

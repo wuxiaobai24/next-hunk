@@ -105,9 +105,9 @@ fn open_review_from_text(text: &str) -> Result<()> {
         return Ok(());
     }
     let review = parse_review(text)?;
-    // Phase 2: interactive TUI. Until then, print a short summary so the CLI
-    // path is usable for engine validation.
-    match run_review_tui(&review) {
+    // Interactive TUI (Phase 2). If it fails (e.g. stdout is not a tty),
+    // fall back to a short inspect summary so the CLI path stays usable.
+    match run_review_tui(review.clone()) {
         Ok(()) => Ok(()),
         Err(err) => {
             eprintln!("note: {err}");

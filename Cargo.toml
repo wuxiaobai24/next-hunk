@@ -26,8 +26,20 @@ ratatui = "0.29"
 thiserror = "2"
 unicode-width = "0.2"
 
+[dev-dependencies]
+criterion = { version = "0.5", default-features = false }
+
 # Release profile: optimize for runtime speed of the review path.
 # Binary size is not a product goal — do not use panic="abort"/extreme strip
 # policies as architecture constraints.
 [profile.release]
 lto = "thin"
+
+# Benches (PERF.md §3). `harness = false` so criterion_main! drives main().
+[[bench]]
+name = "parse"
+harness = false
+
+[[bench]]
+name = "viewport"
+harness = false

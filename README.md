@@ -24,9 +24,11 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 Early prototype (`v0.1.0-dev`):
 
 - [x] Project scaffold + compact unified-diff IR (runtime model)
-- [x] Viewport query skeleton
-- [ ] Virtualized multi-file TUI
+- [x] Viewport query with binary search on file spans
+- [x] Virtualized multi-file TUI (ratatui)
 - [x] gix-backed worktree / staged / show (+ patch stdin)
+- [x] Robust unified parse (rename, binary placeholder, no-newline, CRLF)
+- [x] Benchmarks: parse + viewport materialization
 - [ ] Async syntax highlight
 - [ ] Agent export (JSON / Markdown)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
@@ -39,13 +41,42 @@ cargo install --path .
 cargo run --release -- diff
 ```
 
-## Usage (planned)
+## Usage
 
 ```bash
 next-hunk                  # working tree diff
 next-hunk diff --staged
 next-hunk show HEAD
 git diff | next-hunk patch -
+next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
+```
+
+### Keybindings
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | scroll down one row |
+| `k` / `↑` | scroll up one row |
+| `J` / `PgDn` | scroll half a page |
+| `K` / `PgUp` | scroll half a page up |
+| `g` / `Home` | jump to top |
+| `G` / `End` | jump to bottom |
+| `Tab` / `l` / `→` | next file |
+| `Shift+Tab` / `h` / `←` | previous file |
+| `q` / `Esc` / `Ctrl+C` | quit |
+
+## Testing & benchmarks
+
+```bash
+# unit + integration + headless TUI tests
+cargo test
+
+# generate fixtures (small / medium / huge)
+./scripts/gen_fixtures.sh
+
+# benchmarks (PERF.md metrics)
+cargo bench --bench parse
+cargo bench --bench viewport
 ```
 
 ## Architecture (short)
