@@ -23,18 +23,28 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 gix = "0.85"
 ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
 # syntect: pure-Rust regex engine (default-fancy) — no Oniguruma C toolchain.
 # Optional behind the `highlight` feature so constrained/offline environments
 # can build without it (the TUI gracefully degrades to plain text).
 syntect = { version = "5.2", default-features = false, features = ["default-fancy"], optional = true }
 thiserror = "2"
 unicode-width = "0.2"
+# toml: parse layered config.toml (user + project). Pure-Rust, small.
+toml = "0.8"
+# notify: filesystem watcher for `--watch` mode. Optional behind the `watch`
+# feature so constrained/offline environments can build without it (the `--watch`
+# flag then reports that the feature is not compiled in).
+notify = { version = "6", optional = true }
 
 [features]
 default = ["highlight"]
 # Syntax highlighting via syntect. When disabled, the TUI renders plain text
 # (highlight toggle is inert).
 highlight = ["dep:syntect"]
+# Live reload in `--watch` mode via notify. When disabled, `--watch` reports
+# that the feature is not compiled in.
+watch = ["dep:notify"]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }

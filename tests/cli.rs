@@ -102,3 +102,38 @@ fn no_subcommand_defaults_to_diff() {
         "default diff should fail gracefully, stderr: {stderr}"
     );
 }
+
+#[test]
+fn watch_flag_is_recognized() {
+    // `--watch` must be a valid flag (clap parses it). In a non-git dir it
+    // should fail with the repo error, not an "unknown argument" error —
+    // proving the flag exists in the CLI surface.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--watch"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+        "--watch should be a recognized flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn no_highlight_flag_is_recognized() {
+    // `--no-highlight` must be a valid flag (clap parses it). Same rationale
+    // as the watch test: existence in the CLI surface.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--no-highlight"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+        "--no-highlight should be a recognized flag, stderr: {stderr}"
+    );
+}

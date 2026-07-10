@@ -49,6 +49,13 @@ pub struct Review {
     pub files: Vec<FileDiff>,
     /// Total virtual stream rows (file headers + hunk headers + lines).
     pub stream_len: usize,
+    /// Absolute stream rows of every hunk header across all files, ascending.
+    ///
+    /// Built at parse time so hunk-to-hunk jumps are a cheap binary search
+    /// instead of re-scanning the file tree (architecture §2.3: index ≠ content).
+    /// Does **not** include standalone binary-meta body rows (files with no
+    /// hunks have nothing to jump to).
+    pub hunk_starts: Vec<usize>,
 }
 
 impl Review {

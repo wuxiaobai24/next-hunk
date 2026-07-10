@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
+use next_hunk::config::{CliFlags, Config, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
 use next_hunk::source::{find_repo, git_diff, git_show};
 use next_hunk::tui::run_review_tui;
@@ -28,6 +29,13 @@ enum Commands {
         /// Review staged changes (`git diff --cached`).
         #[arg(long, short = 's')]
         staged: bool,
+        /// Re-run on filesystem changes (live reload). Requires the `watch`
+        /// feature; otherwise reports that it is unavailable.
+        #[arg(long)]
+        watch: bool,
+        /// Disable syntax highlighting (overrides config/highlight default).
+        #[arg(long)]
+        no_highlight: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -65,21 +73,54 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Commands::Diff {
         staged: false,
+        watch: false,
+        no_highlight: false,
         extra: Vec::new(),
     }) {
-        Commands::Diff { staged, extra } => {
-            let repo = find_repo(&std::env::current_dir()?)?;
-            let text = git_diff(&repo, staged, &extra)?;
-            open_review_from_text(&text)
+        Commands::Diff {
+            staged,
+            watch,
+            no_highlight,
+            extra,
+        } => {
+            let cwd = std::env::current_dir()?;
+            let repo = find_repo(&cwd)?;
+
+            // Layered config: project (.next-hunk/config.toml) > user
+            // (~/.config/next-hunk/config.toml). CLI flags override on top.
+            let cfg = Config::load(&cwd);
+            let resolved = ResolvedConfig::resolve(
+                &cfg,
+                &CliFlags {
+                    staged: if staged { Some(true) } else { None },
+                    watch: if watch { Some(true) } else { None },
+                    highlight: if no_highlight { Some(false) } else { None },
+                },
+            );
+
+            if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
+                eprintln!(
+                    "note: `--watch` requires the `watch` feature (rebuild with --features watch)"
+                );
+            }
+
+            let text = git_diff(&repo, resolved.staged, &extra)?;
+            let reloader = if resolved.watch {
+                Some(make_diff_reloader(repo, resolved.staged, extra))
+            } else {
+                None
+            };
+            open_review_from_text(&text, reloader, resolved.highlight)
         }
         Commands::Show { rev } => {
             let repo = find_repo(&std::env::current_dir()?)?;
             let text = git_show(&repo, &rev)?;
-            open_review_from_text(&text)
+            // `show` is a one-shot snapshot: no watch, highlight default on.
+            open_review_from_text(&text, None, true)
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
-            open_review_from_text(&text)
+            open_review_from_text(&text, None, true)
         }
         Commands::Inspect { path, staged } => {
             let text = if let Some(path) = path {
@@ -99,7 +140,21 @@ fn run() -> Result<()> {
     }
 }
 
-fn open_review_from_text(text: &str) -> Result<()> {
+/// Build the live-reload closure for `--watch`: re-runs the same git diff.
+/// Captures the repo path, staged flag, and pathspecs by value.
+fn make_diff_reloader(
+    repo: PathBuf,
+    staged: bool,
+    extra: Vec<String>,
+) -> next_hunk::tui::Reloader {
+    Box::new(move || git_diff(&repo, staged, &extra).context("re-run git diff for --watch"))
+}
+
+fn open_review_from_text(
+    text: &str,
+    reloader: Option<next_hunk::tui::Reloader>,
+    highlight_on: bool,
+) -> Result<()> {
     if text.trim().is_empty() {
         eprintln!("(empty diff)");
         return Ok(());
@@ -107,7 +162,7 @@ fn open_review_from_text(text: &str) -> Result<()> {
     let review = parse_review(text)?;
     // Interactive TUI (Phase 2). If it fails (e.g. stdout is not a tty),
     // fall back to a short inspect summary so the CLI path stays usable.
-    match run_review_tui(review.clone()) {
+    match run_review_tui(review.clone(), reloader, highlight_on) {
         Ok(()) => Ok(()),
         Err(err) => {
             eprintln!("note: {err}");

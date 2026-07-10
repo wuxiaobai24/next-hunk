@@ -274,7 +274,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · Tab next file · / search · f filter · H highlight · q quit "
+            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h next/prev hunk · Tab next file · / search · f filter · H highlight · q quit "
                 .to_string()
         }
     };

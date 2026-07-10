@@ -73,6 +73,9 @@ pub struct App {
     pub search: Search,
     /// File-rail path filter substring (empty = show all).
     pub path_filter: String,
+    /// Pending first key of a two-key sequence (`]` / `[`). Cleared on the next
+    /// key or after a short no-op. Used to spell `]h` / `[h` (next/prev hunk).
+    pub pending_prefix: Option<char>,
 }
 
 impl App {
@@ -86,7 +89,7 @@ impl App {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
-            format!("{} file(s) — j/k scroll, / search, f filter, H highlight, q quit", review.file_count())
+            format!("{} file(s) — j/k scroll, ]h/[h next/prev hunk, / search, f filter, H highlight, q quit", review.file_count())
         };
         Self {
             review,
@@ -101,6 +104,7 @@ impl App {
             mode: InputMode::Normal,
             search: Search::default(),
             path_filter: String::new(),
+            pending_prefix: None,
         }
     }
 
@@ -144,6 +148,25 @@ impl App {
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
         let half = self.viewport_height.max(1) / 2;
+
+        // Two-key sequence handling for `]h` / `[h` (next/prev hunk).
+        // If a prefix is pending, consume it now.
+        if let Some(prefix) = self.pending_prefix.take() {
+            match (prefix, key.code) {
+                (']', KeyCode::Char('h')) => {
+                    self.jump_hunk(true);
+                    return;
+                }
+                ('[', KeyCode::Char('h')) => {
+                    self.jump_hunk(false);
+                    return;
+                }
+                _ => {
+                    // Unrecognized second key: fall through to normal dispatch.
+                    // (A lone `]`/`[` that isn't followed by `h` is discarded.)
+                }
+            }
+        }
 
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => {
@@ -201,6 +224,15 @@ impl App {
                     self.scroll_y = row;
                     self.status = format!("← {}", self.review.display_path(idx));
                 }
+            }
+            // hunk navigation prefixes: `]` / `[` await a following `h`
+            KeyCode::Char(']') => {
+                self.pending_prefix = Some(']');
+                self.status = "]".into();
+            }
+            KeyCode::Char('[') => {
+                self.pending_prefix = Some('[');
+                self.status = "[".into();
             }
             // toggle highlight
             KeyCode::Char('H') => {
@@ -386,13 +418,104 @@ impl App {
     pub fn current_path(&self) -> &str {
         self.review.display_path(self.selected_file)
     }
+
+    /// Hot-reload the review from freshly produced diff `text`.
+    ///
+    /// Preserves as much navigation state as possible:
+    /// - `selected_file` is re-resolved by matching the old display path;
+    ///   if gone, clamps to 0.
+    /// - `scroll_y` is kept but clamped to the new `max_scroll`.
+    /// - an active search is re-run against the new content.
+    /// - the highlight cache is invalidated (line numbers/content may shift).
+    ///
+    /// On parse failure the old review is kept and an error status is set.
+    pub fn reload_review(&mut self, text: &str) {
+        if text.trim().is_empty() {
+            self.status = "reloaded (empty diff)".into();
+            return;
+        }
+        let new_review = match crate::ir::parse_unified_diff(text) {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = format!("reload failed: {e}");
+                return;
+            }
+        };
+
+        // Preserve selected_file by display path.
+        let old_path = self.current_path().to_string();
+        self.selected_file = new_review
+            .files
+            .iter()
+            .position(|f| f.display_path == old_path)
+            .unwrap_or(0);
+
+        self.review = new_review;
+        self.cache.invalidate();
+
+        // Clamp scroll into the new bounds.
+        self.scroll_y = self.scroll_y.min(self.max_scroll());
+        self.sync_selected_file();
+
+        // Re-run an active search against the new content.
+        if self.search.active {
+            let query = self.search.query.clone();
+            self.search.clear();
+            self.search.query = query;
+            if self.search.query.trim().is_empty() {
+                self.search.active = false;
+            } else {
+                self.finalize_search_silent();
+            }
+        }
+
+        self.status = format!("reloaded ({} files)", self.review.file_count());
+    }
+
+    /// Run the search without jumping/overwriting a caller-set status prefix.
+    /// Mirrors `finalize_search` but is quiet about the status message.
+    fn finalize_search_silent(&mut self) {
+        let needle = self.search.query.to_lowercase();
+        let mut matches = Vec::new();
+        for row in 0..self.review.stream_len {
+            if let Some(text) = ViewportQuery::row_text(&self.review, row) {
+                if text.to_lowercase().contains(&needle) {
+                    matches.push(row);
+                }
+            }
+        }
+        self.search.matches = matches;
+        self.search.current = 0;
+        self.search.active = true;
+        if !self.search.matches.is_empty() {
+            self.scroll_y = self.search.matches[0].min(self.max_scroll());
+            self.sync_selected_file();
+        }
+    }
+
+    /// Jump to the next/previous hunk header, scrolling it to the top of the
+    /// viewport and syncing the rail selection. Wraps across file boundaries.
+    fn jump_hunk(&mut self, forward: bool) {
+        match ViewportQuery::jump_hunk(&self.review, self.scroll_y, forward) {
+            Some(row) => {
+                self.scroll_y = row.min(self.max_scroll());
+                self.sync_selected_file();
+                let path = self.current_path().to_string();
+                let dir = if forward { "→" } else { "←" };
+                self.status = format!("{dir} hunk @ {path}:{}", row);
+            }
+            None => {
+                self.status = "no hunks to jump to".into();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::highlight::Highlighter;
-    use crate::ir::parse_unified_diff;
+    use crate::ir::{parse_unified_diff, Viewport};
 
     fn highlighter() -> Highlighter {
         Highlighter::load_noop()
@@ -679,5 +802,281 @@ diff --git a/b.rs b/b.rs
         app.handle_key(key(KeyCode::Char('/')));
         app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(app.should_quit);
+    }
+
+    // ---- hunk navigation (]h / [h) ----
+
+    fn multi_hunk_app() -> App {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ ctx
+-old1
++new1
+@@ -5,2 +5,2 @@
+ ctx2
+-old2
++new2
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+@@ -3,1 +3,1 @@
+-baz
++qux
+",
+        )
+        .unwrap();
+        // stream layout:
+        //   row 0  file0 header (a.rs)
+        //   row 1  hunk0 header  ┐ a.rs
+        //   row 2  ctx            │
+        //   row 3  -old1          │
+        //   row 4  +new1          ┘
+        //   row 5  hunk1 header  ┐ a.rs
+        //   row 6  ctx2           │
+        //   row 7  -old2          │
+        //   row 8  +new2          ┘
+        //   row 9  file1 header (b.rs)
+        //   row 10 hunk0 header  ┐ b.rs
+        //   row 11 -foo           │
+        //   row 12 +bar           ┘
+        //   row 13 hunk1 header  ┐ b.rs
+        //   row 14 -baz           │
+        //   row 15 +qux           ┘
+        // → hunk_starts = [1, 5, 10, 13]
+        let mut app = App::with_highlighter(review, highlighter());
+        // height 1 so max_scroll = stream_len-1 and every hunk row is reachable.
+        app.viewport_height = 1;
+        app
+    }
+
+    #[test]
+    fn prefix_h_jumps_to_next_hunk() {
+        let mut app = multi_hunk_app();
+        let seq = |app: &mut App| {
+            app.handle_key(char_key(']'));
+            app.handle_key(char_key('h'));
+        };
+        // start at row 0 → first hunk (1)
+        seq(&mut app);
+        assert_eq!(app.scroll_y, 1);
+        assert_eq!(app.pending_prefix, None);
+        // → second hunk (5)
+        seq(&mut app);
+        assert_eq!(app.scroll_y, 5);
+        // → third hunk (10), now in file b.rs
+        seq(&mut app);
+        assert_eq!(app.scroll_y, 10);
+        assert_eq!(app.selected_file, 1, "rail should sync to file b.rs");
+        // → fourth hunk (13)
+        seq(&mut app);
+        assert_eq!(app.scroll_y, 13);
+        // wraps to the first hunk (1)
+        seq(&mut app);
+        assert_eq!(app.scroll_y, 1);
+    }
+
+    #[test]
+    fn bracket_h_jumps_to_previous_hunk() {
+        let mut app = multi_hunk_app();
+        // move forward to the last hunk first (row 13): 4 jumps → 1, 5, 10, 13
+        for _ in 0..4 {
+            app.handle_key(char_key(']'));
+            app.handle_key(char_key('h'));
+        }
+        assert_eq!(app.scroll_y, 13);
+        // [h → previous hunk (10)
+        app.handle_key(char_key('['));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 10);
+        // [h → previous hunk (5)
+        app.handle_key(char_key('['));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 5);
+        // [h → previous hunk (1)
+        app.handle_key(char_key('['));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 1);
+        // [h wraps to the last hunk (13)
+        app.handle_key(char_key('['));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 13);
+    }
+
+    #[test]
+    fn lone_prefix_is_discarded_on_unrelated_key() {
+        let mut app = multi_hunk_app();
+        let start = app.scroll_y;
+        app.handle_key(char_key(']')); // pending
+        assert_eq!(app.pending_prefix, Some(']'));
+        // press an unrelated key (e.g. j) → prefix discarded, j handled
+        app.handle_key(char_key('j'));
+        assert_eq!(app.pending_prefix, None);
+        assert_eq!(app.scroll_y, start + 1);
+    }
+
+    #[test]
+    fn hunk_jump_status_set() {
+        let mut app = multi_hunk_app();
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('h'));
+        assert!(app.status.contains("hunk"));
+    }
+
+    // ---- reload_review (watch hot-reload) ----
+
+    /// Two patches that differ in content but keep the same file paths, so we
+    /// can assert selected_file is preserved across a reload.
+    fn reload_pair() -> (String, String) {
+        let before = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-foo
++bar
+"
+        .to_string();
+        // after: same two files, different body text, b.rs grows a line
+        let after = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++changed
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,2 +1,2 @@
+ ctx
+-foo
++bar
+"
+        .to_string();
+        (before, after)
+    }
+
+    #[test]
+    fn reload_preserves_selected_file_by_path() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // move to the second file (b.rs)
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.selected_file, 1);
+        assert_eq!(app.current_path(), "b.rs");
+
+        app.reload_review(&after);
+        assert_eq!(app.current_path(), "b.rs", "selected path preserved");
+        assert_eq!(app.selected_file, 1);
+        assert!(app.status.contains("reloaded"));
+    }
+
+    #[test]
+    fn reload_clamps_scroll_to_new_bounds() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // scroll to the bottom of the old review
+        app.handle_key(key(KeyCode::Char('G')));
+        let old_scroll = app.scroll_y;
+        assert_eq!(old_scroll, app.max_scroll());
+
+        app.reload_review(&after);
+        // scroll must not exceed the new max_scroll
+        assert!(app.scroll_y <= app.max_scroll(), "scroll {} > max {}", app.scroll_y, app.max_scroll());
+    }
+
+    #[test]
+    fn reload_invalidates_highlight_cache() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // populate the cache by drawing a line
+        let _ = ViewportQuery::rows(&app.review, Viewport { start: 0, height: 2 });
+        app.cache.get_or_highlight(0, 1, "a.rs", "old", &app.highlighter);
+        assert!(!app.cache.is_empty());
+
+        app.reload_review(&after);
+        assert!(app.cache.is_empty(), "highlight cache should be invalidated");
+    }
+
+    #[test]
+    fn reload_reruns_active_search() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // search for a term present in `after` but the matches may differ
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "bar".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.search.active);
+
+        app.reload_review(&after);
+        assert!(app.search.active, "search should stay active after reload");
+        // "bar" appears once in `after` (the +bar line)
+        assert_eq!(app.search.matches.len(), 1, "search re-run on new content");
+    }
+
+    #[test]
+    fn reload_keeps_old_review_on_parse_failure() {
+        let (before, _after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        let files_before = app.review.file_count();
+
+        // empty text → reload reports empty without dropping the review
+        app.reload_review("");
+        assert_eq!(app.review.file_count(), files_before, "review kept on empty reload");
+        assert!(app.status.contains("empty"));
+
+        // garbage that fails to parse
+        app.reload_review("not a diff at all");
+        assert_eq!(app.review.file_count(), files_before, "review kept on parse failure");
+        assert!(app.status.contains("reload failed"));
+    }
+
+    #[test]
+    fn reload_falls_back_to_first_file_when_path_gone() {
+        let (before, _) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        app.handle_key(key(KeyCode::Tab)); // select b.rs
+        assert_eq!(app.current_path(), "b.rs");
+
+        // after reload, only a.rs remains
+        let after = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+";
+        app.reload_review(after);
+        assert_eq!(app.review.file_count(), 1);
+        assert_eq!(app.selected_file, 0, "clamped to 0 when old path is gone");
+        assert_eq!(app.current_path(), "a.rs");
     }
 }

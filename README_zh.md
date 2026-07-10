@@ -31,6 +31,8 @@
 - [x] 基准测试：解析 + 视口物化
 - [x] 语法高亮（syntect，仅视口 + 缓存，默认开启）
 - [x] 搜索：stream 内 `/` 内容搜索 + 文件栏 `f` 路径过滤
+- [x] Hunk 跳转：`]h` / `[h` 下一个/上一个 hunk（二分定位 hunk 索引）
+- [x] Watch 模式：`--watch` 实时重载（notify，debounce；保持滚动/选中）
 - [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
 - [ ] Agent 导出（JSON / Markdown）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
@@ -41,6 +43,8 @@
 cargo install --path .
 # 或
 cargo run --release -- diff
+# 开启实时重载 watch 模式（可选 feature）：
+cargo run --release --features watch -- diff --watch
 ```
 
 ## 用法
@@ -48,6 +52,7 @@ cargo run --release -- diff
 ```bash
 next-hunk                  # 工作区 diff
 next-hunk diff --staged
+next-hunk diff --watch     # 文件变化时实时重载（需 `watch` feature）
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
@@ -63,12 +68,42 @@ next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
 | `K` / `PgUp` | 向上滚动半屏 |
 | `g` / `Home` | 跳到顶部 |
 | `G` / `End` | 跳到底部 |
+| `]h` | 下一个 hunk（跨文件回绕） |
+| `[h` | 上一个 hunk（跨文件回绕） |
 | `Tab` / `l` / `→` | 下一个文件 |
 | `Shift+Tab` / `h` / `←` | 上一个文件 |
 | `H` | 切换语法高亮 |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
 | `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
+
+## 配置
+
+把偏好写进 `config.toml`,免去每次敲 flag。两层配置,与 CLI flag 合并(优先级从高到低):
+
+```text
+CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.toml（用户）  >  默认
+```
+
+字段:
+
+| 字段 | 类型 | 默认 | 说明 |
+|------|------|------|------|
+| `staged` | bool | `false` | 查看 staged 改动 |
+| `highlight` | bool | `true` | 语法高亮 |
+| `watch` | bool | `false` | 文件变化时实时重载（需 `watch` feature） |
+| `line_numbers` | bool | — | _P1:已解析,暂未渲染_ |
+| `wrap_lines` | bool | — | _P1:已解析,暂未渲染_ |
+| `theme` | string | — | _P1:已解析,暂未应用_ |
+
+示例 `~/.config/next-hunk/config.toml`:
+
+```toml
+highlight = true
+watch = true
+```
+
+CLI 覆盖:`--staged`、`--watch`、`--no-highlight`。
 
 ## 测试与基准
 

@@ -81,7 +81,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
                 ▼                             ▼
 ┌───────────────────────────┐   ┌──────────────────────────────────┐
 │ Viewport query            │   │ Side services (cancellable)      │
-│ O(visible ± overscan)     │   │ highlight │ search │ export      │
+│ O(visible ± overscan)     │   │ highlight │ search │ export │ watch│
 │ file_at_row / rows()      │   │ generation id invalidates work   │
 └─────────────┬─────────────┘   └──────────────────────────────────┘
               │
@@ -111,6 +111,7 @@ Review {
   text_arena: String,              // shared storage for line/header text
   files: [FileDiff],
   stream_len: usize,               // virtual row count
+  hunk_starts: [usize],            // abs stream rows of every hunk header → binary search for ]h/[h
 }
 
 FileDiff {
@@ -155,7 +156,8 @@ next-hunk/
     lib.rs               # library root: ir / source / tui …
     ir/                  # model, parse, viewport
     source/              # git, patch, files
-    tui/                 # app, rail, stream, keys
+    tui/                 # app, rail, stream, keys, watch
+    config.rs            # layered config.toml (user + project)
     export/              # later: json / markdown
     highlight/           # later: async syntect
   benches/

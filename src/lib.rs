@@ -6,6 +6,7 @@
 //! - [`highlight`] — syntax highlighting (syntect, feature-gated)
 //! - [`tui`] — interactive review UI
 
+pub mod config;
 pub mod highlight;
 pub mod ir;
 pub mod source;

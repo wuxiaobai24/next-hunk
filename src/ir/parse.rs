@@ -26,6 +26,7 @@ pub fn parse_unified_diff(input: &str) -> Result<Review, ParseError> {
         text_arena: String::with_capacity(input.len()),
         files: Vec::new(),
         stream_len: 0,
+        hunk_starts: Vec::new(),
     };
 
     let mut current: Option<FileBuilder> = None;
@@ -255,6 +256,16 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
         + file.body_lines.len();
     let stream_len = 1 + body_rows; // file header + body
 
+    // Record absolute rows of each hunk header (matches the order
+    // `ViewportQuery::rows` iterates: file header, then per hunk header + body).
+    // `+1` skips the file-header row; `off` accumulates `1 + lines.len()` per
+    // preceding hunk.
+    let mut off = 1usize;
+    for h in &hunks {
+        review.hunk_starts.push(stream_start + off);
+        off += 1 + h.lines.len();
+    }
+
     review.files.push(FileDiff {
         old_path: file.old_path,
         new_path: file.new_path,
@@ -341,7 +352,7 @@ fn parse_range(spec: &str) -> (u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ir::DiffLineKind;
+    use crate::ir::{DiffLineKind, Viewport, ViewportQuery};
 
     const SAMPLE: &str = "\
 diff --git a/src/a.rs b/src/a.rs
@@ -499,5 +510,77 @@ diff --git a/a.rs b/a.rs
         let f1 = &review.files[1];
         assert_eq!(f0.stream_start + f0.stream_len, f1.stream_start);
         assert_eq!(f1.stream_start + f1.stream_len, review.stream_len);
+    }
+
+    #[test]
+    fn hunk_starts_records_every_hunk_header_row() {
+        // 3 files × 2 hunks each → 6 hunk-header rows, ascending.
+        let patch = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ ctx
+-old1
++new1
+@@ -5,2 +5,2 @@
+ ctx2
+-old2
++new2
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+@@ -3,1 +3,1 @@
+-baz
++qux
+diff --git a/c.rs b/c.rs
+--- a/c.rs
++++ b/c.rs
+@@ -1,1 +1,1 @@
+-x
++y
+@@ -3,1 +3,1 @@
+-p
++q
+";
+        let review = parse_unified_diff(patch).unwrap();
+        assert_eq!(review.hunk_starts.len(), 6);
+        // strictly ascending
+        for w in review.hunk_starts.windows(2) {
+            assert!(w[0] < w[1], "hunk_starts not ascending: {:?}", review.hunk_starts);
+        }
+        // first hunk header = file0 header (row 0) + 1 = row 1
+        assert_eq!(review.hunk_starts[0], 1);
+        // cross-check each entry against a full viewport materialization: the
+        // row at hunk_starts[i] must be a HunkHeader row.
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: 0,
+                height: review.stream_len,
+            },
+        );
+        for &hs in &review.hunk_starts {
+            assert!(
+                matches!(rows[hs], crate::ir::StreamRow::HunkHeader { .. }),
+                "row {hs} should be a hunk header",
+            );
+        }
+    }
+
+    #[test]
+    fn hunk_starts_empty_for_binary_only_file() {
+        // A binary-only file has no hunks → no hunk starts recorded.
+        let patch = "\
+diff --git a/bin.dat b/bin.dat
+index 111..222 100644
+Binary files a/bin.dat and b/bin.dat differ
+";
+        let review = parse_unified_diff(patch).unwrap();
+        assert_eq!(review.file_count(), 1);
+        assert!(review.hunk_starts.is_empty());
     }
 }

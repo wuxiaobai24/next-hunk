@@ -197,6 +197,41 @@ impl ViewportQuery {
         }
         None
     }
+
+    /// Absolute stream row of the next/previous hunk header relative to `row`,
+    /// wrapping across file boundaries.
+    ///
+    /// * `forward = true`  → first hunk with `hunk_starts[i] > row` (wraps to
+    ///   the first hunk if `row` is at or past the last).
+    /// * `forward = false` → last hunk with `hunk_starts[i] < row` (wraps to
+    ///   the last hunk if `row` is at or before the first).
+    ///
+    /// Returns `None` only when the review has no hunks (e.g. binary-only files).
+    /// Jumping *to* a hunk you're already on is allowed by the caller clamping
+    /// `row` away from the exact boundary (see `App::jump_hunk`).
+    pub fn jump_hunk(review: &Review, row: usize, forward: bool) -> Option<usize> {
+        let starts = &review.hunk_starts;
+        if starts.is_empty() {
+            return None;
+        }
+        if forward {
+            // partition_point gives the count of elements `<= row`; that index
+            // is the first element `> row`, i.e. the next hunk.
+            let mut i = starts.partition_point(|&s| s <= row);
+            if i >= starts.len() {
+                i = 0; // wrap
+            }
+            Some(starts[i])
+        } else {
+            // count of elements `< row`; index just before it is the previous hunk.
+            let mut i = starts.partition_point(|&s| s < row);
+            if i == 0 {
+                i = starts.len(); // wrap to last
+            }
+            i -= 1;
+            Some(starts[i])
+        }
+    }
 }
 
 #[cfg(test)]
@@ -335,5 +370,99 @@ diff --git a/b.rs b/b.rs
         assert_eq!(ViewportQuery::file_at_row(&review, 0), None);
         assert_eq!(ViewportQuery::jump_file(&review, 0, true), None);
         assert_eq!(ViewportQuery::file_start_row(&review, 0), 0);
+    }
+
+    // ---- jump_hunk ----
+
+    /// 3 files, 2 hunks each → hunk header rows at:
+    ///   file0: rows 1, 5   (header@0; hunk@1 +3 body; hunk@5 +3 body)
+    ///   file1: rows 10, 13 (header@9; hunk@10 +2 body; hunk@13 +2 body)
+    ///   file2: rows 17, 20 (header@16; hunk@17 +2 body; hunk@20 +2 body)
+    fn multi_hunk_review() -> Review {
+        parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ ctx
+-old1
++new1
+@@ -5,2 +5,2 @@
+ ctx2
+-old2
++new2
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+-foo
++bar
+@@ -3,1 +3,1 @@
+-baz
++qux
+diff --git a/c.rs b/c.rs
+--- a/c.rs
++++ b/c.rs
+@@ -1,1 +1,1 @@
+-x
++y
+@@ -3,1 +3,1 @@
+-p
++q
+",
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn jump_hunk_forward_steps_through_all_hunks() {
+        let review = multi_hunk_review();
+        let starts = review.hunk_starts.clone();
+        assert_eq!(starts.len(), 6);
+        assert_eq!(starts, vec![1, 5, 10, 13, 17, 20]);
+        let mut row = 0usize;
+        // forward from the top should land on each hunk header in order.
+        for &expected in &starts {
+            row = ViewportQuery::jump_hunk(&review, row, true).unwrap();
+            assert_eq!(row, expected);
+        }
+        // one more forward wraps to the first hunk
+        let wrapped = ViewportQuery::jump_hunk(&review, row, true).unwrap();
+        assert_eq!(wrapped, starts[0]);
+    }
+
+    #[test]
+    fn jump_hunk_backward_steps_through_all_hunks() {
+        let review = multi_hunk_review();
+        let starts = review.hunk_starts.clone();
+        let mut row = review.stream_len; // past the end
+        let mut expected = starts.iter().rev();
+        for _ in 0..starts.len() {
+            row = ViewportQuery::jump_hunk(&review, row, false).unwrap();
+            assert_eq!(row, *expected.next().unwrap());
+        }
+        // one more backward wraps to the last hunk
+        let wrapped = ViewportQuery::jump_hunk(&review, row, false).unwrap();
+        assert_eq!(wrapped, *starts.last().unwrap());
+    }
+
+    #[test]
+    fn jump_hunk_from_mid_body_lands_on_next_header() {
+        let review = multi_hunk_review();
+        // file0 hunk0 body occupies rows 2,3,4 (ctx, -old1, +new1).
+        // forward from row 4 should land on the next hunk header (row 5).
+        let next = ViewportQuery::jump_hunk(&review, 4, true).unwrap();
+        assert_eq!(next, 5);
+        // backward from row 4 lands on the current hunk header (row 1).
+        let prev = ViewportQuery::jump_hunk(&review, 4, false).unwrap();
+        assert_eq!(prev, 1);
+    }
+
+    #[test]
+    fn jump_hunk_none_when_no_hunks() {
+        let review = Review::default();
+        assert!(ViewportQuery::jump_hunk(&review, 0, true).is_none());
+        assert!(ViewportQuery::jump_hunk(&review, 0, false).is_none());
     }
 }

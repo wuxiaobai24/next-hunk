@@ -178,6 +178,16 @@ impl HighlightCache {
         self.map.clear();
     }
 
+    /// Number of cached highlighted lines. Mainly for diagnostics / tests.
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether the cache holds no highlighted lines.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     /// Get a cached highlight, or compute+cache it.
     pub fn get_or_highlight(
         &mut self,

@@ -81,7 +81,7 @@
                 ▼                             ▼
 ┌───────────────────────────┐   ┌──────────────────────────────────┐
 │ Viewport 查询             │   │ 旁路服务（可取消）                  │
-│ O(visible ± overscan)     │   │ 高亮 │ 搜索 │ 导出                 │
+│ O(visible ± overscan)     │   │ 高亮 │ 搜索 │ 导出 │ watch      │
 │ file_at_row / rows()      │   │ generation id 作废过期任务         │
 └─────────────┬─────────────┘   └──────────────────────────────────┘
               │
@@ -111,6 +111,7 @@ Review {
   text_arena: String,              // 行/header 文本共享存放
   files: [FileDiff],
   stream_len: usize,               // 虚拟总行数
+  hunk_starts: [usize],            // 各 hunk header 的绝对行 → ]h/[h 二分定位
 }
 
 FileDiff {
@@ -155,7 +156,8 @@ next-hunk/
     lib.rs               # 库根：ir / source / tui …
     ir/                  # model, parse, viewport
     source/              # git, patch, files
-    tui/                 # app, rail, stream, keys
+    tui/                 # app, rail, stream, keys, watch
+    config.rs            # 分层 config.toml（用户 + 项目）
     export/              # 后续：json / markdown
     highlight/           # 后续：异步 syntect
   benches/

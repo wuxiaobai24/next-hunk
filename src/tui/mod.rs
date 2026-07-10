@@ -11,6 +11,7 @@
 //! materialization in [`view`].
 
 use std::io::{self, Stdout};
+use std::time::Instant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event};
@@ -23,12 +24,19 @@ use ratatui::Terminal;
 
 use crate::ir::Review;
 use crate::tui::app::App;
+use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
 pub mod input;
 pub mod view;
+pub mod watch;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
+
+/// A live-reload source: produces a fresh unified-diff string on demand.
+/// Carried into the run loop so `--watch` can re-fetch the diff without
+/// touching the terminal from a background thread.
+pub type Reloader = Box<dyn FnMut() -> Result<String>>;
 
 /// RAII guard that restores the terminal on drop. crossterm 0.28 ships no
 /// built-in guard, so we define our own to guarantee cleanup even on panic.
@@ -43,10 +51,18 @@ impl Drop for RawModeGuard {
 
 /// Run the interactive review UI over an already-parsed [`Review`].
 ///
+/// `reloader` enables `--watch`: when present (and a [`Watcher`] can be
+/// started), the loop hot-reloads the review on filesystem changes, preserving
+/// scroll / selection as described in [`App::reload_review`].
+///
 /// Returns `Ok(())` on clean quit. Errors only on fatal terminal I/O. If the
 /// process's stdout is not a tty, crossterm will typically still enter raw
 /// mode and the caller may choose to fall back to a non-interactive summary.
-pub fn run_review_tui(review: Review) -> Result<()> {
+pub fn run_review_tui(
+    review: Review,
+    reloader: Option<Reloader>,
+    start_highlight: bool,
+) -> Result<()> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
     }
@@ -65,12 +81,36 @@ pub fn run_review_tui(review: Review) -> Result<()> {
     terminal.clear()?;
 
     let mut app = App::new(review);
+    app.highlight_on = start_highlight;
     // prime viewport height from an initial draw
-    run_loop(&mut terminal, &mut app)?;
+    run_loop(&mut terminal, &mut app, reloader)?;
     Ok(())
 }
 
-fn run_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
+fn run_loop(
+    terminal: &mut Tui,
+    app: &mut App,
+    mut reloader: Option<Reloader>,
+) -> Result<()> {
+    // If a reloader was provided, start a filesystem watcher for the current
+    // directory. Watcher setup can fail (e.g. feature off, permissions); in
+    // that case we keep running without live reload and surface a status note.
+    let watcher: Option<Watcher> = if reloader.is_some() {
+        match Watcher::spawn(&std::env::current_dir().unwrap_or_default()) {
+            Ok(w) => {
+                app.status = "watching for changes…".into();
+                Some(w)
+            }
+            Err(e) => {
+                app.status = format!("watch disabled: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    let mut last_event: Option<Instant> = None;
+
     loop {
         // Draw, then sync the app's viewport height from the rendered area so
         // clamping on the next key uses the real visible height.
@@ -83,6 +123,20 @@ fn run_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
             // main area splits horizontally; stream height == main_height
             app.viewport_height = main_height as usize;
         })?;
+
+        // --- watch: drain events and apply debounce -----------------------
+        if let (Some(w), Some(_)) = (watcher.as_ref(), reloader.as_ref()) {
+            if w.drain() {
+                last_event = Some(Instant::now());
+            }
+            if let Some(t) = last_event {
+                if t.elapsed() >= DEBOUNCE {
+                    // quiet period elapsed → reload once
+                    last_event = None;
+                    reload_once(app, reloader.as_mut().unwrap());
+                }
+            }
+        }
 
         let event = input::read_event(250)?;
         let Some(event) = event else {
@@ -99,6 +153,16 @@ fn run_loop(terminal: &mut Tui, app: &mut App) -> Result<()> {
             continue;
         }
         // other events (mouse) ignored in MVP
+    }
+}
+
+/// Fetch a fresh diff via the reloader and hot-swap it into `app`.
+fn reload_once(app: &mut App, reloader: &mut Reloader) {
+    match reloader() {
+        Ok(text) => app.reload_review(&text),
+        Err(e) => {
+            app.status = format!("reload error: {e}");
+        }
     }
 }
 
@@ -142,7 +206,7 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty).is_err());
+        assert!(run_review_tui(empty, None, true).is_err());
     }
 
     #[test]

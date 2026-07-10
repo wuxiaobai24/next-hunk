@@ -1,0 +1,377 @@
+//! Layered configuration: user + project `config.toml`, merged with CLI flags.
+//!
+//! Precedence (highest wins):
+//! ```text
+//! CLI flag  >  .next-hunk/config.toml (project)  >  ~/.config/next-hunk/config.toml (user)  >  defaults
+//! ```
+//!
+//! All config fields are `Option<T>` so an absent key is distinct from an
+//! explicit `false` — that is what lets "lower layer sets it, upper layer
+//! leaves it" compose correctly. Fields for not-yet-shipped P1 features
+//! (`line_numbers`, `wrap_lines`, `theme`) are accepted and stored so the
+//! config format is stable, but have no effect yet.
+
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+
+/// Raw user-configurable options. Every field optional: `None` = "not set".
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Config {
+    pub staged: Option<bool>,
+    pub highlight: Option<bool>,
+    pub watch: Option<bool>,
+    /// P1: show a line-number column (accepted, not yet rendered).
+    pub line_numbers: Option<bool>,
+    /// P1: wrap long lines (accepted, not yet rendered).
+    pub wrap_lines: Option<bool>,
+    /// P1: theme name, e.g. "dark" / "light" / "auto" (accepted, not yet applied).
+    pub theme: Option<String>,
+}
+
+impl Config {
+    /// Merge `other` into `self`, with `other` (the higher-precedence layer)
+    /// winning wherever it is `Some`. Returns `self` for chaining.
+    pub fn merge(mut self, other: Config) -> Config {
+        if other.staged.is_some() {
+            self.staged = other.staged;
+        }
+        if other.highlight.is_some() {
+            self.highlight = other.highlight;
+        }
+        if other.watch.is_some() {
+            self.watch = other.watch;
+        }
+        if other.line_numbers.is_some() {
+            self.line_numbers = other.line_numbers;
+        }
+        if other.wrap_lines.is_some() {
+            self.wrap_lines = other.wrap_lines;
+        }
+        if other.theme.is_some() {
+            self.theme = other.theme;
+        }
+        self
+    }
+
+    /// Load the user-level config from `~/.config/next-hunk/config.toml`
+    /// (honoring `$XDG_CONFIG_HOME` and `$HOME`). Missing file = empty config.
+    pub fn load_user() -> Config {
+        user_config_path()
+            .and_then(|p| load_file(&p))
+            .unwrap_or_default()
+    }
+
+    /// Load the project-level config by walking up from `start` looking for a
+    /// `.next-hunk/config.toml`. Missing = empty config.
+    pub fn load_project(start: &Path) -> Config {
+        find_project_config(start)
+            .and_then(|p| load_file(&p))
+            .unwrap_or_default()
+    }
+
+    /// Load the full layered config: user merged with project (project wins).
+    pub fn load(start: &Path) -> Config {
+        Config::load_user().merge(Config::load_project(start))
+    }
+}
+
+/// The effective values after merging config layers with CLI flags.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedConfig {
+    pub staged: bool,
+    pub highlight: bool,
+    pub watch: bool,
+}
+
+impl Default for ResolvedConfig {
+    fn default() -> Self {
+        // Defaults: highlight on (matches existing TUI behavior), staged/watch off.
+        Self {
+            staged: false,
+            highlight: true,
+            watch: false,
+        }
+    }
+}
+
+/// Inputs from the CLI for a single toggleable option.
+///
+/// Most options are "default unless overridden", so a simple `Option<bool>`
+/// (CLI sets `Some(false)` for `--no-flag`, `Some(true)` for `--flag`) composes
+/// cleanly with the config layer.
+pub struct CliFlags {
+    /// `--staged` / no flag.
+    pub staged: Option<bool>,
+    /// `--watch` / no flag.
+    pub watch: Option<bool>,
+    /// `--no-highlight` → `Some(false)`; absent → `None`.
+    pub highlight: Option<bool>,
+}
+
+impl ResolvedConfig {
+    /// Resolve the final config.
+    ///
+    /// CLI `Some` wins; otherwise the merged config; otherwise defaults.
+    pub fn resolve(cfg: &Config, cli: &CliFlags) -> Self {
+        let d = Self::default();
+        Self {
+            staged: cli.staged.or(cfg.staged).unwrap_or(d.staged),
+            highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
+            watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
+        }
+    }
+}
+
+// ─── file discovery ───────────────────────────────────────────────────────────
+
+/// Resolve the user config path: `$XDG_CONFIG_HOME/next-hunk/config.toml` or
+/// `$HOME/.config/next-hunk/config.toml`. `None` if neither var is set.
+fn user_config_path() -> Option<PathBuf> {
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        if !xdg.is_empty() {
+            return Some(PathBuf::from(xdg).join("next-hunk").join("config.toml"));
+        }
+    }
+    std::env::var("HOME")
+        .ok()
+        .map(|home| PathBuf::from(home).join(".config/next-hunk/config.toml"))
+}
+
+/// Walk up from `start` to find the nearest `.next-hunk/config.toml`.
+fn find_project_config(start: &Path) -> Option<PathBuf> {
+    let mut dir = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
+    loop {
+        let candidate = dir.join(".next-hunk/config.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+/// Read + parse a config file. Returns `None` (and warns) on any I/O or parse
+/// error so a malformed config never crashes the app.
+fn load_file(path: &Path) -> Option<Config> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("warning: cannot read config {}: {e}", path.display());
+            return None;
+        }
+    };
+    match toml::from_str::<Config>(&text) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            eprintln!("warning: invalid config {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_tmp_config(contents: &str) -> (TempDir, PathBuf) {
+        let dir = TempDir::new();
+        let cfg_dir = dir.0.join(".next-hunk");
+        fs::create_dir_all(&cfg_dir).unwrap();
+        let path = cfg_dir.join("config.toml");
+        fs::write(&path, contents).unwrap();
+        (dir, path)
+    }
+
+    /// Minimal temp-dir helper (avoids pulling in the `tempfile` crate).
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "next-hunk-cfg-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn merge_higher_layer_wins() {
+        let lower = Config {
+            staged: Some(false),
+            highlight: Some(true),
+            watch: Some(false),
+            ..Default::default()
+        };
+        let upper = Config {
+            staged: Some(true),
+            ..Default::default()
+        };
+        let merged = lower.merge(upper);
+        assert_eq!(merged.staged, Some(true)); // upper wins
+        assert_eq!(merged.highlight, Some(true)); // lower kept (upper None)
+        assert_eq!(merged.watch, Some(false)); // lower kept
+    }
+
+    #[test]
+    fn merge_none_keeps_lower() {
+        let lower = Config {
+            theme: Some("dark".into()),
+            ..Default::default()
+        };
+        let upper = Config::default(); // all None
+        let merged = lower.merge(upper);
+        assert_eq!(merged.theme.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn resolve_cli_overrides_config() {
+        let cfg = Config {
+            staged: Some(true),
+            highlight: Some(false),
+            watch: Some(true),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            staged: Some(false), // CLI overrides
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.staged); // CLI wins
+        assert!(!r.highlight); // config wins (CLI None)
+        assert!(r.watch); // config wins
+    }
+
+    #[test]
+    fn resolve_defaults_when_nothing_set() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.staged);
+        assert!(r.highlight); // default on
+        assert!(!r.watch);
+    }
+
+    #[test]
+    fn resolve_no_highlight_flag_disables() {
+        let cfg = Config {
+            highlight: Some(true),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: Some(false), // --no-highlight
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.highlight);
+    }
+
+    #[test]
+    fn parse_full_config() {
+        let (dir, _path) = write_tmp_config(
+            "\
+staged = true
+highlight = false
+watch = true
+line_numbers = true
+wrap_lines = false
+theme = \"dark\"
+",
+        );
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.staged, Some(true));
+        assert_eq!(cfg.highlight, Some(false));
+        assert_eq!(cfg.watch, Some(true));
+        assert_eq!(cfg.line_numbers, Some(true));
+        assert_eq!(cfg.wrap_lines, Some(false));
+        assert_eq!(cfg.theme.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn parse_partial_config() {
+        let (dir, _path) = write_tmp_config("highlight = false\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.highlight, Some(false));
+        assert_eq!(cfg.staged, None); // unset
+    }
+
+    #[test]
+    fn parse_unknown_field_is_ignored() {
+        // Unknown keys shouldn't break parsing (forward-compat).
+        let (dir, _path) = write_tmp_config("highlight = true\nfuture_field = 42\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.highlight, Some(true));
+    }
+
+    #[test]
+    fn find_project_config_walks_up() {
+        let (dir, _path) = write_tmp_config("highlight = false\n");
+        // create a nested subdir; config is found by walking up
+        let nested = dir.0.join("a/b/c");
+        fs::create_dir_all(&nested).unwrap();
+        let cfg = Config::load_project(&nested);
+        assert_eq!(cfg.highlight, Some(false));
+    }
+
+    #[test]
+    fn missing_config_returns_empty() {
+        let dir = TempDir::new();
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.staged, None);
+        assert_eq!(cfg.highlight, None);
+    }
+
+    #[test]
+    fn malformed_config_returns_empty() {
+        let (dir, _path) = write_tmp_config("this is = = not valid toml {{{\n");
+        let cfg = Config::load_project(&dir.0);
+        // parse error → empty config (does not panic)
+        assert_eq!(cfg.highlight, None);
+    }
+
+    #[test]
+    fn load_layers_user_and_project() {
+        // We can only realistically test the project layer here (user path
+        // depends on $HOME/$XDG). But load() == user.merge(project); with no
+        // user config present it should equal the project config.
+        let (dir, _path) = write_tmp_config("highlight = false\nwatch = true\n");
+        // Point HOME at an empty dir so load_user() finds nothing.
+        let empty_home = TempDir::new();
+        let prev_home = std::env::var_os("HOME");
+        let prev_xdg = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("HOME", &empty_home.0);
+        std::env::remove_var("XDG_CONFIG_HOME");
+
+        let cfg = Config::load(&dir.0);
+        assert_eq!(cfg.highlight, Some(false));
+        assert_eq!(cfg.watch, Some(true));
+
+        // restore env
+        if let Some(h) = prev_home {
+            std::env::set_var("HOME", h);
+        }
+        if let Some(x) = prev_xdg {
+            std::env::set_var("XDG_CONFIG_HOME", x);
+        }
+    }
+}
