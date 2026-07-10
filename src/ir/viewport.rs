@@ -155,6 +155,48 @@ impl ViewportQuery {
         };
         Some((next, Self::file_start_row(review, next)))
     }
+
+    /// Convert an absolute stream row into `(file_idx, line_in_file)`, where
+    /// `line_in_file` is the ordinal position of the row *within its file*
+    /// (0 = file header, 1 = first hunk header, then body lines).
+    ///
+    /// Returns `None` for out-of-range rows. Used by the highlight cache key
+    /// and by search to map a matched stream row back to a stable identifier.
+    pub fn file_and_line(review: &Review, row: usize) -> Option<(usize, usize)> {
+        let file_idx = review
+            .files
+            .partition_point(|f| f.stream_start <= row)
+            .saturating_sub(1);
+        let file = review.files.get(file_idx)?;
+        if row >= file.stream_start + file.stream_len {
+            return None;
+        }
+        let line_in_file = row - file.stream_start;
+        Some((file_idx, line_in_file))
+    }
+
+    /// The text content of a stream row, if it is a code line (context/add/
+    /// delete). File headers and hunk headers return `None`.
+    pub fn row_text(review: &Review, row: usize) -> Option<&str> {
+        let (file_idx, line_in_file) = Self::file_and_line(review, row)?;
+        let file = &review.files[file_idx];
+        if line_in_file == 0 {
+            return None; // file header
+        }
+        let mut cursor = 1; // skip file header
+        for hunk in &file.hunks {
+            if line_in_file == cursor {
+                return None; // hunk header
+            }
+            cursor += 1;
+            if line_in_file < cursor + hunk.lines.len() {
+                let li = line_in_file - cursor;
+                return Some(review.text(hunk.lines[li].text.clone()));
+            }
+            cursor += hunk.lines.len();
+        }
+        None
+    }
 }
 
 #[cfg(test)]

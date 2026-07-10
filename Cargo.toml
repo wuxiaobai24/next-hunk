@@ -23,8 +23,19 @@ clap = { version = "4", features = ["derive"] }
 crossterm = "0.28"
 gix = "0.85"
 ratatui = "0.29"
+# syntect: syntax highlighting. Optional behind the `highlight` feature.
+# Uncomment when network is available to fetch it; the TUI gracefully
+# degrades to plain text when the feature is off.
+# syntect = { version = "5.2", default-features = false, features = ["default-fancy"], optional = true }
 thiserror = "2"
 unicode-width = "0.2"
+
+[features]
+default = []
+# Syntax highlighting via syntect. Uncomment the dependency above AND set this
+# to `default = ["highlight"]` to turn on highlighting. When off, the TUI
+# renders plain text and the highlight toggle is inert.
+highlight = []
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }

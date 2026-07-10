@@ -147,10 +147,10 @@ diff --git a/b.rs b/b.rs
 
     #[test]
     fn draw_renders_file_paths_and_diff_lines() {
-        let app = sample_app();
+        let mut app = sample_app();
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| view::draw(&app, f)).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
 
         let buf = terminal.backend().buffer();
         let rendered: String = buf
@@ -170,7 +170,7 @@ diff --git a/b.rs b/b.rs
         app.viewport_height = 30;
         let backend = TestBackend::new(60, 20);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| view::draw(&app, f)).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
 
         let buf = terminal.backend().buffer();
         let rendered: String = buf
@@ -209,7 +209,7 @@ diff --git a/b.rs b/b.rs
 
         let backend = TestBackend::new(60, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| view::draw(&app, f)).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
 
         let buf = terminal.backend().buffer();
         let rendered: String = buf
@@ -219,5 +219,66 @@ diff --git a/b.rs b/b.rs
             .collect();
         // status line should reference the second file path
         assert!(rendered.contains("b.rs"));
+    }
+
+    #[test]
+    fn search_renders_prompt_then_status() {
+        let mut app = sample_app();
+        // enter search mode
+        app.handle_key(key(KeyCode::Char('/')));
+        assert_eq!(app.mode, crate::tui::app::InputMode::Search);
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // prompt line should show the "/" search indicator
+        assert!(rendered.contains('/'), "search prompt should render: {rendered}");
+
+        // type + finalize
+        app.handle_key(key(KeyCode::Char('n')));
+        app.handle_key(key(KeyCode::Char('e')));
+        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.search.active);
+
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // status line should show a match count
+        assert!(
+            rendered.contains("match") || rendered.contains("no matches"),
+            "status should show match info: {rendered}"
+        );
+    }
+
+    #[test]
+    fn filter_prompt_renders() {
+        let mut app = sample_app();
+        app.handle_key(key(KeyCode::Char('f')));
+        assert_eq!(app.mode, crate::tui::app::InputMode::Filter);
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("filter"),
+            "filter prompt should render: {rendered}"
+        );
     }
 }

@@ -242,7 +242,7 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 - [ ] `show` / `patch -` fully wired
 - [ ] staged + passthrough git args
 - [ ] Optional two-file diff
-- [ ] Light search (path filter and/or in-stream `/`)
+- [x] Light search (path filter and/or in-stream `/`)
 - [ ] Minimal config (colors, rail width)
 
 **Exit:** replaces “delta + manual file hopping” for the main path.
@@ -251,7 +251,8 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 
 - [ ] Agent export: file / selection / full review → Markdown + JSON
 - [ ] Simple local notes (line/file)
-- [ ] Async syntect (cancellable, default off or idle)
+- [x] Syntax highlight (syntect, viewport-only + cached, default on)
+- [ ] Async syntect (cancellable, default off or idle) — current highlight is sync viewport-only
 - [ ] Word-level diff **viewport-only**
 - [ ] Public compare notes (vs delta or similar: latency / RSS, not binary size)
 

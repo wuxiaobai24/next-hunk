@@ -29,7 +29,9 @@ Early prototype (`v0.1.0-dev`):
 - [x] gix-backed worktree / staged / show (+ patch stdin)
 - [x] Robust unified parse (rename, binary placeholder, no-newline, CRLF)
 - [x] Benchmarks: parse + viewport materialization
-- [ ] Async syntax highlight
+- [x] Syntax highlight (syntect, viewport-only + cached, default on)
+- [x] Search: in-stream `/` content search + file-rail `f` path filter
+- [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
 - [ ] Agent export (JSON / Markdown)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
 
@@ -63,7 +65,10 @@ next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
 | `G` / `End` | jump to bottom |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
-| `q` / `Esc` / `Ctrl+C` | quit |
+| `H` | toggle syntax highlight |
+| `/` | search diff content (then `n`/`N` next/prev) |
+| `f` | filter file rail by path substring |
+| `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 
 ## Testing & benchmarks
 

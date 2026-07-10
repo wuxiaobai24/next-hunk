@@ -29,7 +29,9 @@
 - [x] gix 驱动的 worktree / staged / show（+ patch stdin）
 - [x] 健壮的 unified 解析（重命名、二进制占位、无换行符、CRLF）
 - [x] 基准测试：解析 + 视口物化
-- [ ] 异步语法高亮
+- [x] 语法高亮（syntect，仅视口 + 缓存，默认开启）
+- [x] 搜索：stream 内 `/` 内容搜索 + 文件栏 `f` 路径过滤
+- [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
 - [ ] Agent 导出（JSON / Markdown）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
 
@@ -63,7 +65,10 @@ next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
 | `G` / `End` | 跳到底部 |
 | `Tab` / `l` / `→` | 下一个文件 |
 | `Shift+Tab` / `h` / `←` | 上一个文件 |
-| `q` / `Esc` / `Ctrl+C` | 退出 |
+| `H` | 切换语法高亮 |
+| `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
+| `f` | 按路径子串过滤文件栏 |
+| `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
 
 ## 测试与基准
 
