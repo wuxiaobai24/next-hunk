@@ -48,12 +48,9 @@ mod imp {
             true
         }
 
-        /// Construct a no-op highlighter (identical API, no styling).
-        /// Available on both cfg branches so callers can always degrade.
+        /// Construct a highlighter with no theme/syntaxes (degraded).
         pub fn load_noop() -> Self {
-            // Reuses load() in the syntect build; the fallback impl below
-            // provides the true no-op. Kept here for API symmetry.
-            Self::load().unwrap_or_else(|_| Self {
+            Self::load().unwrap_or(Self {
                 syntaxes: SyntaxSet::new(),
                 theme: Theme::default(),
             })
@@ -61,14 +58,15 @@ mod imp {
 
         /// Highlight a single line of code text into styled runs.
         ///
-        /// `path` selects the syntax by extension (plain text fallback).
-        /// `state` carries cross-line parser state and is reset per file —
-        /// callers must create a fresh state for each file's first line.
+        /// Each line is highlighted independently (no cross-line parser state
+        /// carried), which is fine for diff fragments. `path` selects the
+        /// syntax by extension (plain text fallback). `state` is unused in
+        /// this implementation but kept for API symmetry with the no-op path.
         pub fn highlight(
             &self,
             path: &str,
             line_text: &str,
-            state: &mut Option<HighlightLines>,
+            _state: &mut Option<()>,
         ) -> StyledRuns {
             let syntax = self
                 .syntaxes
@@ -76,12 +74,12 @@ mod imp {
                 .or_else(|| self.syntaxes.find_syntax_for_file(path).ok().flatten())
                 .unwrap_or_else(|| self.syntaxes.find_syntax_plain_text());
 
-            let h = state.get_or_insert_with(|| HighlightLines::new(syntax, &self.theme));
             // highlight_line REQUIRES a trailing newline.
             let mut buf = String::with_capacity(line_text.len() + 1);
             buf.push_str(line_text);
             buf.push('\n');
 
+            let mut h = HighlightLines::new(syntax, &self.theme);
             match h.highlight_line(&buf, &self.syntaxes) {
                 Ok(regions) => regions
                     .into_iter()
@@ -154,15 +152,6 @@ mod imp {
     }
 }
 
-/// Marker for cross-line parser state. Opaque alias so view code is
-/// feature-agnostic (the concrete type differs per cfg branch; view never
-/// names it).
-#[cfg(feature = "highlight")]
-pub type LineState = Option<syntect::easy::HighlightLines<'static>>;
-
-#[cfg(not(feature = "highlight"))]
-pub type LineState = Option<()>;
-
 pub use imp::Highlighter;
 
 /// Cache of highlighted lines, keyed by `(file_idx, line_in_file)`.
@@ -171,8 +160,6 @@ pub use imp::Highlighter;
 /// Invalidated wholesale by bumping `gen` (e.g. on toggle-off or file change).
 pub struct HighlightCache {
     map: HashMap<(usize, usize), StyledRuns>,
-    /// Per-file parser state, so multi-line constructs persist across renders.
-    states: HashMap<usize, LineState>,
     gen: u64,
 }
 
@@ -180,7 +167,6 @@ impl HighlightCache {
     pub fn new() -> Self {
         Self {
             map: HashMap::new(),
-            states: HashMap::new(),
             gen: 0,
         }
     }
@@ -190,7 +176,6 @@ impl HighlightCache {
     pub fn invalidate(&mut self) {
         self.gen = self.gen.wrapping_add(1);
         self.map.clear();
-        self.states.clear();
     }
 
     /// Get a cached highlight, or compute+cache it.
@@ -206,8 +191,10 @@ impl HighlightCache {
         if let Some(runs) = self.map.get(&(file_idx, line_in_file)) {
             return runs.clone();
         }
-        let state = self.states.entry(file_idx).or_insert(None);
-        let runs = highlighter.highlight(path, text, state);
+        // No persistent parser state is carried (diff fragments are highlighted
+        // line-independently); pass a throwaway state slot for API symmetry.
+        let mut state = None;
+        let runs = highlighter.highlight(path, text, &mut state);
         self.map.insert((file_idx, line_in_file), runs.clone());
         runs
     }
@@ -229,5 +216,39 @@ mod tests {
         c.map.insert((0, 0), vec![]);
         c.invalidate();
         assert!(c.map.is_empty());
+    }
+
+    #[test]
+    fn cache_get_or_highlight_caches() {
+        let h = Highlighter::load_noop();
+        let mut c = HighlightCache::new();
+        let runs1 = c.get_or_highlight(0, 0, "a.rs", "fn main() {}", &h);
+        let runs2 = c.get_or_highlight(0, 0, "a.rs", "fn main() {}", &h);
+        assert_eq!(runs1.len(), runs2.len());
+        // second call came from the cache (same content)
+        assert_eq!(runs1, runs2);
+    }
+
+    // Real syntect path (only compiled with the feature).
+    #[cfg(feature = "highlight")]
+    #[test]
+    fn syntect_highlights_rust_line() {
+        let h = Highlighter::load().expect("syntect bundled defaults load");
+        let mut state = None;
+        let runs = h.highlight("a.rs", "fn main() {}", &mut state);
+        // At least one styled run; keyword `fn` should get a non-default fg.
+        assert!(!runs.is_empty(), "highlight should produce runs");
+        let has_color = runs.iter().any(|(s, _)| s.fg.is_some());
+        assert!(has_color, "some run should carry a foreground color");
+    }
+
+    #[cfg(feature = "highlight")]
+    #[test]
+    fn syntect_unknown_ext_falls_back_to_plain() {
+        let h = Highlighter::load().unwrap();
+        let mut state = None;
+        // Unknown extension should not panic; falls back to plain text syntax.
+        let runs = h.highlight("file.unknownext", "anything", &mut state);
+        assert!(!runs.is_empty());
     }
 }
