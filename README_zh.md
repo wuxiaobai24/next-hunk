@@ -56,6 +56,11 @@ next-hunk diff --watch     # 文件变化时实时重载（需 `watch` feature�
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
+
+# 把 next-hunk 设为 git 的 pager，日常 diff/show/log 直接进 TUI：
+git config core.pager "next-hunk pager"
+git diff        # → 启动 review TUI
+git show HEAD   # → 启动 review TUI
 ```
 
 ### 快捷键

@@ -56,6 +56,11 @@ next-hunk diff --watch     # live-reload on file changes (needs `watch` feature)
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
+
+# Use next-hunk as git's pager for everyday diff/show/log:
+git config core.pager "next-hunk pager"
+git diff        # → launches the review TUI
+git show HEAD   # → launches the review TUI
 ```
 
 ### Keybindings

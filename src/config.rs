@@ -156,11 +156,19 @@ fn find_project_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Read + parse a config file. Returns `None` (and warns) on any I/O or parse
-/// error so a malformed config never crashes the app.
+/// Read + parse a config file. Returns `None` on any I/O or parse error so a
+/// malformed config never crashes the app.
+///
+/// A missing file is normal (most users have no config) and is silent. We only
+/// warn when the file *exists* but can't be read or parsed — that's the case
+/// worth surfacing to the user.
 fn load_file(path: &Path) -> Option<Config> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // No config file is the common case — stay quiet.
+            return None;
+        }
         Err(e) => {
             eprintln!("warning: cannot read config {}: {e}", path.display());
             return None;

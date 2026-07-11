@@ -137,3 +137,57 @@ fn no_highlight_flag_is_recognized() {
         "--no-highlight should be a recognized flag, stderr: {stderr}"
     );
 }
+
+#[test]
+fn pager_empty_stdin_exits_clean() {
+    // As git's pager, empty stdin (no diff) must be a clean no-op, exit 0.
+    let out = Command::new(bin())
+        .args(["pager"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut child = out;
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(b"   \n").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "empty pager stdin should exit 0");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        !combined.contains("nothing to review") && !combined.contains("error"),
+        "empty pager should be silent, got: {combined}"
+    );
+}
+
+#[test]
+fn pager_reads_stdin_and_renders() {
+    // Non-tty stdout → TUI falls back to inspect summary. `pager` must behave
+    // like `patch -`: feed a real patch, get the inspect fallback back.
+    let patch = fixture("tiny_simple.patch");
+    let out = Command::new(bin())
+        .args(["pager"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    let mut child = out;
+    use std::io::Write;
+    child.stdin.take().unwrap().write_all(patch.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success(), "pager should exit 0 on non-tty");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("files=2"),
+        "pager should render the patch (inspect fallback): {combined}"
+    );
+}

@@ -50,6 +50,14 @@ enum Commands {
         /// Path to patch file, or `-` for stdin.
         path: PathBuf,
     },
+    /// Git pager mode. Reads a unified diff from stdin and opens the TUI.
+    ///
+    /// Designed for `git config core.pager "next-hunk pager"` so that everyday
+    /// `git diff` / `git show` / `git log -p` launch the review TUI directly.
+    /// Behaves like `patch -`, but an empty stdin is a clean no-op (exit 0)
+    /// rather than an error, because git frequently pipes nothing to its pager
+    /// (e.g. `git diff` with no changes).
+    Pager,
     /// Print IR summary without opening the TUI (engine smoke / scripting).
     Inspect {
         /// Path to patch file, or `-` for stdin. If omitted, uses worktree diff.
@@ -138,6 +146,22 @@ fn run() -> Result<()> {
             let review = parse_review(&text)?;
             print_inspect(&review);
             Ok(())
+        }
+        Commands::Pager => {
+            // Git pipes the diff to our stdin. Honor the user/project theme.
+            let cwd = std::env::current_dir()?;
+            let cfg = Config::load(&cwd);
+            let mut buf = String::new();
+            io::stdin()
+                .read_to_string(&mut buf)
+                .context("read patch from stdin (pager mode)")?;
+            // Empty stdin is a clean no-op in pager mode: git frequently invokes
+            // its pager with nothing (e.g. `git diff` with no changes). Exit 0
+            // so git sees a successful pager run.
+            if buf.trim().is_empty() {
+                return Ok(());
+            }
+            open_review_from_text(&buf, None, true, cfg.theme)
         }
     }
 }
