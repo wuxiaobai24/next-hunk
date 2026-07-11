@@ -312,11 +312,28 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         format!("{}/{}", app.scroll_y + 1, app.review.stream_len)
     };
     let hl = if app.highlight_on { " HL" } else { "" };
-    let left = format!(" {}  [{}]  {}{} ", app.current_path(), app.selected_file + 1, pos, hl);
+    // Per-file and total +/- tallies (green inserts, red deletes).
+    let file = app.review.files.get(app.selected_file);
+    let file_stats = match file {
+        Some(f) => format!("+{}/−{}", f.inserts, f.deletes),
+        None => String::new(),
+    };
+    let left = format!(
+        " {}  [{}]  {}  {}{} ",
+        app.current_path(),
+        app.selected_file + 1,
+        pos,
+        file_stats,
+        hl
+    );
+    let totals = format!(" Σ +{}/−{} ", app.review.inserts, app.review.deletes);
     let right = format!(" {} ", app.status);
     let line = Line::from(vec![
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
-        Span::raw(""),
+        Span::styled(
+            totals,
+            Style::default().fg(app.theme.dim),
+        ),
         Span::styled(right, Style::default().fg(app.theme.dim)),
     ]);
     let para = Paragraph::new(line).style(Style::default().bg(app.theme.status_bg));

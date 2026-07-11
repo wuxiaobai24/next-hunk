@@ -27,6 +27,8 @@ pub fn parse_unified_diff(input: &str) -> Result<Review, ParseError> {
         files: Vec::new(),
         stream_len: 0,
         hunk_starts: Vec::new(),
+        inserts: 0,
+        deletes: 0,
     };
 
     let mut current: Option<FileBuilder> = None;
@@ -261,10 +263,22 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
     // `+1` skips the file-header row; `off` accumulates `1 + lines.len()` per
     // preceding hunk.
     let mut off = 1usize;
+    // Per-file +/- tallies (summed over all hunks).
+    let mut inserts: u64 = 0;
+    let mut deletes: u64 = 0;
     for h in &hunks {
+        for line in &h.lines {
+            match line.kind {
+                DiffLineKind::Add => inserts += 1,
+                DiffLineKind::Delete => deletes += 1,
+                _ => {}
+            }
+        }
         review.hunk_starts.push(stream_start + off);
         off += 1 + h.lines.len();
     }
+    review.inserts += inserts;
+    review.deletes += deletes;
 
     review.files.push(FileDiff {
         old_path: file.old_path,
@@ -273,6 +287,8 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
         hunks,
         stream_start,
         stream_len,
+        inserts,
+        deletes,
     });
 }
 
@@ -582,5 +598,19 @@ Binary files a/bin.dat and b/bin.dat differ
         let review = parse_unified_diff(patch).unwrap();
         assert_eq!(review.file_count(), 1);
         assert!(review.hunk_starts.is_empty());
+    }
+
+    #[test]
+    fn counts_inserts_and_deletes() {
+        let review = parse_unified_diff(SAMPLE).unwrap();
+        // a.rs: 1 delete + 2 adds; b.rs: 1 delete + 1 add
+        // → totals: 3 inserts, 2 deletes
+        assert_eq!(review.inserts, 3);
+        assert_eq!(review.deletes, 2);
+        // per-file tallies
+        assert_eq!(review.files[0].inserts, 2);
+        assert_eq!(review.files[0].deletes, 1);
+        assert_eq!(review.files[1].inserts, 1);
+        assert_eq!(review.files[1].deletes, 1);
     }
 }

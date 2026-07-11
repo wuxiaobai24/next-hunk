@@ -39,6 +39,10 @@ pub struct FileDiff {
     /// Inclusive stream-row range occupied by this file (header + body).
     pub stream_start: usize,
     pub stream_len: usize,
+    /// Inserted lines in this file (computed once at parse time).
+    pub inserts: u64,
+    /// Deleted lines in this file (computed once at parse time).
+    pub deletes: u64,
 }
 
 /// Full review: shared text arena + files.
@@ -56,6 +60,10 @@ pub struct Review {
     /// Does **not** include standalone binary-meta body rows (files with no
     /// hunks have nothing to jump to).
     pub hunk_starts: Vec<usize>,
+    /// Total inserted lines across all files (computed once at parse time).
+    pub inserts: u64,
+    /// Total deleted lines across all files (computed once at parse time).
+    pub deletes: u64,
 }
 
 impl Review {
