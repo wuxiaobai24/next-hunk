@@ -102,6 +102,21 @@ pub struct App {
     /// Pending first key of a two-key sequence (`]` / `[`). Cleared on the next
     /// key or after a short no-op. Used to spell `]h` / `[h` (next/prev hunk).
     pub pending_prefix: Option<char>,
+    /// A pending "open in editor" request. Set when the user presses `o` on a
+    /// code line; the run loop (which owns the terminal) consumes it, suspends
+    /// the TUI, spawns `$EDITOR`, and resumes. Keeping it as a field (not an
+    /// I/O side effect) keeps `App` pure and headless-testable.
+    pub open_request: Option<OpenTarget>,
+}
+
+/// A request to open a file in an external editor at a line, produced when the
+/// user presses `o` on a code row. The path is relative to the repo workdir.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenTarget {
+    /// Repo-relative path of the file to open.
+    pub path: String,
+    /// 1-based line number to jump to (new-side line number when available).
+    pub line: u32,
 }
 
 impl App {
@@ -149,6 +164,7 @@ impl App {
             search: Search::default(),
             path_filter: String::new(),
             pending_prefix: None,
+            open_request: None,
         }
     }
 
@@ -378,6 +394,19 @@ impl App {
                 self.mode = InputMode::Filter;
                 self.path_filter.clear();
                 self.status = "filter: ".into();
+            }
+            // open the focused line's file in $EDITOR
+            KeyCode::Char('o') => {
+                match self.compute_open_target() {
+                    Some(t) => {
+                        self.status =
+                            format!("opening {}:{}…", t.path, t.line);
+                        self.open_request = Some(t);
+                    }
+                    None => {
+                        self.status = "nothing to open here (move to a code line)".into();
+                    }
+                }
             }
             // next / prev search match
             KeyCode::Char('n') => {
@@ -631,6 +660,40 @@ impl App {
                 self.status = "no hunks to jump to".into();
             }
         }
+    }
+
+    /// Compute the file + line to open for the `o` (open in editor) action.
+    ///
+    /// The TUI is a top-anchored scroll view (no row cursor), so `o` targets
+    /// the top visible stream row. If that row is a header (file or hunk),
+    /// scan forward within the viewport to the first code line. For a code line
+    /// we prefer the new-side line number (so edits land on the live file);
+    /// deletes have no new-side, so they fall back to the old-side number.
+    /// `None` when no code line is visible or the file has no on-disk path.
+    fn compute_open_target(&self) -> Option<OpenTarget> {
+        // Search the visible window for the first code line with a line number.
+        let start = self.scroll_y;
+        let end = self.review.stream_len.min(start + self.viewport_height.max(1));
+        for row in start..end {
+            // Header rows (file/hunk) have no line number — skip them and keep
+            // scanning for the first code line.
+            let Some((old_no, new_no)) = ViewportQuery::row_line_numbers(&self.review, row) else {
+                continue;
+            };
+            let (file_idx, _) = ViewportQuery::file_and_line(&self.review, row)?;
+            let line = new_no.or(old_no)?;
+            let file = self.review.files.get(file_idx)?;
+            let path = file
+                .new_path
+                .clone()
+                .filter(|p| p != "/dev/null")
+                .or_else(|| file.old_path.clone().filter(|p| p != "/dev/null"))?;
+            if path == "unknown" {
+                return None;
+            }
+            return Some(OpenTarget { path, line });
+        }
+        None
     }
 }
 
@@ -1080,6 +1143,94 @@ diff --git a/b.rs b/b.rs
         app.handle_key(char_key(']'));
         app.handle_key(char_key('h'));
         assert!(app.status.contains("hunk"));
+    }
+
+    // ---- open in editor (o) ----
+
+    fn openable_app() -> App {
+        // Hunk at line 10 → context(old=10,new=10), -old(old=11), +new(new=11).
+        let review = parse_unified_diff(
+            "\
+diff --git a/src/main.rs b/src/main.rs
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -10,3 +10,3 @@
+ context line
+-old line
++new line
+",
+        )
+        .unwrap();
+        // stream layout: 0=file header, 1=hunk header, 2=ctx, 3=-old, 4=+new
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 10;
+        app
+    }
+
+    #[test]
+    fn o_on_top_code_line_requests_open() {
+        let mut app = openable_app();
+        // scroll to the context line (row 2) so the top visible row is code
+        app.scroll_y = 2;
+        app.handle_key(char_key('o'));
+        let target = app
+            .open_request
+            .expect("o on a code line should set an open request");
+        assert_eq!(target.path, "src/main.rs");
+        // context line → new-side number 10
+        assert_eq!(target.line, 10);
+    }
+
+    #[test]
+    fn o_prefers_new_side_line_number() {
+        let mut app = openable_app();
+        // scroll to the +new line (row 4) so top visible is an add line
+        app.scroll_y = 4;
+        app.handle_key(char_key('o'));
+        let target = app.open_request.expect("open request set");
+        assert_eq!(target.line, 11, "add line should use new-side number");
+    }
+
+    #[test]
+    fn o_falls_back_to_old_side_on_delete_line() {
+        let mut app = openable_app();
+        // scroll to the -old line (row 3) so top visible is a delete line
+        app.scroll_y = 3;
+        app.handle_key(char_key('o'));
+        let target = app.open_request.expect("open request set");
+        assert_eq!(target.line, 11, "delete line falls back to old-side number");
+    }
+
+    #[test]
+    fn o_on_header_scans_forward_to_first_code_line() {
+        let mut app = openable_app();
+        // top of the file: scroll_y=0 is the file header. o should scan forward
+        // to the first code line (ctx at row 2).
+        app.scroll_y = 0;
+        app.handle_key(char_key('o'));
+        let target = app.open_request.expect("should scan to a code line");
+        assert_eq!(target.line, 10);
+    }
+
+    #[test]
+    fn o_clears_request_each_press() {
+        let mut app = openable_app();
+        app.scroll_y = 2;
+        app.handle_key(char_key('o'));
+        assert!(app.open_request.is_some());
+        // simulate the run loop consuming it
+        let _ = app.open_request.take();
+        assert!(app.open_request.is_none());
+    }
+
+    #[test]
+    fn o_with_no_code_visible_is_noop() {
+        let mut app = openable_app();
+        // viewport height 0 → no visible code row
+        app.viewport_height = 0;
+        app.handle_key(char_key('o'));
+        assert!(app.open_request.is_none());
+        assert!(app.status.contains("nothing"));
     }
 
     // ---- reload_review (watch hot-reload) ----

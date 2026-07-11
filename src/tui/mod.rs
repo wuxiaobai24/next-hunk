@@ -11,6 +11,7 @@
 //! materialization in [`view`].
 
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
@@ -50,6 +51,28 @@ impl Drop for RawModeGuard {
     }
 }
 
+/// Leave the alternate screen and disable raw mode so a foreground child (the
+/// editor) gets a clean, normal terminal. Paired with [`resume_tui`].
+fn suspend_tui() -> Result<()> {
+    disable_raw_mode().context("disable raw mode")?;
+    execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture)
+        .context("leave alternate screen")?;
+    Ok(())
+}
+
+/// Re-enter the alternate screen + raw mode and force a full redraw after the
+/// editor returns. Paired with [`suspend_tui`].
+fn resume_tui(terminal: &mut Tui) -> Result<()> {
+    enable_raw_mode().context("enable raw mode")?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+        .context("enter alternate screen")?;
+    // ratatui diffs against the last buffer, which is now stale; force a full
+    // repaint by resizing the backend area to itself (flushes the diff cache).
+    let area = terminal.get_frame().area();
+    terminal.resize(area)?;
+    Ok(())
+}
+
 /// Run the interactive review UI over an already-parsed [`Review`].
 ///
 /// `reloader` enables `--watch`: when present (and a [`Watcher`] can be
@@ -64,6 +87,7 @@ pub fn run_review_tui(
     reloader: Option<Reloader>,
     start_highlight: bool,
     theme: Option<String>,
+    workdir: Option<PathBuf>,
 ) -> Result<()> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
@@ -93,7 +117,7 @@ pub fn run_review_tui(
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
     // prime viewport height from an initial draw
-    run_loop(&mut terminal, &mut app, reloader)?;
+    run_loop(&mut terminal, &mut app, reloader, workdir)?;
     Ok(())
 }
 
@@ -101,6 +125,7 @@ fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
     mut reloader: Option<Reloader>,
+    workdir: Option<PathBuf>,
 ) -> Result<()> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
@@ -158,6 +183,19 @@ fn run_loop(
             if app.should_quit {
                 return Ok(());
             }
+            // `o` requested opening a file in the editor. Suspend the TUI
+            // (leave alt screen + raw mode so the editor gets a clean terminal),
+            // run the editor as a foreground child, then resume the TUI.
+            if let Some(target) = app.open_request.take() {
+                suspend_tui()?;
+                let result = launch_editor(&target, workdir.as_deref());
+                resume_tui(terminal)?;
+                match result {
+                    Ok(msg) => app.status = msg,
+                    Err(e) => app.status = format!("open failed: {e}"),
+                }
+                terminal.clear()?;
+            }
         } else if let Event::Mouse(ev) = event {
             app.handle_mouse(ev);
         } else if let Event::Resize(_, _) = event {
@@ -165,6 +203,55 @@ fn run_loop(
             continue;
         }
         // other events ignored
+    }
+}
+
+/// Launch `$EDITOR` on `target.path` at `target.line`, resolving the path
+/// against `workdir` (falling back to the process cwd). The caller has already
+/// left the alternate screen and raw mode, so this runs as a normal foreground
+/// child with a real terminal.
+///
+/// Editor resolution order: `$EDITOR` → `$VISUAL` → `vi`. The line argument
+/// uses `+<n>`, the convention understood by vim/nvim/nano/emacs/jed.
+fn launch_editor(target: &app::OpenTarget, workdir: Option<&std::path::Path>) -> Result<String> {
+    let editor = std::env::var("EDITOR")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| std::env::var("VISUAL").ok().filter(|s| !s.trim().is_empty()))
+        .unwrap_or_else(|| "vi".to_string());
+
+    // Resolve the file path against the repo workdir, else the cwd. This keeps
+    // `o` working even when the review was launched from a subdirectory.
+    let base = workdir
+        .map(|w| w.to_path_buf())
+        .unwrap_or_else(|| {
+            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+        });
+    let file = base.join(&target.path);
+
+    // Split the editor command on whitespace to support `code -w`, `vim -p`,
+    // etc. (no shell, so quoting stays simple). Insert `+line` before the path.
+    let line_arg = format!("+{}", target.line);
+    let mut parts: Vec<String> = editor
+        .split_whitespace()
+        .map(|s| s.to_string())
+        .collect();
+    let program = parts.remove(0);
+    parts.push(line_arg);
+
+    let mut cmd = std::process::Command::new(&program);
+    for a in &parts {
+        cmd.arg(a);
+    }
+    cmd.arg(&file);
+
+    let status = cmd
+        .status()
+        .with_context(|| format!("spawn editor `{editor}`"))?;
+    if status.success() {
+        Ok(format!("opened {}:{}", target.path, target.line))
+    } else {
+        Ok(format!("editor exited {status}"))
     }
 }
 
@@ -218,7 +305,7 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty, None, true, None).is_err());
+        assert!(run_review_tui(empty, None, true, None, None).is_err());
     }
 
     #[test]

@@ -80,6 +80,7 @@ git show HEAD   # → launches the review TUI
 | `H` | toggle syntax highlight |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
+| `o` | open the focused line in `$EDITOR` (at that line) |
 | `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 
 ## Configuration
