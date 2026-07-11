@@ -43,8 +43,8 @@
 cargo install --path .
 # 或
 cargo run --release -- diff
-# 开启实时重载 watch 模式（可选 feature）：
-cargo run --release --features watch -- diff --watch
+# 开启实时重载 watch 模式（默认启用）：
+cargo run --release -- diff --watch
 ```
 
 ## 用法
@@ -52,7 +52,7 @@ cargo run --release --features watch -- diff --watch
 ```bash
 next-hunk                  # 工作区 diff
 next-hunk diff --staged
-next-hunk diff --watch     # 文件变化时实时重载（需 `watch` feature）
+next-hunk diff --watch     # 文件变化时实时重载
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
@@ -98,10 +98,10 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 |------|------|------|------|
 | `staged` | bool | `false` | 查看 staged 改动 |
 | `highlight` | bool | `true` | 语法高亮 |
-| `watch` | bool | `false` | 文件变化时实时重载（需 `watch` feature） |
-| `line_numbers` | bool | — | _P1:已解析,暂未渲染_ |
-| `wrap_lines` | bool | — | _P1:已解析,暂未渲染_ |
-| `theme` | string | — | _P1:已解析,暂未应用_ |
+| `watch` | bool | `false` | 文件变化时实时重载 |
+| `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 切换） |
+| `wrap_lines` | bool | — | _暂未渲染_ |
+| `theme` | string | `"dark"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换） |
 
 示例 `~/.config/next-hunk/config.toml`:
 

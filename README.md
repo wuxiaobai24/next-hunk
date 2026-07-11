@@ -21,7 +21,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 
 ## Status
 
-Early prototype (`v0.1.0-dev`):
+`v0.1.0-dev` — usable daily driver for reviewing diffs:
 
 - [x] Project scaffold + compact unified-diff IR (runtime model)
 - [x] Viewport query with binary search on file spans
@@ -33,6 +33,10 @@ Early prototype (`v0.1.0-dev`):
 - [x] Search: in-stream `/` content search + file-rail `f` path filter
 - [x] Hunk navigation: `]h` / `[h` next/prev hunk (binary-searched hunk index)
 - [x] Watch mode: `--watch` live-reload (notify, debounce; preserves scroll/selection)
+- [x] Pager mode: `next-hunk pager` as git's `core.pager`
+- [x] Open in editor: `o` jumps to the focused line in `$EDITOR`
+- [x] Diff stats in the status bar (per-file + total `+ins/−del`)
+- [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
 - [ ] Agent export (JSON / Markdown)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
@@ -43,8 +47,8 @@ Early prototype (`v0.1.0-dev`):
 cargo install --path .
 # or
 cargo run --release -- diff
-# with live-reload watch mode (optional feature):
-cargo run --release --features watch -- diff --watch
+# with live-reload watch mode (enabled by default):
+cargo run --release -- diff --watch
 ```
 
 ## Usage
@@ -52,7 +56,7 @@ cargo run --release --features watch -- diff --watch
 ```bash
 next-hunk                  # working tree diff
 next-hunk diff --staged
-next-hunk diff --watch     # live-reload on file changes (needs `watch` feature)
+next-hunk diff --watch     # live-reload on file changes
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
@@ -99,10 +103,10 @@ Fields:
 |-------|------|---------|-------|
 | `staged` | bool | `false` | review staged changes |
 | `highlight` | bool | `true` | syntax highlighting |
-| `watch` | bool | `false` | live-reload on file changes (needs `watch` feature) |
-| `line_numbers` | bool | — | _P1: accepted, not yet rendered_ |
-| `wrap_lines` | bool | — | _P1: accepted, not yet rendered_ |
-| `theme` | string | — | _P1: accepted, not yet applied_ |
+| `watch` | bool | `false` | live-reload on file changes |
+| `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles) |
+| `wrap_lines` | bool | — | _not yet rendered_ |
+| `theme` | string | `"dark"` | `"dark"` / `"light"` / `"auto"` (`t` cycles) |
 
 Example `~/.config/next-hunk/config.toml`:
 

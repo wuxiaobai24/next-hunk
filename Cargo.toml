@@ -38,12 +38,13 @@ toml = "0.8"
 notify = { version = "6", optional = true }
 
 [features]
-default = ["highlight"]
+default = ["highlight", "watch"]
 # Syntax highlighting via syntect. When disabled, the TUI renders plain text
 # (highlight toggle is inert).
 highlight = ["dep:syntect"]
-# Live reload in `--watch` mode via notify. When disabled, `--watch` reports
-# that the feature is not compiled in.
+# Live reload in `--watch` mode via notify. On by default so the headline
+# `--watch` flag works out of the box; when disabled, `--watch` reports that
+# the feature is not compiled in.
 watch = ["dep:notify"]
 
 [dev-dependencies]
