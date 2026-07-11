@@ -20,8 +20,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::ir::{DiffLineKind, StreamRow, Viewport, ViewportQuery};
-use crate::tui::app::{App, InputMode};
+use crate::ir::{word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion};
+use crate::tui::app::{App, InputMode, ViewMode};
 
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
 const RAIL_MAX_WIDTH: u16 = 32;
@@ -93,6 +93,14 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
+    match app.view_mode {
+        ViewMode::Unified => draw_stream_unified(app, frame, area),
+        // Split rendering is added later; fall back to unified for now.
+        ViewMode::Split => draw_stream_unified(app, frame, area),
+    }
+}
+
+fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     let height = area.height as usize;
     let scroll_y = app.scroll_y;
     let viewport = Viewport {
@@ -100,12 +108,13 @@ fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
         height,
     };
 
-    // Collect owned row data so we release the &app.review borrow before
-    // mutating app.cache below for highlighting.
+    // Collect owned row data so we can release the &app.review borrow before
+    // mutating app.cache below for highlighting. Line numbers are resolved here
+    // (they need the review) and carried on each OwnedRow.
     let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport)
         .into_iter()
         .enumerate()
-        .map(|(i, row)| OwnedRow::from_stream_row(row, scroll_y + i))
+        .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))
         .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
@@ -150,11 +159,18 @@ enum OwnedRow {
         text: String,
         file_idx: usize,
         abs_row: usize,
+        /// Old-side source line number (deletes/context), if any.
+        old_no: Option<u32>,
+        /// New-side source line number (adds/context), if any.
+        new_no: Option<u32>,
+        /// Text of the paired counterpart line on the other side (Add↔Delete),
+        /// for word-level inline highlight. `None` for unpaired / non-+/- lines.
+        counterpart: Option<String>,
     },
 }
 
 impl OwnedRow {
-    fn from_stream_row(row: StreamRow, abs_row: usize) -> Self {
+    fn from_stream_row(review: &Review, row: StreamRow, abs_row: usize) -> Self {
         match row {
             StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader { path: path.to_string() },
             StreamRow::HunkHeader { text, .. } => OwnedRow::HunkHeader { text: text.to_string() },
@@ -163,12 +179,25 @@ impl OwnedRow {
                 text,
                 file_idx,
                 ..
-            } => OwnedRow::Line {
-                kind,
-                text: text.to_string(),
-                file_idx,
-                abs_row,
-            },
+            } => {
+                // Resolve old/new source line numbers for the gutter. Cheap
+                // (one hunk walk per row) and viewport-only.
+                let (old_no, new_no) =
+                    ViewportQuery::row_line_numbers(review, abs_row).unwrap_or((None, None));
+                // Resolve the paired counterpart line text (Add↔Delete) for
+                // word-level inline highlight. Same hunk-walk cost as line
+                // numbers; None for context/meta/headers/unpaired lines.
+                let counterpart = crate::ir::worddiff::counterpart_text(review, abs_row);
+                OwnedRow::Line {
+                    kind,
+                    text: text.to_string(),
+                    file_idx,
+                    abs_row,
+                    old_no,
+                    new_no,
+                    counterpart,
+                }
+            }
         }
     }
 }
@@ -202,6 +231,9 @@ fn stream_row_to_line(
             text,
             file_idx,
             abs_row,
+            old_no,
+            new_no,
+            counterpart,
         } => {
             let (prefix, kind_style) = match kind {
                 DiffLineKind::Add => ('+', Style::default().fg(Color::Green)),
@@ -213,19 +245,41 @@ fn stream_row_to_line(
             // Compute highlight runs for the code text (viewport-only, cached).
             let line_in_file =
                 ViewportQuery::file_and_line(&app.review, abs_row).map(|(_, li)| li);
-            let runs = if app.highlight_on {
+            let hl_runs = if app.highlight_on {
                 if let Some(li) = line_in_file {
                     let path = app.review.display_path(file_idx);
                     app.cache
                         .get_or_highlight(file_idx, li, path, &text, &app.highlighter)
                 } else {
-                    vec![(Style::default(), text)]
+                    vec![(Style::default(), text.clone())]
                 }
             } else {
-                vec![(Style::default(), text)]
+                vec![(Style::default(), text.clone())]
             };
 
-            let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 1);
+            // When word-diff is on and this +/- line has a paired counterpart,
+            // refine the highlight runs to mark just the changed words. The
+            // base style of each run (from syntax highlight) is preserved;
+            // changed words get an extra emphasis (bold + brighter fg).
+            let runs = if app.word_diff_on {
+                if let Some(their) = counterpart.as_deref() {
+                    let regions = word_diff_regions(&text, their);
+                    refine_with_word_regions(&hl_runs, &regions, kind)
+                } else {
+                    hl_runs
+                }
+            } else {
+                hl_runs
+            };
+
+            let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 3);
+            // Optional line-number gutter: " old new " right-aligned in 5 cols.
+            if app.line_numbers_on {
+                let dim = Style::default().fg(Color::DarkGray);
+                let old_s = old_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
+                let new_s = new_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
+                spans.push(Span::styled(format!(" {old_s} {new_s} "), dim));
+            }
             spans.push(Span::styled(prefix.to_string(), kind_style));
             for (style, txt) in runs {
                 spans.push(Span::styled(txt, style));
@@ -274,7 +328,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h next/prev hunk · Tab next file · / search · f filter · H highlight · q quit "
+            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · Tab file · / search · f filter · H hl · # lines · w word · s split · q quit "
                 .to_string()
         }
     };
@@ -284,6 +338,112 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     };
     let para = Paragraph::new(content).style(style);
     frame.render_widget(para, area);
+}
+
+/// Refine syntax-highlight runs with word-level change regions.
+///
+/// `hl_runs` are the (style, text) runs from syntax highlighting (covering the
+/// full line text). `regions` classify substrings of the same text as
+/// [`WordRegion::Same`] or [`WordRegion::Changed`]. The output preserves the
+/// base syntax style of each run but adds emphasis (bold) to the portions that
+/// fall inside `Changed` regions.
+///
+/// This is O(runs × regions) but both are tiny for a single line.
+fn refine_with_word_regions(
+    hl_runs: &[(Style, String)],
+    regions: &[(WordRegion, String)],
+    kind: DiffLineKind,
+) -> Vec<(Style, String)> {
+    // Flatten hl_runs into (style, text) with cumulative char offsets so we
+    // can slice them against region boundaries.
+    // Build the region boundary list as char offsets into the full text.
+    let mut out: Vec<(Style, String)> = Vec::new();
+    let mut hl_pos = 0usize; // current char position consumed in hl_runs
+    let mut reg_pos = 0usize; // current char position consumed in regions
+
+    // Precompute cumulative starts for regions.
+    let mut reg_starts: Vec<usize> = Vec::with_capacity(regions.len() + 1);
+    let mut acc = 0;
+    for (_, t) in regions {
+        reg_starts.push(acc);
+        acc += t.chars().count();
+    }
+    reg_starts.push(acc);
+
+    // Precompute cumulative starts for hl_runs.
+    let mut hl_starts: Vec<usize> = Vec::with_capacity(hl_runs.len() + 1);
+    let mut acc = 0;
+    for (_, t) in hl_runs {
+        hl_starts.push(acc);
+        acc += t.chars().count();
+    }
+    let total = acc;
+    hl_starts.push(total);
+
+    // Walk both sequences by char offset, emitting overlapping slices.
+    let mut hi = 0usize; // index into hl_runs
+    let mut ri = 0usize; // index into regions
+    while hi < hl_runs.len() && ri < regions.len() {
+        let (hl_style, hl_text) = &hl_runs[hi];
+        let (region, _reg_text) = &regions[ri];
+        let hl_end = hl_starts[hi + 1];
+        let reg_end = reg_starts[ri + 1];
+        let start = hl_pos.max(reg_pos);
+        let end = hl_end.min(reg_end);
+        if start < end {
+            // Extract the overlapping substring from hl_text.
+            let lo = start - hl_starts[hi];
+            let hi_len = end - hl_starts[hi];
+            let slice: String = hl_text.chars().skip(lo).take(hi_len - lo).collect();
+            let style = if *region == WordRegion::Changed {
+                word_emphasis_style(hl_style, kind)
+            } else {
+                *hl_style
+            };
+            // Merge with previous run if same style (avoids span explosion).
+            if let Some(last) = out.last_mut() {
+                if last.0 == style {
+                    last.1.push_str(&slice);
+                } else {
+                    out.push((style, slice));
+                }
+            } else {
+                out.push((style, slice));
+            }
+        }
+        // Advance whichever ends first (or both if equal).
+        if hl_end <= reg_end {
+            hi += 1;
+            hl_pos = hl_end;
+        }
+        if reg_end <= hl_end {
+            ri += 1;
+            reg_pos = reg_end;
+        }
+    }
+
+    // Safety net: if anything went wrong and we didn't cover the full text,
+    // fall back to the plain hl_runs (never lose content).
+    let out_len: usize = out.iter().map(|(_, t)| t.chars().count()).sum();
+    if out_len != total {
+        return hl_runs
+            .iter()
+            .map(|(s, t)| (*s, t.clone()))
+            .collect();
+    }
+    out
+}
+
+/// Style for a changed word within a +/- line. Keeps the base syntax style but
+/// adds bold and shifts the foreground toward a brighter shade of the line's
+/// diff color so the change pops without hiding syntax coloring.
+fn word_emphasis_style(base: &Style, kind: DiffLineKind) -> Style {
+    let style = match kind {
+        DiffLineKind::Add => base.fg(Color::LightGreen),
+        DiffLineKind::Delete => base.fg(Color::LightRed),
+        _ => *base,
+    };
+    style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
 /// Truncate a path for the rail display.

@@ -24,6 +24,16 @@ pub enum InputMode {
     Filter,
 }
 
+/// Stream layout: single unified column or two side-by-side columns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    /// One column, traditional unified diff (default).
+    #[default]
+    Unified,
+    /// Two columns, old on the left / new on the right.
+    Split,
+}
+
 /// In-stream content search state.
 #[derive(Debug, Clone, Default)]
 pub struct Search {
@@ -67,6 +77,16 @@ pub struct App {
     /// Loaded highlighter (syntect or no-op, depending on feature).
     pub highlighter: Highlighter,
 
+    /// Show a line-number gutter column. ON by default.
+    pub line_numbers_on: bool,
+    /// Highlight changed words within a line (word-diff). ON by default.
+    pub word_diff_on: bool,
+    /// Stream layout (unified vs split). Unified by default.
+    pub view_mode: ViewMode,
+    /// Split left/right column ratio (0..=100 = percent for the LEFT column).
+    /// Only meaningful under [`ViewMode::Split`].
+    pub split_ratio: u16,
+
     /// Current input mode (normal / search-edit / filter-edit).
     pub mode: InputMode,
     /// In-stream content search.
@@ -101,6 +121,10 @@ impl App {
             highlight_on: true,
             cache: HighlightCache::new(),
             highlighter,
+            line_numbers_on: true,
+            word_diff_on: true,
+            view_mode: ViewMode::Unified,
+            split_ratio: 50,
             mode: InputMode::Normal,
             search: Search::default(),
             path_filter: String::new(),
@@ -243,6 +267,35 @@ impl App {
                 } else {
                     self.status = "highlight on".into();
                 }
+            }
+            // toggle line-number gutter
+            KeyCode::Char('#') => {
+                self.line_numbers_on = !self.line_numbers_on;
+                self.status = if self.line_numbers_on {
+                    "line numbers on".into()
+                } else {
+                    "line numbers off".into()
+                };
+            }
+            // toggle word-level inline diff
+            KeyCode::Char('w') => {
+                self.word_diff_on = !self.word_diff_on;
+                self.status = if self.word_diff_on {
+                    "word diff on".into()
+                } else {
+                    "word diff off".into()
+                };
+            }
+            // toggle unified / split layout
+            KeyCode::Char('s') => {
+                self.view_mode = match self.view_mode {
+                    ViewMode::Unified => ViewMode::Split,
+                    ViewMode::Split => ViewMode::Unified,
+                };
+                self.status = match self.view_mode {
+                    ViewMode::Unified => "unified layout".into(),
+                    ViewMode::Split => "split layout".into(),
+                };
             }
             // begin in-stream search
             KeyCode::Char('/') => {
@@ -665,6 +718,36 @@ diff --git a/b.rs b/b.rs
         assert!(!app.highlight_on);
         app.handle_key(key(KeyCode::Char('H')));
         assert!(app.highlight_on);
+    }
+
+    #[test]
+    fn toggle_line_numbers() {
+        let mut app = two_file_app();
+        assert!(app.line_numbers_on, "line numbers on by default");
+        app.handle_key(char_key('#'));
+        assert!(!app.line_numbers_on);
+        app.handle_key(char_key('#'));
+        assert!(app.line_numbers_on);
+    }
+
+    #[test]
+    fn toggle_word_diff() {
+        let mut app = two_file_app();
+        assert!(app.word_diff_on, "word diff on by default");
+        app.handle_key(char_key('w'));
+        assert!(!app.word_diff_on);
+        app.handle_key(char_key('w'));
+        assert!(app.word_diff_on);
+    }
+
+    #[test]
+    fn toggle_view_mode() {
+        let mut app = two_file_app();
+        assert_eq!(app.view_mode, ViewMode::Unified);
+        app.handle_key(char_key('s'));
+        assert_eq!(app.view_mode, ViewMode::Split);
+        app.handle_key(char_key('s'));
+        assert_eq!(app.view_mode, ViewMode::Unified);
     }
 
     // ---- search ----

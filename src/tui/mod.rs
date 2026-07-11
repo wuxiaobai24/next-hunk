@@ -345,4 +345,126 @@ diff --git a/b.rs b/b.rs
             "filter prompt should render: {rendered}"
         );
     }
+
+    /// A sample where old/new share a common token so word-diff has something
+    /// to emphasize: `-old value` → `+new value`. The changed word ("old" /
+    /// "new") should get bold+reversed style when word-diff is on.
+    fn word_diff_app() -> App {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old value
++new value
+",
+        )
+        .unwrap();
+        let mut app = App::new(review);
+        app.viewport_height = 30;
+        app
+    }
+
+    /// Count cells on a given rendered line that carry a target modifier.
+    fn count_modifier_on_line(
+        terminal: &Terminal<TestBackend>,
+        row: usize,
+        modifier: ratatui::style::Modifier,
+    ) -> usize {
+        let buf = terminal.backend().buffer();
+        let width = buf.area.width as usize;
+        (0..width)
+            .filter(|&x| {
+                let cell = &buf[(x as u16, row as u16)];
+                cell.style().add_modifier.contains(modifier)
+            })
+            .count()
+    }
+
+    #[test]
+    fn word_diff_on_emphasizes_changed_word() {
+        use ratatui::style::Modifier;
+        let mut app = word_diff_app();
+        assert!(app.word_diff_on, "word diff on by default");
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+
+        // Stream layout (scroll_y=0): row0=title, row1=file header, row2=hunk
+        // header, row3=-old value, row4=+new value. Both +/- lines have their
+        // changed token ("old" / "new") emphasized with BOLD.
+        // Find the rows containing "-old" and "+new".
+        let buf = terminal.backend().buffer();
+        let width = buf.area.width;
+        let mut del_row = None;
+        let mut add_row = None;
+        for y in 0..buf.area.height {
+            let row_text: String = (0..width)
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect();
+            if row_text.contains("-old") {
+                del_row = Some(y as usize);
+            }
+            if row_text.contains("+new") {
+                add_row = Some(y as usize);
+            }
+        }
+        let del_row = del_row.expect("should find -old line");
+        let add_row = add_row.expect("should find +new line");
+
+        let del_bold = count_modifier_on_line(&terminal, del_row, Modifier::BOLD);
+        let add_bold = count_modifier_on_line(&terminal, add_row, Modifier::BOLD);
+        assert!(
+            del_bold >= 3,
+            "changed word 'old' should be bold (>=3 cells), got {del_bold}"
+        );
+        assert!(
+            add_bold >= 3,
+            "changed word 'new' should be bold (>=3 cells), got {add_bold}"
+        );
+    }
+
+    #[test]
+    fn word_diff_off_no_emphasis_on_changed_word() {
+        use ratatui::style::Modifier;
+        let mut app = word_diff_app();
+        // Turn word-diff off.
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(!app.word_diff_on);
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let width = buf.area.width;
+        let mut del_row = None;
+        let mut add_row = None;
+        for y in 0..buf.area.height {
+            let row_text: String = (0..width)
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect();
+            if row_text.contains("-old") {
+                del_row = Some(y as usize);
+            }
+            if row_text.contains("+new") {
+                add_row = Some(y as usize);
+            }
+        }
+        let del_row = del_row.expect("should find -old line");
+        let add_row = add_row.expect("should find +new line");
+
+        let del_bold = count_modifier_on_line(&terminal, del_row, Modifier::BOLD);
+        let add_bold = count_modifier_on_line(&terminal, add_row, Modifier::BOLD);
+        assert_eq!(
+            del_bold, 0,
+            "no bold emphasis when word-diff off, got {del_bold}"
+        );
+        assert_eq!(
+            add_bold, 0,
+            "no bold emphasis when word-diff off, got {add_bold}"
+        );
+    }
 }

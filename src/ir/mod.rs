@@ -8,8 +8,10 @@
 
 mod model;
 mod parse;
-mod viewport;
+pub mod viewport;
+pub mod worddiff;
 
 pub use model::{DiffLine, DiffLineKind, FileDiff, Hunk, Review};
 pub use parse::{parse_unified_diff, ParseError};
 pub use viewport::{StreamRow, Viewport, ViewportQuery};
+pub use worddiff::{counterpart_text, line_pair_diff, word_diff_regions, WordOp, WordRegion};

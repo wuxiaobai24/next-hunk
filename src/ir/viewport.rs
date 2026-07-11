@@ -198,6 +198,65 @@ impl ViewportQuery {
         None
     }
 
+    /// Resolve the (old, new) source line numbers for a stream row, if it is a
+    /// code line (context/add/delete). Each side is `None` when the row doesn't
+    /// exist on that side (e.g. an `Add` line has no old number).
+    ///
+    /// Computed by locating the row's hunk within its file and walking from the
+    /// hunk's `old_start`/`new_start`, incrementing per line kind. Used by the
+    /// line-number gutter and by `o` (open in editor).
+    pub fn row_line_numbers(
+        review: &Review,
+        row: usize,
+    ) -> Option<(Option<u32>, Option<u32>)> {
+        use crate::ir::model::DiffLineKind;
+        let (file_idx, line_in_file) = Self::file_and_line(review, row)?;
+        let file = &review.files[file_idx];
+        if line_in_file == 0 {
+            return None; // file header
+        }
+        let mut cursor = 1; // skip file header
+        for hunk in &file.hunks {
+            if line_in_file == cursor {
+                return None; // hunk header
+            }
+            cursor += 1;
+            // Is the target line within this hunk's body?
+            if line_in_file < cursor + hunk.lines.len() {
+                let li = line_in_file - cursor;
+                // Walk [0..=li] accumulating old/new counters from the starts.
+                let mut old_no = hunk.old_start;
+                let mut new_no = hunk.new_start;
+                for (k, line) in hunk.lines.iter().enumerate() {
+                    if k == li {
+                        return match line.kind {
+                            DiffLineKind::Context => Some((Some(old_no), Some(new_no))),
+                            DiffLineKind::Add => Some((None, Some(new_no))),
+                            DiffLineKind::Delete => Some((Some(old_no), None)),
+                            DiffLineKind::Meta => Some((None, None)),
+                        };
+                    }
+                    match line.kind {
+                        DiffLineKind::Context => {
+                            old_no += 1;
+                            new_no += 1;
+                        }
+                        DiffLineKind::Add => {
+                            new_no += 1;
+                        }
+                        DiffLineKind::Delete => {
+                            old_no += 1;
+                        }
+                        DiffLineKind::Meta => {}
+                    }
+                }
+                return None;
+            }
+            cursor += hunk.lines.len();
+        }
+        None
+    }
+
     /// Absolute stream row of the next/previous hunk header relative to `row`,
     /// wrapping across file boundaries.
     ///
@@ -464,5 +523,48 @@ diff --git a/c.rs b/c.rs
         let review = Review::default();
         assert!(ViewportQuery::jump_hunk(&review, 0, true).is_none());
         assert!(ViewportQuery::jump_hunk(&review, 0, false).is_none());
+    }
+
+    // ---- row_line_numbers ----
+
+    #[test]
+    fn row_line_numbers_for_context_add_delete() {
+        // hunk: ctx(both), -old(old only), +new(new only)
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -10,3 +10,3 @@
+ ctx
+-old
++new
+",
+        )
+        .unwrap();
+        // stream layout: 0=file header, 1=hunk header, 2=ctx, 3=-old, 4=+new
+        // context line is old=10, new=10
+        assert_eq!(
+            ViewportQuery::row_line_numbers(&review, 2),
+            Some((Some(10), Some(10)))
+        );
+        // -old is old=11, new=None
+        assert_eq!(
+            ViewportQuery::row_line_numbers(&review, 3),
+            Some((Some(11), None))
+        );
+        // +new is old=None, new=11
+        assert_eq!(
+            ViewportQuery::row_line_numbers(&review, 4),
+            Some((None, Some(11)))
+        );
+    }
+
+    #[test]
+    fn row_line_numbers_none_for_headers() {
+        let review = two_file_review();
+        // file header (row 0) and hunk header (row 1) → None
+        assert_eq!(ViewportQuery::row_line_numbers(&review, 0), None);
+        assert_eq!(ViewportQuery::row_line_numbers(&review, 1), None);
     }
 }
