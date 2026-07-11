@@ -60,6 +60,12 @@ impl Search {
 /// Review application state. The single source of truth for scroll/focus.
 pub struct App {
     pub review: Review,
+    /// The unfiltered original review. Kept so the ignore-whitespace toggle can
+    /// re-derive the active [`review`](Self::review) from source each time.
+    pub base_review: Review,
+    /// When true, whitespace-only +/- pairs are collapsed to context in the
+    /// active `review`. Toggled with `W`.
+    pub ignore_ws: bool,
     /// Top virtual row of the stream viewport.
     pub scroll_y: usize,
     /// Currently focused file index (rail selection).
@@ -145,7 +151,9 @@ impl App {
         };
         let theme = theme_mode.to_theme();
         Self {
-            review,
+            review: review.clone(),
+            base_review: review,
+            ignore_ws: false,
             scroll_y: 0,
             selected_file: 0,
             viewport_height: 24,
@@ -364,6 +372,16 @@ impl App {
                     "word diff on".into()
                 } else {
                     "word diff off".into()
+                };
+            }
+            // toggle ignore-whitespace view (collapse whitespace-only changes)
+            KeyCode::Char('W') => {
+                self.ignore_ws = !self.ignore_ws;
+                self.apply_ignore_ws();
+                self.status = if self.ignore_ws {
+                    "ignore-whitespace on".into()
+                } else {
+                    "ignore-whitespace off".into()
                 };
             }
             // toggle unified / split layout
@@ -602,7 +620,14 @@ impl App {
             .position(|f| f.display_path == old_path)
             .unwrap_or(0);
 
-        self.review = new_review;
+        // New base; re-apply the ignore-ws view if it's active so the toggled
+        // state survives a hot-reload.
+        self.base_review = new_review;
+        self.review = if self.ignore_ws {
+            crate::ir::strip_whitespace_changes(&self.base_review)
+        } else {
+            self.base_review.clone()
+        };
         self.cache.invalidate();
 
         // Clamp scroll into the new bounds.
@@ -662,8 +687,22 @@ impl App {
         }
     }
 
-    /// Compute the file + line to open for the `o` (open in editor) action.
-    ///
+    /// Re-derive the active `review` from `base_review` according to the
+    /// `ignore_ws` flag, preserving scroll/selection. Stream layout is stable
+    /// (the transform keeps row counts), so positions stay valid; we just clamp
+    /// defensively and invalidate the highlight cache since line kinds change.
+    fn apply_ignore_ws(&mut self) {
+        self.review = if self.ignore_ws {
+            crate::ir::strip_whitespace_changes(&self.base_review)
+        } else {
+            self.base_review.clone()
+        };
+        self.cache.invalidate();
+        self.scroll_y = self.scroll_y.min(self.max_scroll());
+        self.sync_selected_file();
+    }
+
+    /// Compute the file + line to open for the `o` (open in editor) action.    ///
     /// The TUI is a top-anchored scroll view (no row cursor), so `o` targets
     /// the top visible stream row. If that row is a header (file or hunk),
     /// scan forward within the viewport to the first code line. For a code line
@@ -881,6 +920,92 @@ diff --git a/b.rs b/b.rs
         assert_eq!(app.view_mode, ViewMode::Split);
         app.handle_key(char_key('s'));
         assert_eq!(app.view_mode, ViewMode::Unified);
+    }
+
+    // ---- ignore whitespace (W) ----
+
+    fn ws_change_app() -> App {
+        // A line whose only change is indentation: `-  x` → `+    x`.
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+ fn f() {
+-  x
++    x
+ }
+",
+        )
+        .unwrap();
+        // stream: 0=file header, 1=hunk header, 2=ctx, 3=-del, 4=+add, 5=ctx
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 10;
+        app
+    }
+
+    #[test]
+    fn ignore_ws_off_by_default() {
+        let app = ws_change_app();
+        assert!(!app.ignore_ws);
+        // original has 1 insert + 1 delete
+        assert_eq!(app.review.inserts, 1);
+        assert_eq!(app.review.deletes, 1);
+    }
+
+    #[test]
+    fn ignore_ws_collapses_whitespace_only_changes() {
+        let mut app = ws_change_app();
+        app.handle_key(char_key('W'));
+        assert!(app.ignore_ws);
+        assert_eq!(app.review.inserts, 0, "whitespace-only add collapsed");
+        assert_eq!(app.review.deletes, 0, "whitespace-only del collapsed");
+        assert!(app.status.contains("ignore-whitespace on"));
+    }
+
+    #[test]
+    fn ignore_ws_toggle_back_restores_original() {
+        let mut app = ws_change_app();
+        app.handle_key(char_key('W'));
+        assert_eq!(app.review.inserts, 0);
+        app.handle_key(char_key('W'));
+        assert!(!app.ignore_ws);
+        assert_eq!(app.review.inserts, 1);
+        assert_eq!(app.review.deletes, 1);
+    }
+
+    #[test]
+    fn ignore_ws_keeps_real_changes() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 10;
+        app.handle_key(char_key('W'));
+        // genuine content change → still counted
+        assert_eq!(app.review.inserts, 1);
+        assert_eq!(app.review.deletes, 1);
+    }
+
+    #[test]
+    fn ignore_ws_preserves_scroll_and_layout() {
+        let mut app = ws_change_app();
+        // small viewport so scroll_y=2 is a valid position within the stream.
+        app.viewport_height = 2;
+        app.scroll_y = 2;
+        let len_before = app.review.stream_len;
+        app.handle_key(char_key('W'));
+        assert_eq!(app.review.stream_len, len_before, "layout stable");
+        assert_eq!(app.scroll_y, 2, "scroll preserved");
     }
 
     // ---- search ----

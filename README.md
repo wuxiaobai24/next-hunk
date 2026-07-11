@@ -78,6 +78,7 @@ git show HEAD   # → launches the review TUI
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
 | `H` | toggle syntax highlight |
+| `W` | toggle ignore-whitespace (hide whitespace-only changes) |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
