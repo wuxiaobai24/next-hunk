@@ -142,11 +142,11 @@ fn diff_worktree(repo: &Repository, pathspecs: &[String]) -> Result<String> {
         .untracked_files(UntrackedFiles::None)
         .index_worktree_rewrites(None);
 
-    let mut iter = platform
+    let iter = platform
         .into_index_worktree_iter(std::iter::empty::<BString>())
         .context("index-worktree iterator")?;
 
-    while let Some(item) = iter.next() {
+    for item in iter {
         let item = item.context("index-worktree item")?;
         if let Err(e) = append_worktree_item(repo, &mut resource_cache, &mut out, &item, pathspecs) {
             eprintln!("warning: skip worktree change {}: {e:#}", item.rela_path());
