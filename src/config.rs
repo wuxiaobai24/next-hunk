@@ -7,9 +7,8 @@
 //!
 //! All config fields are `Option<T>` so an absent key is distinct from an
 //! explicit `false` — that is what lets "lower layer sets it, upper layer
-//! leaves it" compose correctly. Fields for not-yet-shipped P1 features
-//! (`line_numbers`, `wrap_lines`, `theme`) are accepted and stored so the
-//! config format is stable, but have no effect yet.
+//! leaves it" compose correctly. The `wrap_lines` field is accepted and stored
+//! for forward-compat but not yet rendered.
 
 use std::path::{Path, PathBuf};
 
@@ -25,7 +24,7 @@ pub struct Config {
     pub line_numbers: Option<bool>,
     /// P1: wrap long lines (accepted, not yet rendered).
     pub wrap_lines: Option<bool>,
-    /// P1: theme name, e.g. "dark" / "light" / "auto" (accepted, not yet applied).
+    /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
 }
 
@@ -77,11 +76,14 @@ impl Config {
 }
 
 /// The effective values after merging config layers with CLI flags.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ResolvedConfig {
     pub staged: bool,
     pub highlight: bool,
     pub watch: bool,
+    /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
+    /// (dark). Config-only in this pass — no CLI flag yet.
+    pub theme: Option<String>,
 }
 
 impl Default for ResolvedConfig {
@@ -91,6 +93,7 @@ impl Default for ResolvedConfig {
             staged: false,
             highlight: true,
             watch: false,
+            theme: None,
         }
     }
 }
@@ -119,6 +122,7 @@ impl ResolvedConfig {
             staged: cli.staged.or(cfg.staged).unwrap_or(d.staged),
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
+            theme: cfg.theme.clone(),
         }
     }
 }
@@ -284,6 +288,33 @@ mod tests {
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
+    }
+
+    #[test]
+    fn resolve_carries_theme_from_config() {
+        let cfg = Config {
+            theme: Some("light".into()),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.theme.as_deref(), Some("light"));
+    }
+
+    #[test]
+    fn resolve_theme_none_when_unset() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(r.theme.is_none());
     }
 
     #[test]

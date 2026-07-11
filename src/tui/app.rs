@@ -7,10 +7,11 @@
 //! headlessly by feeding scripted `KeyEvent`s and asserting on `App` fields or
 //! a rendered `TestBackend` buffer.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::highlight::{HighlightCache, Highlighter};
 use crate::ir::{Review, ViewportQuery};
+use crate::tui::theme::{Theme, ThemeMode};
 
 /// Which input mode the TUI is in. Determines how `handle_key` routes keys.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -87,6 +88,11 @@ pub struct App {
     /// Only meaningful under [`ViewMode::Split`].
     pub split_ratio: u16,
 
+    /// User's theme choice (dark / light / auto). `theme` is the resolved
+    /// palette the view reads from; `t` cycles the mode and refreshes it.
+    pub theme_mode: ThemeMode,
+    pub theme: Theme,
+
     /// Current input mode (normal / search-edit / filter-edit).
     pub mode: InputMode,
     /// In-stream content search.
@@ -104,13 +110,25 @@ impl App {
     }
 
     /// Construct with an explicit highlighter (used by `run_review_tui` to
-    /// reuse a single loaded `Highlighter` and by tests).
+    /// reuse a single loaded `Highlighter` and by tests). Defaults to the dark
+    /// theme. Use [`App::with_theme`] to inject a config-driven theme.
     pub fn with_highlighter(review: Review, highlighter: Highlighter) -> Self {
+        Self::with_theme(review, highlighter, ThemeMode::Dark)
+    }
+
+    /// Construct with an explicit highlighter and theme mode (used by
+    /// `run_review_tui` to honor `config.toml`'s `theme`).
+    pub fn with_theme(
+        review: Review,
+        highlighter: Highlighter,
+        theme_mode: ThemeMode,
+    ) -> Self {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
             format!("{} file(s) — j/k scroll, ]h/[h next/prev hunk, / search, f filter, H highlight, q quit", review.file_count())
         };
+        let theme = theme_mode.to_theme();
         Self {
             review,
             scroll_y: 0,
@@ -125,6 +143,8 @@ impl App {
             word_diff_on: true,
             view_mode: ViewMode::Unified,
             split_ratio: 50,
+            theme_mode,
+            theme,
             mode: InputMode::Normal,
             search: Search::default(),
             path_filter: String::new(),
@@ -144,6 +164,22 @@ impl App {
         if let Some(idx) = ViewportQuery::file_at_row(&self.review, self.scroll_y) {
             self.selected_file = idx;
         }
+    }
+
+    /// Move the scroll position by `delta` rows, clamped to `[0, max_scroll()]`.
+    /// Positive scrolls down, negative up. Used by both keys and mouse wheel so
+    /// they share one clamp/sync path.
+    fn scroll_by(&mut self, delta: i64) {
+        let next = if delta >= 0 {
+            self.scroll_y
+                .saturating_add(delta as usize)
+                .min(self.max_scroll())
+        } else {
+            self.scroll_y
+                .saturating_sub((-delta) as usize)
+        };
+        self.scroll_y = next;
+        self.sync_selected_file();
     }
 
     /// Handle a single key event. Pure: mutates state only, no I/O.
@@ -168,6 +204,34 @@ impl App {
         }
 
         self.handle_normal_key(key);
+    }
+
+    /// Handle a single mouse event. Pure: mutates state only, no I/O.
+    ///
+    /// Only wheel scroll is handled (one row per notch; Shift widens it to a
+    /// half-page, mirroring `j`/`J`). Clicks/drags/moves are ignored. Keeping
+    /// this in `App` means mouse behavior is exercisable headlessly, the same
+    /// as keys.
+    pub fn handle_mouse(&mut self, ev: MouseEvent) {
+        let half = (self.viewport_height.max(1) / 2) as i64;
+        match ev.kind {
+            MouseEventKind::ScrollDown => {
+                if ev.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.scroll_by(half);
+                } else {
+                    self.scroll_by(1);
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if ev.modifiers.contains(KeyModifiers::SHIFT) {
+                    self.scroll_by(-half);
+                } else {
+                    self.scroll_by(-1);
+                }
+            }
+            // Clicks, drags, and horizontal scroll are ignored for now.
+            _ => {}
+        }
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
@@ -296,6 +360,12 @@ impl App {
                     ViewMode::Unified => "unified layout".into(),
                     ViewMode::Split => "split layout".into(),
                 };
+            }
+            // cycle theme: dark → light → auto → dark
+            KeyCode::Char('t') => {
+                self.theme_mode = self.theme_mode.cycle();
+                self.theme = self.theme_mode.to_theme();
+                self.status = format!("theme: {}", self.theme_mode.name());
             }
             // begin in-stream search
             KeyCode::Char('/') => {

@@ -68,8 +68,8 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             let label = format!(" {}. {}", i + 1, short_path(&f.display_path));
             let style = if i == app.selected_file {
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(app.theme.selection_fg)
+                    .bg(app.theme.selection_bg)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -219,12 +219,14 @@ fn stream_row_to_line(
         OwnedRow::FileHeader { path } => Line::from(Span::styled(
             format!("─── {} ───", path),
             Style::default()
-                .fg(Color::Yellow)
+                .fg(app.theme.file_header)
                 .add_modifier(Modifier::BOLD),
         )),
         OwnedRow::HunkHeader { text } => Line::from(Span::styled(
             text,
-            Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(app.theme.hunk_header)
+                .add_modifier(Modifier::BOLD),
         )),
         OwnedRow::Line {
             kind,
@@ -236,9 +238,9 @@ fn stream_row_to_line(
             counterpart,
         } => {
             let (prefix, kind_style) = match kind {
-                DiffLineKind::Add => ('+', Style::default().fg(Color::Green)),
-                DiffLineKind::Delete => ('-', Style::default().fg(Color::Red)),
-                DiffLineKind::Meta => ('\\', Style::default().fg(Color::DarkGray)),
+                DiffLineKind::Add => ('+', Style::default().fg(app.theme.add)),
+                DiffLineKind::Delete => ('-', Style::default().fg(app.theme.delete)),
+                DiffLineKind::Meta => ('\\', Style::default().fg(app.theme.dim)),
                 DiffLineKind::Context => (' ', Style::default()),
             };
 
@@ -264,7 +266,13 @@ fn stream_row_to_line(
             let runs = if app.word_diff_on {
                 if let Some(their) = counterpart.as_deref() {
                     let regions = word_diff_regions(&text, their);
-                    refine_with_word_regions(&hl_runs, &regions, kind)
+                    refine_with_word_regions(
+                        &hl_runs,
+                        &regions,
+                        kind,
+                        app.theme.word_add,
+                        app.theme.word_del,
+                    )
                 } else {
                     hl_runs
                 }
@@ -275,7 +283,7 @@ fn stream_row_to_line(
             let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 3);
             // Optional line-number gutter: " old new " right-aligned in 5 cols.
             if app.line_numbers_on {
-                let dim = Style::default().fg(Color::DarkGray);
+                let dim = Style::default().fg(app.theme.dim);
                 let old_s = old_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
                 let new_s = new_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
                 spans.push(Span::styled(format!(" {old_s} {new_s} "), dim));
@@ -289,9 +297,9 @@ fn stream_row_to_line(
     };
 
     if is_current_match {
-        line.style(Style::default().bg(Color::Yellow).fg(Color::Black))
+        line.style(Style::default().bg(app.theme.match_active_bg).fg(app.theme.match_active_fg))
     } else if is_other_match {
-        line.style(Style::default().bg(Color::DarkGray))
+        line.style(Style::default().bg(app.theme.match_inactive_bg))
     } else {
         line
     }
@@ -309,9 +317,9 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     let line = Line::from(vec![
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
         Span::raw(""),
-        Span::styled(right, Style::default().fg(Color::DarkGray)),
+        Span::styled(right, Style::default().fg(app.theme.dim)),
     ]);
-    let para = Paragraph::new(line).style(Style::default().bg(Color::Black));
+    let para = Paragraph::new(line).style(Style::default().bg(app.theme.status_bg));
     frame.render_widget(para, area);
 }
 
@@ -328,13 +336,13 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · Tab file · / search · f filter · H hl · # lines · w word · s split · q quit "
+            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · Tab file · / search · f filter · H hl · # lines · w word · t theme · q quit "
                 .to_string()
         }
     };
     let style = match app.mode {
-        InputMode::Normal => Style::default().fg(Color::DarkGray),
-        _ => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+        InputMode::Normal => Style::default().fg(app.theme.dim),
+        _ => Style::default().fg(app.theme.edit_mode_fg).add_modifier(Modifier::BOLD),
     };
     let para = Paragraph::new(content).style(style);
     frame.render_widget(para, area);
@@ -353,6 +361,8 @@ fn refine_with_word_regions(
     hl_runs: &[(Style, String)],
     regions: &[(WordRegion, String)],
     kind: DiffLineKind,
+    word_add: Color,
+    word_del: Color,
 ) -> Vec<(Style, String)> {
     // Flatten hl_runs into (style, text) with cumulative char offsets so we
     // can slice them against region boundaries.
@@ -396,7 +406,7 @@ fn refine_with_word_regions(
             let hi_len = end - hl_starts[hi];
             let slice: String = hl_text.chars().skip(lo).take(hi_len - lo).collect();
             let style = if *region == WordRegion::Changed {
-                word_emphasis_style(hl_style, kind)
+                word_emphasis_style(hl_style, kind, word_add, word_del)
             } else {
                 *hl_style
             };
@@ -437,10 +447,10 @@ fn refine_with_word_regions(
 /// Style for a changed word within a +/- line. Keeps the base syntax style but
 /// adds bold and shifts the foreground toward a brighter shade of the line's
 /// diff color so the change pops without hiding syntax coloring.
-fn word_emphasis_style(base: &Style, kind: DiffLineKind) -> Style {
+fn word_emphasis_style(base: &Style, kind: DiffLineKind, word_add: Color, word_del: Color) -> Style {
     let style = match kind {
-        DiffLineKind::Add => base.fg(Color::LightGreen),
-        DiffLineKind::Delete => base.fg(Color::LightRed),
+        DiffLineKind::Add => base.fg(word_add),
+        DiffLineKind::Delete => base.fg(word_del),
         _ => *base,
     };
     style.add_modifier(Modifier::BOLD | Modifier::REVERSED)

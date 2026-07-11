@@ -28,6 +28,7 @@ use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
 pub mod input;
+pub mod theme;
 pub mod view;
 pub mod watch;
 
@@ -62,6 +63,7 @@ pub fn run_review_tui(
     review: Review,
     reloader: Option<Reloader>,
     start_highlight: bool,
+    theme: Option<String>,
 ) -> Result<()> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
@@ -80,7 +82,15 @@ pub fn run_review_tui(
     let mut terminal = Terminal::new(backend).context("create terminal")?;
     terminal.clear()?;
 
-    let mut app = App::new(review);
+    // Honor the config theme: parse "dark"/"light"/"auto" into a ThemeMode
+    // (unknown/empty falls back to dark inside ThemeMode::parse).
+    let theme_mode = theme
+        .as_deref()
+        .map(theme::ThemeMode::parse)
+        .unwrap_or_default();
+    let highlighter =
+        crate::highlight::Highlighter::load().unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
+    let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
     // prime viewport height from an initial draw
     run_loop(&mut terminal, &mut app, reloader)?;
@@ -148,11 +158,13 @@ fn run_loop(
             if app.should_quit {
                 return Ok(());
             }
+        } else if let Event::Mouse(ev) = event {
+            app.handle_mouse(ev);
         } else if let Event::Resize(_, _) = event {
             // next draw will pick up the new size
             continue;
         }
-        // other events (mouse) ignored in MVP
+        // other events ignored
     }
 }
 
@@ -206,7 +218,7 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty, None, true).is_err());
+        assert!(run_review_tui(empty, None, true, None).is_err());
     }
 
     #[test]
@@ -465,6 +477,147 @@ diff --git a/a.rs b/a.rs
         assert_eq!(
             add_bold, 0,
             "no bold emphasis when word-diff off, got {add_bold}"
+        );
+    }
+
+    #[test]
+    fn mouse_scroll_moves_one_line_and_half_page() {
+        use crossterm::event::{MouseEvent, MouseEventKind};
+        // Big review so there's room to scroll down without clamping.
+        let mut app = sample_app();
+        app.viewport_height = 4;
+        let start = app.scroll_y;
+
+        // ScrollDown (no modifier) → advance by exactly 1.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, start + 1);
+
+        // Shift+ScrollDown → advance by half viewport (4/2 = 2).
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        assert_eq!(app.scroll_y, start + 3); // +1 then +2
+
+        // ScrollUp (no modifier) → back up by 1.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, start + 2);
+
+        // Shift+ScrollUp → back up by half viewport (2).
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        assert_eq!(app.scroll_y, start);
+    }
+
+    #[test]
+    fn mouse_scroll_clamps_at_bounds() {
+        use crossterm::event::{MouseEvent, MouseEventKind};
+        let mut app = sample_app();
+        app.viewport_height = 4;
+        // At top: ScrollUp must not underflow / move below 0.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, 0);
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        assert_eq!(app.scroll_y, 0);
+
+        // Jump to bottom and confirm ScrollDown clamps there.
+        app.scroll_y = app.max_scroll();
+        let max = app.max_scroll();
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::SHIFT,
+        });
+        assert_eq!(app.scroll_y, max);
+    }
+
+    #[test]
+    fn mouse_click_is_ignored() {
+        use crossterm::event::{MouseEvent, MouseEventKind, MouseButton};
+        let mut app = sample_app();
+        let before = app.scroll_y;
+        // A click must not move the scroll position.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 2,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, before);
+    }
+
+    #[test]
+    fn t_key_cycles_theme_mode_and_status() {
+        use crate::tui::theme::ThemeMode;
+        let mut app = sample_app();
+        assert_eq!(app.theme_mode, ThemeMode::Dark);
+        let dark_add = app.theme.add;
+
+        // Dark → Light
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_mode, ThemeMode::Light);
+        assert_ne!(app.theme.add, dark_add); // palette changed
+        assert!(app.status.contains("light"));
+
+        // Light → Auto
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_mode, ThemeMode::Auto);
+        assert!(app.status.contains("auto"));
+
+        // Auto → Dark
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_mode, ThemeMode::Dark);
+        assert!(app.status.contains("dark"));
+    }
+
+    #[test]
+    fn light_theme_paints_status_bar_white() {
+        use crate::tui::theme::ThemeMode;
+        let mut app = sample_app();
+        // Switch to the light theme explicitly.
+        app.theme_mode = ThemeMode::Light;
+        app.theme = ThemeMode::Light.to_theme();
+
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+
+        // The status bar is the second-to-last rendered row. Find a cell with
+        // White background (the light theme's status_bg). Scan all cells.
+        let has_white_bg = buf.content().iter().any(|c| {
+            c.style().bg == Some(ratatui::style::Color::White)
+        });
+        assert!(
+            has_white_bg,
+            "light theme should paint at least one cell with White background"
         );
     }
 }

@@ -110,17 +110,19 @@ fn run() -> Result<()> {
             } else {
                 None
             };
-            open_review_from_text(&text, reloader, resolved.highlight)
+            open_review_from_text(&text, reloader, resolved.highlight, resolved.theme)
         }
         Commands::Show { rev } => {
             let repo = find_repo(&std::env::current_dir()?)?;
             let text = git_show(&repo, &rev)?;
             // `show` is a one-shot snapshot: no watch, highlight default on.
-            open_review_from_text(&text, None, true)
+            // Honor the user/project theme config even for `show`.
+            let cfg = Config::load(&std::env::current_dir()?);
+            open_review_from_text(&text, None, true, cfg.theme)
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
-            open_review_from_text(&text, None, true)
+            open_review_from_text(&text, None, true, None)
         }
         Commands::Inspect { path, staged } => {
             let text = if let Some(path) = path {
@@ -154,6 +156,7 @@ fn open_review_from_text(
     text: &str,
     reloader: Option<next_hunk::tui::Reloader>,
     highlight_on: bool,
+    theme: Option<String>,
 ) -> Result<()> {
     if text.trim().is_empty() {
         eprintln!("(empty diff)");
@@ -162,7 +165,7 @@ fn open_review_from_text(
     let review = parse_review(text)?;
     // Interactive TUI (Phase 2). If it fails (e.g. stdout is not a tty),
     // fall back to a short inspect summary so the CLI path stays usable.
-    match run_review_tui(review.clone(), reloader, highlight_on) {
+    match run_review_tui(review.clone(), reloader, highlight_on, theme) {
         Ok(()) => Ok(()),
         Err(err) => {
             eprintln!("note: {err}");
