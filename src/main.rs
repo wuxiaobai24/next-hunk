@@ -80,6 +80,57 @@ enum Commands {
         #[arg(long, short = 's')]
         staged: bool,
     },
+    /// Open a persistent review TUI that also listens for agent pushes.
+    ///
+    /// Like `diff`, but the TUI stays open and a separate `next-hunk push` /
+    /// `next-hunk decision` process can stream updates into it (focus/notes)
+    /// and read the human's accumulated decisions in real time. The TUI runs
+    /// with selection mode on (a/r/u per hunk), so `decision` returns real
+    /// accept/reject results.
+    Serve {
+        /// Review staged changes (`git diff --cached`).
+        #[arg(long, short = 's')]
+        staged: bool,
+        /// Re-run on filesystem changes (live reload). Requires the `watch`
+        /// feature.
+        #[arg(long)]
+        watch: bool,
+        /// Disable syntax highlighting (overrides config/highlight default).
+        #[arg(long)]
+        no_highlight: bool,
+        /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
+        /// `<path>:h<n>` (1-based hunk ordinal).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable: `<path>:<line>=<text>` /
+        /// `<path>:h<n>=<text>` / `banner=<text>`.
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Optional pathspecs to limit the review.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
+    },
+    /// Push a focus/note update into a running `next-hunk serve` in this repo.
+    ///
+    /// Requires that `next-hunk serve` is already running (the server owns the
+    /// TUI). The pushed focus/notes appear live in that TUI; this command
+    /// returns immediately with `ok` (or an error message).
+    Push {
+        /// Scroll the running TUI to this location: `<path>` / `<path>:<line>` /
+        /// `<path>:h<n>`.
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation into the running TUI, repeatable.
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+    },
+    /// Read the human's accumulated per-hunk decisions from a running `serve`.
+    ///
+    /// Prints one JSON line on stdout (same shape as `--select` quit output):
+    /// `{"accepted":[...],"rejected":[...],"undecided":[...]}`. Returns
+    /// immediately — does not wait for the human to quit. Requires a running
+    /// `next-hunk serve` in this repo.
+    Decision,
 }
 
 fn main() -> ExitCode {
@@ -168,6 +219,7 @@ fn run() -> Result<()> {
                     notes,
                     select_mode: select,
                 },
+                None,
             )
         }
         Commands::Show { rev } => {
@@ -184,11 +236,12 @@ fn run() -> Result<()> {
                 cfg.theme,
                 Some(repo),
                 ReviewOptions::default(),
+                None,
             )
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
-            open_review_from_text(&text, None, true, None, None, ReviewOptions::default())
+            open_review_from_text(&text, None, true, None, None, ReviewOptions::default(), None)
         }
         Commands::Inspect { path, staged } => {
             let text = if let Some(path) = path {
@@ -222,8 +275,18 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
-            open_review_from_text(&buf, None, true, cfg.theme, workdir, ReviewOptions::default())
+            open_review_from_text(&buf, None, true, cfg.theme, workdir, ReviewOptions::default(), None)
         }
+        Commands::Serve {
+            staged,
+            watch,
+            no_highlight,
+            focus,
+            note,
+            extra,
+        } => run_serve(staged, watch, no_highlight, focus, note, extra),
+        Commands::Push { focus, note } => run_push(focus, note),
+        Commands::Decision => run_decision(),
     }
 }
 
@@ -233,6 +296,192 @@ fn make_diff_reloader(repo: PathBuf, staged: bool, extra: Vec<String>) -> next_h
     Box::new(move || git_diff(&repo, staged, &extra).context("re-run git diff for --watch"))
 }
 
+/// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
+/// socket. Mirrors the `diff` path (config layering, focus/note parsing,
+/// optional `--watch`) but unconditionally enables select mode (the whole
+/// point of `serve` is to collect decisions via `next-hunk decision`) and
+/// binds a server listener on the repo's runtime socket path.
+#[cfg(all(feature = "serve", unix))]
+fn run_serve(
+    staged: bool,
+    watch: bool,
+    no_highlight: bool,
+    focus: Option<String>,
+    note: Vec<String>,
+    extra: Vec<String>,
+) -> Result<()> {
+    // serve is interactive (it owns a TUI); require a real terminal up front.
+    if !std::io::stdout().is_terminal() {
+        bail!("serve requires an interactive terminal (stdout is not a tty)");
+    }
+
+    let focus_target = focus
+        .map(|s| next_hunk::cli_parse::parse_focus(&s))
+        .transpose()?;
+    let notes = note
+        .iter()
+        .map(|s| next_hunk::cli_parse::parse_note(s))
+        .collect::<Result<Vec<_>>>()?;
+
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo(&cwd)?;
+
+    let cfg = Config::load(&cwd);
+    let resolved = ResolvedConfig::resolve(
+        &cfg,
+        &CliFlags {
+            staged: if staged { Some(true) } else { None },
+            watch: if watch { Some(true) } else { None },
+            highlight: if no_highlight { Some(false) } else { None },
+        },
+    );
+
+    if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
+        eprintln!("note: `--watch` requires the `watch` feature (rebuild with --features watch)");
+    }
+
+    // Bind the server socket before opening the TUI, so a `push`/`decision`
+    // issued the instant the TUI appears finds a live socket. A bind failure
+    // (e.g. another serve running) is fatal and leaves no half-open TUI.
+    let server = spawn_serve_listener(&repo)?;
+
+    let text = git_diff(&repo, resolved.staged, &extra)?;
+    let reloader = if resolved.watch {
+        Some(make_diff_reloader(repo.clone(), resolved.staged, extra))
+    } else {
+        None
+    };
+    open_review_from_text(
+        &text,
+        reloader,
+        resolved.highlight,
+        resolved.theme,
+        Some(repo),
+        ReviewOptions {
+            focus: focus_target,
+            notes,
+            // serve exists to collect decisions, so select mode is always on.
+            select_mode: true,
+        },
+        Some(server),
+    )
+}
+
+/// `next-hunk push`: send a focus/note update to the running server in this
+/// repo. Returns immediately with a short status line.
+#[cfg(all(feature = "serve", unix))]
+fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
+    let focus_target = focus
+        .map(|s| next_hunk::cli_parse::parse_focus(&s))
+        .transpose()?;
+    let notes = note
+        .iter()
+        .map(|s| next_hunk::cli_parse::parse_note(s))
+        .collect::<Result<Vec<_>>>()?;
+
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo(&cwd)?;
+    let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
+
+    let command = next_hunk::tui::server::ServerCommand::Push {
+        focus: focus_target,
+        notes,
+    };
+    match next_hunk::tui::server::send_command(&socket, &command) {
+        Ok(next_hunk::tui::server::ServerReply::Ok) => {
+            println!("ok: pushed to running server");
+            Ok(())
+        }
+        Ok(other) => {
+            // The server replied with something other than Ok — surface it.
+            bail!("unexpected server reply: {other:?}");
+        }
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
+/// `next-hunk decision`: read the human's accumulated decisions from the
+/// running server, printed as one JSON line on stdout (same shape as
+/// `--select` quit output, so an agent parses it identically).
+#[cfg(all(feature = "serve", unix))]
+fn run_decision() -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let repo = find_repo(&cwd)?;
+    let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
+
+    match next_hunk::tui::server::send_command(&socket, &next_hunk::tui::server::ServerCommand::Decision) {
+        Ok(next_hunk::tui::server::ServerReply::Decisions(selections)) => {
+            println!("{}", serde_json::to_string(&selections)?);
+            Ok(())
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
+/// Turn a socket-connect failure into an actionable "no server" message,
+/// while letting unrelated errors (e.g. malformed reply) pass through. Takes
+/// the error by value so the unrelated-error path can return it as-is.
+#[cfg(all(feature = "serve", unix))]
+fn bail_on_no_server(err: anyhow::Error) -> Result<()> {
+    // send_command wraps the connect step with "connect to server socket …".
+    // A missing socket surfaces as a NotFound/WouldBlock/ConnectionRefused
+    // underneath; we match on the textual context to stay decoupled from the
+    // exact io::ErrorKind across platforms.
+    let msg = format!("{err:#}");
+    if msg.contains("connect to server socket") {
+        bail!("no next-hunk server running in this repo; start one with `next-hunk serve`");
+    }
+    Err(err)
+}
+
+// --- serve-feature plumbing ------------------------------------------------
+// On builds with the `serve` feature (default), bind the repo's runtime socket
+// and wire the listener into the TUI. On other builds the subcommands exist in
+// the CLI surface but report unavailability at runtime — matching how `watch`
+// advertises itself when compiled out.
+
+/// Bind the server socket for `serve`. The path is derived from the repo root
+/// so a `push`/`decision` in the same repo finds it without an explicit flag.
+/// `ServerArg` is a type alias for `ServerListener` under the `serve` feature,
+/// so we return the listener directly.
+#[cfg(all(feature = "serve", unix))]
+fn spawn_serve_listener(
+    repo: &std::path::Path,
+) -> Result<next_hunk::tui::ServerArg> {
+    let socket = next_hunk::cli_parse::runtime_socket_path(repo);
+    next_hunk::tui::server::ServerListener::spawn(socket)
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_serve(
+    _staged: bool,
+    _watch: bool,
+    _no_highlight: bool,
+    _focus: Option<String>,
+    _note: Vec<String>,
+    _extra: Vec<String>,
+) -> Result<()> {
+    bail!(
+        "`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
+    );
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
+    bail!(
+        "`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
+    );
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_decision() -> Result<()> {
+    bail!(
+        "`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
+    )
+}
+
 fn open_review_from_text(
     text: &str,
     reloader: Option<next_hunk::tui::Reloader>,
@@ -240,6 +489,7 @@ fn open_review_from_text(
     theme: Option<String>,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
+    server: Option<next_hunk::tui::ServerArg>,
 ) -> Result<()> {
     if text.trim().is_empty() {
         eprintln!("(empty diff)");
@@ -256,6 +506,7 @@ fn open_review_from_text(
         theme,
         workdir,
         options,
+        server,
     ) {
         Ok(selections) => {
             // In --select mode the human's per-hunk decisions go to stdout as

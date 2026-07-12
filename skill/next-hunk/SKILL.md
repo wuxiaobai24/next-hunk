@@ -82,6 +82,40 @@ not apply them unless the human asked you to.
 If unsure, prefer **no `--select`** first. The human can always ask you to roll
 back; but a blocking `--select` that no one answers will hang.
 
+## Server mode (persistent TUI + live push)
+
+`next-hunk serve` opens a **persistent** review TUI that stays open while you
+push updates into it and poll decisions, instead of re-launching a process per
+interaction. Use it when the review is **ongoing** — you expect to iterate
+(adjust focus, add notes) or poll the human's decisions multiple times.
+
+```bash
+# Human opens the persistent TUI (runs with a/r/u enabled):
+next-hunk serve
+
+# Agent: push a new focus/note into the live TUI (returns immediately):
+next-hunk push --focus src/auth.rs:88 --note banner="re-check token expiry"
+
+# Agent: read the human's accumulated decisions (returns immediately):
+next-hunk decision
+# {"accepted":["src/auth.rs:h1"],"rejected":["src/util.rs:h1"],"undecided":[]}
+```
+
+`push`/`decision` find the server automatically (socket derived from the repo
+root) — run them from anywhere in the same repo. `decision` returns the **same
+JSON shape** as `--select` quit output, so you parse it identically; it does
+**not** wait for the human to quit.
+
+### One-shot `--select` vs server mode
+
+| Situation | What to do |
+|-----------|------------|
+| Single review, you can block once for the answer | `diff --select` (simpler, no server to manage) |
+| Review is ongoing; you'll push updates or poll decisions repeatedly | `serve` + `push` / `decision` |
+| Human isn't at a terminal / you can't run `serve` first | `decision` errors: "no server running" — fall back to `--select` |
+
+`serve` requires a Unix OS and the `serve` feature (on by default).
+
 ## Writing good `--note` text
 
 - **Explain why, not what.** The diff already shows what changed. Say *why* you

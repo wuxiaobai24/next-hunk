@@ -29,6 +29,7 @@ use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
 pub mod input;
+pub mod server;
 pub mod theme;
 pub mod view;
 pub mod watch;
@@ -52,6 +53,14 @@ pub struct ReviewOptions {
     /// `--select`: enable the per-hunk accept/reject gate; emit JSON on quit.
     pub select_mode: bool,
 }
+
+/// The server-listener handle threaded into the run loop, or `()` on builds
+/// without `serve`. The unit type makes `None::<ServerArg>` a no-op pass-through
+/// so the non-serve call sites (Diff/Show/Patch/Pager) compile unchanged.
+#[cfg(all(feature = "serve", unix))]
+pub type ServerArg = server::ServerListener;
+#[cfg(not(all(feature = "serve", unix)))]
+pub type ServerArg = ();
 
 /// RAII guard that restores the terminal on drop. crossterm 0.28 ships no
 /// built-in guard, so we define our own to guarantee cleanup even on panic.
@@ -103,6 +112,7 @@ pub fn run_review_tui(
     theme: Option<String>,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
+    server: Option<ServerArg>,
 ) -> Result<Selections> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
@@ -133,7 +143,7 @@ pub fn run_review_tui(
     app.notes = options.notes;
     app.select_mode = options.select_mode;
     app.apply_focus();
-    run_loop(&mut terminal, &mut app, reloader, workdir)
+    run_loop(&mut terminal, &mut app, reloader, workdir, server.as_ref())
 }
 
 fn run_loop(
@@ -141,6 +151,7 @@ fn run_loop(
     app: &mut App,
     mut reloader: Option<Reloader>,
     workdir: Option<PathBuf>,
+    #[allow(unused_variables)] server: Option<&ServerArg>,
 ) -> Result<Selections> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
@@ -185,6 +196,20 @@ fn run_loop(
                     last_event = None;
                     reload_once(app, reloader.as_mut().unwrap());
                 }
+            }
+        }
+
+        // --- serve: drain pending push/decision requests from the socket --
+        // Mirrors the watch drain: non-blocking try_recv. Each request carries
+        // its own reply channel, fulfilled here in the main thread (it owns
+        // the App state the replies are derived from).
+        #[cfg(all(feature = "serve", unix))]
+        if let Some(srv) = server {
+            for req in srv.drain() {
+                let reply = apply_server_command(app, req.command);
+                // Best-effort reply: a dropped sender means the CLI client
+                // hung up (fine — the apply already took effect on the App).
+                let _ = req.reply.send(reply);
             }
         }
 
@@ -280,6 +305,32 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
     }
 }
 
+/// Apply one server-mode command to the app and produce the reply to send back
+/// to the CLI client. Lives here (not on `App`) because it bridges the
+/// `server::ServerCommand` wire type with the App state — `App` stays free of
+/// server-protocol knowledge. Pure w.r.t. I/O; safe to unit-test headlessly.
+#[cfg(all(feature = "serve", unix))]
+fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server::ServerReply {
+    use server::{ServerCommand, ServerReply};
+    match command {
+        ServerCommand::Push { focus, notes } => {
+            // Replace focus (single target) and append notes (accumulating).
+            if focus.is_some() {
+                app.focus_target = focus;
+                app.apply_focus();
+            }
+            app.notes.extend(notes);
+            app.status = "pushed by agent".into();
+            ServerReply::Ok
+        }
+        ServerCommand::Decision => {
+            // Snapshot the human's current decisions (empty buckets outside
+            // --select). Real-time: returns immediately, doesn't block on quit.
+            ServerReply::Decisions(app.selections())
+        }
+    }
+}
+
 // Re-export the most useful bits for tests / external use.
 #[cfg(test)]
 mod tests {
@@ -320,7 +371,7 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty, None, true, None, None, ReviewOptions::default()).is_err());
+        assert!(run_review_tui(empty, None, true, None, None, ReviewOptions::default(), None).is_err());
     }
 
     #[test]

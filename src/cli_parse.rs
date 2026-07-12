@@ -14,6 +14,9 @@
 //! - `--note =<text>`               → `NoteTarget::Banner` (empty location)
 
 use anyhow::{bail, Result};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
 
 use crate::tui::app::{FocusTarget, Note, NoteTarget};
 
@@ -116,6 +119,32 @@ pub fn parse_note(spec: &str) -> Result<Note> {
     }
 }
 
+/// Compute the Unix socket path a `serve` process should bind for `repo_root`.
+///
+/// Path is deterministic per repo so that a `push`/`decision` CLI process in
+/// the same repo finds the same socket without an explicit `--socket` flag:
+/// `$XDG_RUNTIME_DIR/next-hunk-<hash>.sock` (fallback `/tmp/next-hunk-<hash>-<uid>.sock`
+/// when `XDG_RUNTIME_DIR` is unset, mirroring config.rs's manual env resolution).
+/// `<hash>` is a stable `DefaultHasher` of the canonical repo root — good enough
+/// to disambiguate repos without pulling in a hashing crate.
+pub fn runtime_socket_path(repo_root: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    repo_root.hash(&mut hasher);
+    let hash = format!("{:016x}", hasher.finish());
+    let name = format!("next-hunk-{hash}.sock");
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        if !xdg.is_empty() {
+            return PathBuf::from(xdg).join(name);
+        }
+    }
+    // Fallback: /tmp keyed only by the repo hash. The hash already disambiguates
+    // repos; multi-user same-repo collisions on a shared host are rare and
+    // handled by the stale-socket probe in ServerListener::spawn. Keeping the
+    // path deterministic in repo_root alone is what lets a `push`/`decision`
+    // process in the same repo find the socket.
+    PathBuf::from(format!("/tmp/next-hunk-{hash}.sock"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,5 +232,58 @@ mod tests {
     fn note_rejects_bare_path() {
         // A bare path with no :line is ambiguous and rejected with guidance.
         assert!(parse_note("a.rs=text").is_err());
+    }
+
+    // ---- runtime_socket_path ----
+
+    // `runtime_socket_path` reads the process-global XDG_RUNTIME_DIR, so tests
+    // that touch it race under parallel execution. Every test in this group
+    // takes this lock to get a consistent view of the environment.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn socket_path_is_deterministic_per_repo() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Same repo root → same path (so push/decision can find the server).
+        let a = runtime_socket_path(Path::new("/repo/one"));
+        let b = runtime_socket_path(Path::new("/repo/one"));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn socket_path_differs_across_repos() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        let a = runtime_socket_path(Path::new("/repo/one"));
+        let b = runtime_socket_path(Path::new("/repo/two"));
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn socket_path_prefers_xdg_runtime_dir() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // When XDG_RUNTIME_DIR is set, the socket lands there (not /tmp).
+        std::env::set_var("XDG_RUNTIME_DIR", "/tmp/xdg-test-fixture");
+        let path = runtime_socket_path(Path::new("/repo/x"));
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        assert!(
+            path.starts_with("/tmp/xdg-test-fixture"),
+            "expected XDG_RUNTIME_DIR prefix, got {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn socket_path_filename_contains_next_hunk() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        std::env::remove_var("XDG_RUNTIME_DIR");
+        let path = runtime_socket_path(Path::new("/repo/y"));
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default();
+        assert!(
+            name.starts_with("next-hunk-") && name.ends_with(".sock"),
+            "expected next-hunk-*.sock filename, got {name}"
+        );
     }
 }

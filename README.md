@@ -38,9 +38,9 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
+- [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
 - [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
-- [ ] Optional server mode (`next-hunk serve` + `push`/`decision`) for live agent→human streaming
 
 ## Performance
 
@@ -219,13 +219,30 @@ A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when
 and how to call next-hunk — install it into your agent's skills directory. See
 the skill file for the full decision guide and examples.
 
-### Server mode (roadmap)
+### Server mode (persistent TUI + live push)
 
-The default is **stateless** (each `next-hunk diff` is a one-shot process). A
-planned optional **server mode** (`next-hunk serve` + `next-hunk push` /
-`next-hunk decision`) will let an agent stream multiple updates into a
-persistent TUI and read decisions in real time, without re-launching. The
-agent-facing CLI stays identical either way.
+The default is **stateless** (each `next-hunk diff` is a one-shot process).
+Optional **server mode** lets an agent stream multiple updates into a single
+persistent TUI and read the human's decisions in real time, without
+re-launching:
+
+```bash
+# Human opens the persistent review TUI (runs with select mode on):
+next-hunk serve
+
+# Agent pushes a new focus/note into the live TUI (returns immediately):
+next-hunk push --focus src/auth.rs:88 --note banner="please check the token expiry"
+
+# Agent reads the human's accumulated decisions (one JSON line, returns immediately):
+next-hunk decision
+# {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+```
+
+`serve` binds a Unix socket derived from the repo root, so `push`/`decision`
+run from anywhere in the same repo find it automatically — no `--socket` flag.
+Requires the `serve` feature (on by default) and a Unix OS; on other builds the
+subcommands report that they're unavailable. The `decision` output matches the
+`--select` quit shape, so an agent parses both identically.
 
 ## Testing & benchmarks
 

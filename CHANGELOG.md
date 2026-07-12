@@ -35,11 +35,25 @@ calls the CLI; the human gets an interactive TUI pointed at what matters.
 - `StreamRow::HunkHeader` now carries `hunk_idx`, threaded through to the
   renderer for `--select` markers and hunk-level `--note` targeting.
 
-### Roadmap
+### Added — Server mode (persistent TUI + live push)
 
-- Optional **server mode** (`next-hunk serve` + `push` / `decision`) for live
-  agent→human streaming into a persistent TUI. The agent-facing CLI stays
-  identical to the stateless mode.
+Optional **server mode** lets an agent stream multiple updates into a single
+persistent review TUI and read the human's decisions in real time, without
+re-launching a process per interaction.
+
+- **`next-hunk serve`** — opens a persistent review TUI (with select mode on)
+  that also listens on a Unix socket derived from the repo root. Supports
+  `--watch`, `--focus`, `--note`, and pathspecs like `diff`.
+- **`next-hunk push --focus … --note …`** — sends a focus/note update into the
+  running `serve` in this repo; returns immediately with `ok`.
+- **`next-hunk decision`** — reads the human's accumulated per-hunk decisions
+  from the running `serve`, printed as one JSON line on stdout (same shape as
+  `--select` quit output). Returns immediately; does not wait for the human to
+  quit.
+- The socket path is deterministic per repo (`runtime_socket_path`), so
+  `push`/`decision` find the server automatically — no `--socket` flag.
+- Gated behind the `serve` feature (on by default) on Unix; on other builds the
+  subcommands report unavailability at runtime, mirroring the `watch` feature.
 
 ## Distribution
 

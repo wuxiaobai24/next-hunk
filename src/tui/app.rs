@@ -149,7 +149,7 @@ pub struct OpenTarget {
 /// `--focus` target: where the TUI should scroll to on startup. Parsed from the
 /// CLI spec `path` / `path:line` / `path:h<n>` and resolved to an absolute
 /// stream row by [`App::apply_focus`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FocusTarget {
     /// Scroll to the first hunk of this file.
     File(String),
@@ -160,7 +160,7 @@ pub enum FocusTarget {
 }
 
 /// `--note` target: where an agent annotation attaches.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NoteTarget {
     /// Show under the code line with this new-side source line number.
     Line { path: String, line: u32 },
@@ -172,7 +172,7 @@ pub enum NoteTarget {
 
 /// One agent annotation (`--note path:line=text`). Kept on `App` so the view
 /// can render note rows during the viewport fan-out.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Note {
     pub target: NoteTarget,
     pub text: String,
@@ -200,7 +200,7 @@ pub enum Decision {
 
 /// `--select` output: the human's per-hunk decisions, grouped for the agent to
 /// consume from stdout. Hunk keys are `"{display_path}:h{n}"` (1-based).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Selections {
     pub accepted: Vec<String>,
     pub rejected: Vec<String>,
