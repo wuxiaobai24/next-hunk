@@ -13,7 +13,7 @@ The goal is to step past pager-style tools and heavy JS/TS TUI runtimes on four 
 | **Performance** | Viewport-only rendering, compact runtime IR, hard bench gates |
 | **Scale** | Multi-file review streams without materializing every row as a widget |
 | **Experience** | Interactive multi-file navigation, readable layout, scriptable CLI |
-| **Agent-era** | Structured export for humans *and* coding agents |
+| **Agent-era** | Terminal-native, scriptable for humans *and* coding agents |
 
 One-liner:
 
@@ -27,7 +27,7 @@ One-liner:
 |------------------------|--------------------|
 | **Scroll latency, startup latency, RSS** on large diffs | Whether the stripped binary is &lt; 15 MB |
 | Compact **runtime IR** (no full widget tree) | Minimizing dependency count for its own sake |
-| Correct, extensible source / highlight / export | Rejecting good libraries to stay “static-friendly” |
+| Correct, extensible source / highlight | Rejecting good libraries to stay “static-friendly” |
 
 Tech choices optimize for **correctness, maintainability, and hot-path performance** — not for looking lean on disk.
 
@@ -41,7 +41,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
 - **Large**: tens of thousands of diff lines without OOM or multi-second stalls
 - **Clear**: data plane (IR) strictly separated from UI; scriptable and measurable
 - **Usable**: multi-file rail + continuous stream, clear keybindings
-- **Useful to agents**: structured export is a first-class product surface
+- **Useful to agents**: terminal-native, scriptable text output that drops into any pipeline
 
 ### 1.2 Non-goals (at least for early 0.x)
 
@@ -61,7 +61,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
 │                         CLI (clap)                                │
-│   diff | show | patch | bench | export (later)                    │
+│   diff | show | patch | bench                                     │
 └────────────────────────────┬─────────────────────────────────────┘
                              │
                              ▼
@@ -81,7 +81,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
                 ▼                             ▼
 ┌───────────────────────────┐   ┌──────────────────────────────────┐
 │ Viewport query            │   │ Side services (cancellable)      │
-│ O(visible ± overscan)     │   │ highlight │ search │ export │ watch│
+│ O(visible ± overscan)     │   │ highlight │ search │ watch      │
 │ file_at_row / rows()      │   │ generation id invalidates work   │
 └─────────────┬─────────────┘   └──────────────────────────────────┘
               │
@@ -102,7 +102,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
 | **IR** | Single source of truth: indices + compact line data | Hold Color / Style / Widget |
 | **Viewport** | Materialize `StreamRow` for a window | Full-table scan on every frame (except index build) |
 | **TUI** | Draw, keys, scroll state | Own a second full-line cache |
-| **Services** | Highlight, search, export | Block the UI thread |
+| **Services** | Highlight, search | Block the UI thread |
 
 ### 2.2 Diff IR (sketch)
 
@@ -158,7 +158,6 @@ next-hunk/
     source/              # git, patch, files
     tui/                 # app, rail, stream, keys, watch
     config.rs            # layered config.toml (user + project)
-    export/              # later: json / markdown
     highlight/           # later: async syntect
   benches/
   fixtures/
@@ -196,11 +195,11 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
                 │                                 │
                 │      ★ next-hunk                │
                 │      review engine              │
-                │      large diffs + agent export │
+                │      large diffs                │
                 │      measurable latency         │
 ```
 
-- **vs delta**: interactive multi-file review + structured export  
+- **vs delta**: interactive multi-file review on huge diffs
 - **vs gitui/lazygit**: refuse the full client surface; stay specialized on review and stay faster on huge diffs  
 
 (**Binary size is not a competitive KPI.**)
@@ -251,7 +250,6 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 
 ### Phase 4 — Differentiation (~2–3 weeks)
 
-- [ ] Agent export: file / selection / full review → Markdown + JSON
 - [ ] Simple local notes (line/file)
 - [x] Syntax highlight (syntect, viewport-only + cached, default on)
 - [ ] Async syntect (cancellable, default off or idle) — current highlight is sync viewport-only
@@ -291,7 +289,7 @@ PR rules:
 
 | Risk | Mitigation |
 |------|------------|
-| Feature-chasing every git TUI | Locked non-goals; export before visual parity |
+| Feature-chasing every git TUI | Locked non-goals; stay specialized on review |
 | UI before virtualization | Phase 1 gates block Phase 2 polish |
 | Extreme line length | Truncate + horizontal scroll later; protect vertical scroll first |
 | Old terminals | Real-host TERM matrix; success is not defined by musl |
@@ -305,7 +303,7 @@ PR rules:
 | Stage | External one-liner |
 |-------|--------------------|
 | Phase 2 | “`next-hunk` scrolls huge diffs smoothly” |
-| Phase 4 | “Measurable latency, one-shot structured export for agents” |
+| Phase 4 | “Measurable latency, smooth interactive review on huge diffs” |
 | Long term | Category: **review engine**, not “yet another git TUI”, and not “smallest diff binary” |
 
 ---

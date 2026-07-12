@@ -160,6 +160,139 @@ fn no_highlight_flag_is_recognized() {
 }
 
 #[test]
+fn focus_flag_is_recognized() {
+    // `--focus` must be a valid flag taking a value. In a non-git dir it fails
+    // with the repo error, not an "unknown argument" error.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--focus", "src/a.rs"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+        "--focus should be a recognized flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn note_flag_is_repeatable() {
+    // Multiple `--note` flags must parse without error (clap Append action).
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args([
+            "diff",
+            "--note",
+            "src/a.rs:1=first",
+            "--note",
+            "banner=second",
+        ])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+        "--note should be a recognized repeatable flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn select_flag_is_recognized() {
+    // `--select` must be a valid flag. It will later be tested for the non-tty
+    // error path, but first confirm clap accepts it.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--select"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+        "--select should be a recognized flag, stderr: {stderr}"
+    );
+}
+
+#[test]
+fn select_in_non_tty_errors_with_clear_message() {
+    // `--select` requires an interactive terminal. In a piped (non-tty) child
+    // it must fail fast with a message mentioning the tty requirement, so an
+    // agent scripting it gets an unambiguous signal.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--select"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    assert!(
+        !out.status.success(),
+        "--select in a non-tty should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--select") && stderr.contains("interactive"),
+        "--select non-tty error should mention --select and interactive, got: {stderr}"
+    );
+}
+
+#[test]
+fn focus_parse_variants_are_accepted() {
+    // The three focus spec shapes should all be accepted by clap (no parse
+    // error from clap itself). They'll fail at the git step in a temp dir, but
+    // the failure must NOT be a "couldn't parse --focus" error.
+    let tmp = std::env::temp_dir();
+    for spec in &["src/a.rs", "src/a.rs:42", "src/a.rs:h3"] {
+        let out = Command::new(bin())
+            .args(["diff", "--focus", spec])
+            .current_dir(&tmp)
+            .output()
+            .expect("run next-hunk");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("unexpected argument") && !stderr.contains("invalid"),
+            "--focus {spec} should parse cleanly, stderr: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn bad_focus_line_number_errors() {
+    // A non-numeric line suffix should produce a clear parse error before any
+    // git access, so the agent gets actionable feedback.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--focus", "src/a.rs:abc"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--focus") && stderr.contains("invalid line"),
+        "bad focus line should error clearly, got: {stderr}"
+    );
+}
+
+#[test]
+fn note_missing_equals_errors() {
+    // A --note without `=text` is malformed and should fail with guidance.
+    let tmp = std::env::temp_dir();
+    let out = Command::new(bin())
+        .args(["diff", "--note", "src/a.rs:1"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--note"),
+        "malformed --note should error mentioning --note, got: {stderr}"
+    );
+}
+
+#[test]
 fn pager_empty_stdin_exits_clean() {
     // As git's pager, empty stdin (no diff) must be a clean no-op, exit 0.
     let out = Command::new(bin())

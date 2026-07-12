@@ -1924,6 +1924,7 @@ dependencies = [
  "notify",
  "ratatui",
  "serde",
+ "serde_json",
  "syntect",
  "thiserror",
  "toml",

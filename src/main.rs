@@ -1,6 +1,6 @@
 //! next-hunk CLI entry.
 
-use std::io::{self, Read};
+use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -9,7 +9,7 @@ use clap::{Parser, Subcommand};
 use next_hunk::config::{CliFlags, Config, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
 use next_hunk::source::{find_repo, git_diff, git_show};
-use next_hunk::tui::run_review_tui;
+use next_hunk::tui::{run_review_tui, ReviewOptions};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -36,6 +36,21 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
+        /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
+        /// `<path>:h<n>` (1-based hunk ordinal). Agent-bridge: point the human
+        /// at what matters.
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable: `<path>:<line>=<text>` /
+        /// `<path>:h<n>=<text>` / `banner=<text>`. Shown in the TUI to explain
+        /// the change to the human.
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Selection gate: the human accepts/rejects each hunk (`a`/`r`/`u`),
+        /// and on quit the decisions are emitted as JSON on stdout for the
+        /// agent to parse. Requires an interactive terminal.
+        #[arg(long)]
+        select: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -83,14 +98,38 @@ fn run() -> Result<()> {
         staged: false,
         watch: false,
         no_highlight: false,
+        focus: None,
+        note: Vec::new(),
+        select: false,
         extra: Vec::new(),
     }) {
         Commands::Diff {
             staged,
             watch,
             no_highlight,
+            focus,
+            note,
+            select,
             extra,
         } => {
+            // Parse the agent-bridge specs and check the --select tty
+            // requirement BEFORE touching the repo, so a bad spec or a
+            // non-interactive --select fails fast with a clear message (an
+            // agent scripting this gets actionable feedback, not a git error).
+            let focus_target = focus
+                .map(|s| next_hunk::cli_parse::parse_focus(&s))
+                .transpose()?;
+            let notes = note
+                .iter()
+                .map(|s| next_hunk::cli_parse::parse_note(s))
+                .collect::<Result<Vec<_>>>()?;
+
+            // `--select` is a blocking interactive gate; it can't run without
+            // a real terminal.
+            if select && !std::io::stdout().is_terminal() {
+                bail!("--select requires an interactive terminal (stdout is not a tty)");
+            }
+
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
 
@@ -124,6 +163,11 @@ fn run() -> Result<()> {
                 resolved.highlight,
                 resolved.theme,
                 Some(repo),
+                ReviewOptions {
+                    focus: focus_target,
+                    notes,
+                    select_mode: select,
+                },
             )
         }
         Commands::Show { rev } => {
@@ -133,11 +177,18 @@ fn run() -> Result<()> {
             // `show` is a one-shot snapshot: no watch, highlight default on.
             // Honor the user/project theme config even for `show`.
             let cfg = Config::load(&cwd);
-            open_review_from_text(&text, None, true, cfg.theme, Some(repo))
+            open_review_from_text(
+                &text,
+                None,
+                true,
+                cfg.theme,
+                Some(repo),
+                ReviewOptions::default(),
+            )
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
-            open_review_from_text(&text, None, true, None, None)
+            open_review_from_text(&text, None, true, None, None, ReviewOptions::default())
         }
         Commands::Inspect { path, staged } => {
             let text = if let Some(path) = path {
@@ -171,7 +222,7 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
-            open_review_from_text(&buf, None, true, cfg.theme, workdir)
+            open_review_from_text(&buf, None, true, cfg.theme, workdir, ReviewOptions::default())
         }
     }
 }
@@ -188,16 +239,33 @@ fn open_review_from_text(
     highlight_on: bool,
     theme: Option<String>,
     workdir: Option<PathBuf>,
+    options: ReviewOptions,
 ) -> Result<()> {
     if text.trim().is_empty() {
         eprintln!("(empty diff)");
         return Ok(());
     }
     let review = parse_review(text)?;
+    let select_mode = options.select_mode;
     // Interactive TUI (Phase 2). If it fails (e.g. stdout is not a tty),
     // fall back to a short inspect summary so the CLI path stays usable.
-    match run_review_tui(review.clone(), reloader, highlight_on, theme, workdir) {
-        Ok(()) => Ok(()),
+    match run_review_tui(
+        review.clone(),
+        reloader,
+        highlight_on,
+        theme,
+        workdir,
+        options,
+    ) {
+        Ok(selections) => {
+            // In --select mode the human's per-hunk decisions go to stdout as
+            // JSON for the agent to parse. Outside --select, silently drop the
+            // (empty) selections.
+            if select_mode {
+                println!("{}", serde_json::to_string(&selections)?);
+            }
+            Ok(())
+        }
         Err(err) => {
             eprintln!("note: {err}");
             print_inspect(&review);

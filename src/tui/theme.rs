@@ -45,6 +45,8 @@ pub struct Theme {
     pub edit_mode_fg: Color,
     /// Status-bar background.
     pub status_bg: Color,
+    /// Agent annotation text (`--note` rows).
+    pub note: Color,
 }
 
 impl Theme {
@@ -65,6 +67,7 @@ impl Theme {
             match_inactive_bg: Color::DarkGray,
             edit_mode_fg: Color::Yellow,
             status_bg: Color::Black,
+            note: Color::Cyan,
         }
     }
 
@@ -86,6 +89,7 @@ impl Theme {
             match_inactive_bg: Color::Gray,
             edit_mode_fg: Color::LightYellow,
             status_bg: Color::White,
+            note: Color::Cyan,
         }
     }
 }

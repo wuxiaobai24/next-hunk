@@ -4,7 +4,7 @@
 //! binary size. Design goals:
 //! - Cheap to build from unified diff text
 //! - O(visible) materialization for the TUI (no per-line widget tree for the whole stream)
-//! - Stable indices for future highlight / search / export layers
+//! - Stable indices for future highlight / search layers
 
 mod model;
 mod parse;

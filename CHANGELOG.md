@@ -6,6 +6,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agent ↔ Human review bridge
+
+next-hunk now bridges a coding agent's changes to the human reviewer. The agent
+calls the CLI; the human gets an interactive TUI pointed at what matters.
+
+- **`--focus <path>[:<line>|:h<n>]`** (`diff`) — scroll the TUI to a file, line,
+  or hunk on startup, so the human lands where the agent wants their attention.
+- **`--note <target>=<text>`** (`diff`, repeatable) — agent annotations rendered
+  in the TUI: `<path>:<line>=<text>` shows under that line, `<path>:h<n>=<text>`
+  under a hunk header, `banner=<text>` in the status bar. Rendered via a
+  viewport fan-out that leaves `stream_len` / `hunk_starts` / search indices
+  untouched.
+- **`--select`** (`diff`) — per-hunk approval gate. The human presses `a`
+  (accept) / `r` (reject) / `u` (undecided); on quit the decisions are emitted
+  as JSON on stdout for the agent to parse:
+  `{"accepted":[...],"rejected":[...],"undecided":[...]}`. Hunk keys are
+  `"<path>:h<n>"` (1-based). Requires an interactive terminal (errors clearly
+  otherwise, so an agent scripting it gets an unambiguous signal).
+- **Agent skill** (`skill/next-hunk/SKILL.md`) — a ready-made skill that
+  teaches a coding agent when and how to call next-hunk.
+
+### Added — Internals
+
+- `ViewportQuery::file_index_for_path` / `hunk_start_row` / `row_for_new_line`
+  — forward-resolve helpers (path→file, (file,hunk)→row, (file,line)→row) that
+  the agent-bridge features build on.
+- `StreamRow::HunkHeader` now carries `hunk_idx`, threaded through to the
+  renderer for `--select` markers and hunk-level `--note` targeting.
+
+### Roadmap
+
+- Optional **server mode** (`next-hunk serve` + `push` / `decision`) for live
+  agent→human streaming into a persistent TUI. The agent-facing CLI stays
+  identical to the stateless mode.
+
 ## Distribution
 
 As of 0.1.0, **next-hunk is distributed via GitHub**:

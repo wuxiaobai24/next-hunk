@@ -23,7 +23,7 @@ use ratatui::Frame;
 use crate::ir::{
     word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion,
 };
-use crate::tui::app::{App, InputMode, ViewMode};
+use crate::tui::app::{App, Decision, HunkId, InputMode, ViewMode};
 
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
 const RAIL_MAX_WIDTH: u16 = 32;
@@ -130,11 +130,29 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         std::collections::HashSet::new()
     };
 
+    // Build a lookup of agent notes keyed by the absolute stream row they
+    // attach to (line-level and hunk-level). Rendered as extra rows below the
+    // target via a viewport fan-out — does NOT touch `stream_len`, so scroll /
+    // search / hunk-jump indices stay stable.
+    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+
     let title = app.current_path().to_string();
-    let lines: Vec<Line> = owned_rows
-        .into_iter()
-        .map(|r| stream_row_to_line(app, r, current_match_row, &match_rows))
-        .collect();
+    let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
+    for r in owned_rows {
+        let abs_row = owned_row_abs(&r);
+        lines.push(stream_row_to_line(app, r, current_match_row, &match_rows));
+        // Fan out: append any note rows attached to this logical row.
+        if let Some(notes) = notes_by_row.get(&abs_row) {
+            for text in notes {
+                lines.push(Line::from(Span::styled(
+                    format!("  💬 {}", text),
+                    Style::default()
+                        .fg(app.theme.note)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+    }
 
     let para = Paragraph::new(lines).block(
         Block::default()
@@ -144,14 +162,61 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
+/// The absolute stream row an [`OwnedRow`] occupies. Used to look up notes.
+fn owned_row_abs(row: &OwnedRow) -> usize {
+    match row {
+        OwnedRow::FileHeader { abs_row, .. } => *abs_row,
+        OwnedRow::HunkHeader { abs_row, .. } => *abs_row,
+        OwnedRow::Line { abs_row, .. } => *abs_row,
+    }
+}
+
+/// Resolve each `--note` target to an absolute stream row and group the note
+/// texts by that row. Banner notes are excluded here (they're shown in the
+/// status bar, not the stream). Returns an empty map when there are no
+/// line/hunk notes, so the fan-out is a no-op.
+fn build_notes_by_row(
+    review: &Review,
+    notes: &[crate::tui::app::Note],
+) -> std::collections::HashMap<usize, Vec<String>> {
+    use crate::tui::app::NoteTarget;
+    let mut out: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
+    for note in notes {
+        let row = match &note.target {
+            NoteTarget::Line { path, line } => ViewportQuery::file_index_for_path(review, path)
+                .and_then(|idx| ViewportQuery::row_for_new_line(review, idx, *line)),
+            NoteTarget::Hunk { path, hunk } => {
+                // CLI hunk ordinals are 1-based; storage is 0-based.
+                let hunk0 = hunk.saturating_sub(1);
+                ViewportQuery::file_index_for_path(review, path)
+                    .and_then(|idx| ViewportQuery::hunk_start_row(review, idx, hunk0))
+            }
+            NoteTarget::Banner => continue, // shown in the status bar, not here
+        };
+        if let Some(row) = row {
+            out.entry(row).or_default().push(note.text.clone());
+        }
+    }
+    out
+}
+
 /// Owned snapshot of a stream row's display data, so we can release the
 /// `&app.review` borrow before mutating `app` for highlight caching.
 enum OwnedRow {
     FileHeader {
         path: String,
+        /// Absolute stream row (for `--note` lookup).
+        abs_row: usize,
     },
     HunkHeader {
         text: String,
+        /// Which file this hunk belongs to (for `--select` markers).
+        file_idx: usize,
+        /// 0-based index within the file's hunk list (for `--select` markers
+        /// and `--note` hunk targeting).
+        hunk_idx: usize,
+        /// Absolute stream row of this header (for `--note` lookup).
+        abs_row: usize,
     },
     Line {
         kind: DiffLineKind,
@@ -173,9 +238,17 @@ impl OwnedRow {
         match row {
             StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader {
                 path: path.to_string(),
+                abs_row,
             },
-            StreamRow::HunkHeader { text, .. } => OwnedRow::HunkHeader {
+            StreamRow::HunkHeader {
+                text,
+                file_idx,
+                hunk_idx,
+            } => OwnedRow::HunkHeader {
                 text: text.to_string(),
+                file_idx,
+                hunk_idx,
+                abs_row,
             },
             StreamRow::Line {
                 kind,
@@ -219,18 +292,53 @@ fn stream_row_to_line(
     let is_other_match = !is_current_match && match_rows.contains(&abs_row);
 
     let line = match row {
-        OwnedRow::FileHeader { path } => Line::from(Span::styled(
+        OwnedRow::FileHeader { path, .. } => Line::from(Span::styled(
             format!("─── {} ───", path),
             Style::default()
                 .fg(app.theme.file_header)
                 .add_modifier(Modifier::BOLD),
         )),
-        OwnedRow::HunkHeader { text } => Line::from(Span::styled(
+        OwnedRow::HunkHeader {
             text,
-            Style::default()
-                .fg(app.theme.hunk_header)
-                .add_modifier(Modifier::BOLD),
-        )),
+            file_idx,
+            hunk_idx,
+            ..
+        } => {
+            // In --select mode, prefix the header with a decision marker so
+            // the human can see at a glance which hunks they've ruled on.
+            if app.select_mode {
+                let id = HunkId {
+                    file_idx,
+                    hunk_idx,
+                };
+                let (mark, mark_color) = match app
+                    .decisions
+                    .get(&id)
+                    .copied()
+                    .unwrap_or_default()
+                {
+                    Decision::Accept => ("✓", app.theme.add),
+                    Decision::Reject => ("✗", app.theme.delete),
+                    Decision::Undecided => ("?", app.theme.dim),
+                };
+                Line::from(vec![
+                    Span::styled(format!("[{}] ", mark), Style::default().fg(mark_color)),
+                    Span::styled(
+                        text,
+                        Style::default()
+                            .fg(app.theme.hunk_header)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ])
+            } else {
+                Line::from(Span::styled(
+                    text,
+                    Style::default()
+                        .fg(app.theme.hunk_header)
+                        .add_modifier(Modifier::BOLD),
+                ))
+            }
+        }
         OwnedRow::Line {
             kind,
             text,
@@ -338,11 +446,22 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     );
     let totals = format!(" Σ +{}/−{} ", app.review.inserts, app.review.deletes);
     let right = format!(" {} ", app.status);
-    let line = Line::from(vec![
+    // A banner note (`--note banner=text`) is surfaced in the status bar so the
+    // human sees the agent's high-level summary without scrolling.
+    let banner: Option<String> = app
+        .notes
+        .iter()
+        .find(|n| matches!(n.target, crate::tui::app::NoteTarget::Banner))
+        .map(|n| format!(" 💬 {} ", n.text));
+    let mut spans = vec![
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(totals, Style::default().fg(app.theme.dim)),
-        Span::styled(right, Style::default().fg(app.theme.dim)),
-    ]);
+    ];
+    if let Some(b) = banner {
+        spans.push(Span::styled(b, Style::default().fg(app.theme.note)));
+    }
+    spans.push(Span::styled(right, Style::default().fg(app.theme.dim)));
+    let line = Line::from(spans);
     let para = Paragraph::new(line).style(Style::default().bg(app.theme.status_bg));
     frame.render_widget(para, area);
 }

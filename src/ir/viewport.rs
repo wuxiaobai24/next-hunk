@@ -9,6 +9,9 @@ pub enum StreamRow<'a> {
     },
     HunkHeader {
         file_idx: usize,
+        /// Index of this hunk within its file (0-based). Used by `--select`
+        /// decisions and `--note` hunk-level targeting.
+        hunk_idx: usize,
         text: &'a str,
     },
     Line {
@@ -72,13 +75,14 @@ impl ViewportQuery {
             }
             row += 1;
 
-            for hunk in &file.hunks {
+            for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
                 if row >= end {
                     break;
                 }
                 if row >= start {
                     out.push(StreamRow::HunkHeader {
                         file_idx,
+                        hunk_idx,
                         text: review.text(hunk.header.clone()),
                     });
                 }
@@ -281,6 +285,70 @@ impl ViewportQuery {
             i -= 1;
             Some(starts[i])
         }
+    }
+
+    /// Resolve a repo-relative path to a file index. Matches against the file's
+    /// `display_path`, `new_path`, and `old_path` (in that order) so `--focus`
+    /// accepts any of them. Returns `None` when no file matches.
+    pub fn file_index_for_path(review: &Review, path: &str) -> Option<usize> {
+        review
+            .files
+            .iter()
+            .position(|f| f.display_path == path || f.new_path.as_deref() == Some(path) || f.old_path.as_deref() == Some(path))
+    }
+
+    /// Absolute stream row of the `hunk_idx`-th hunk header within `file_idx`.
+    /// Walks the file's hunk list accumulating `1 + lines.len()` per hunk,
+    /// mirroring how `hunk_starts` is built at parse time (parse.rs). Returns
+    /// `None` if `file_idx` or `hunk_idx` is out of range.
+    pub fn hunk_start_row(review: &Review, file_idx: usize, hunk_idx: usize) -> Option<usize> {
+        let file = review.files.get(file_idx)?;
+        let hunk = file.hunks.get(hunk_idx)?;
+        // start at the file header row, skip it (+1)
+        let mut row = file.stream_start + 1;
+        for (k, h) in file.hunks.iter().enumerate() {
+            if k == hunk_idx {
+                return Some(row);
+            }
+            // advance past this hunk's header + body
+            row += 1 + h.lines.len();
+        }
+        // unreachable: hunk_idx validated by .get() above
+        let _ = hunk;
+        None
+    }
+
+    /// Absolute stream row of the code line whose *new-side* source line number
+    /// equals `line`, within `file_idx`. Used by `--focus path:line` to scroll
+    /// to a specific source line. Walks the file's hunks accumulating the
+    /// new-side counter from each hunk's `new_start`, matching the reverse of
+    /// [`Self::row_line_numbers`]. Returns `None` when no line in the file has
+    /// that new-side number (e.g. the line was deleted, or is out of range).
+    pub fn row_for_new_line(review: &Review, file_idx: usize, line: u32) -> Option<usize> {
+        let file = review.files.get(file_idx)?;
+        let mut row = file.stream_start + 1; // skip file header
+        for hunk in &file.hunks {
+            row += 1; // hunk header
+            let mut new_no = hunk.new_start;
+            for line_entry in &hunk.lines {
+                use crate::ir::model::DiffLineKind;
+                if new_no == line && matches!(line_entry.kind, DiffLineKind::Context | DiffLineKind::Add) {
+                    return Some(row);
+                }
+                match line_entry.kind {
+                    DiffLineKind::Context => {
+                        new_no += 1;
+                    }
+                    DiffLineKind::Add => {
+                        new_no += 1;
+                    }
+                    DiffLineKind::Delete => {}
+                    DiffLineKind::Meta => {}
+                }
+                row += 1;
+            }
+        }
+        None
     }
 }
 
@@ -562,5 +630,105 @@ diff --git a/a.rs b/a.rs
         // file header (row 0) and hunk header (row 1) → None
         assert_eq!(ViewportQuery::row_line_numbers(&review, 0), None);
         assert_eq!(ViewportQuery::row_line_numbers(&review, 1), None);
+    }
+
+    // ---- file_index_for_path / hunk_start_row / row_for_new_line ----
+
+    #[test]
+    fn file_index_for_path_matches_display_path() {
+        let review = multi_hunk_review();
+        assert_eq!(ViewportQuery::file_index_for_path(&review, "a.rs"), Some(0));
+        assert_eq!(ViewportQuery::file_index_for_path(&review, "b.rs"), Some(1));
+        assert_eq!(ViewportQuery::file_index_for_path(&review, "c.rs"), Some(2));
+        assert_eq!(ViewportQuery::file_index_for_path(&review, "missing.rs"), None);
+    }
+
+    #[test]
+    fn file_index_for_path_empty_review() {
+        let review = Review::default();
+        assert_eq!(ViewportQuery::file_index_for_path(&review, "a.rs"), None);
+    }
+
+    #[test]
+    fn hunk_start_row_matches_global_hunk_starts() {
+        // Cross-check: hunk_start_row for each (file, hunk) must equal the
+        // corresponding entry in the flat global `review.hunk_starts`.
+        let review = multi_hunk_review();
+        let global = review.hunk_starts.clone();
+        // multi_hunk_review layout: 3 files × 2 hunks → global indices 0..6
+        // file0 hunks → global[0], global[1]; file1 → global[2], global[3]; etc.
+        let mut gi = 0usize;
+        for (fi, file) in review.files.iter().enumerate() {
+            for hi in 0..file.hunks.len() {
+                let row = ViewportQuery::hunk_start_row(&review, fi, hi)
+                    .unwrap_or_else(|| panic!("hunk_start_row({fi},{hi}) should be Some"));
+                assert_eq!(
+                    row, global[gi],
+                    "file {fi} hunk {hi} should match global hunk_starts[{gi}]"
+                );
+                gi += 1;
+            }
+        }
+        assert_eq!(gi, global.len(), "covered every global hunk start");
+    }
+
+    #[test]
+    fn hunk_start_row_out_of_range() {
+        let review = multi_hunk_review();
+        // file out of range
+        assert_eq!(ViewportQuery::hunk_start_row(&review, 99, 0), None);
+        // hunk out of range (file 0 has only 2 hunks)
+        assert_eq!(ViewportQuery::hunk_start_row(&review, 0, 99), None);
+    }
+
+    #[test]
+    fn row_for_new_line_resolves_context_and_add() {
+        // Hunk: @@ -10,3 +10,3 @@ with ctx(new=10), -old, +new(new=11).
+        // stream: 0=file header, 1=hunk header, 2=ctx, 3=-old, 4=+new.
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -10,3 +10,3 @@
+ ctx
+-old
++new
+",
+        )
+        .unwrap();
+        // new=10 is the context line at row 2
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 0, 10), Some(2));
+        // new=11 is the add line at row 4
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 0, 11), Some(4));
+        // new=12 doesn't exist in this hunk
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 0, 12), None);
+    }
+
+    #[test]
+    fn row_for_new_line_skips_delete_lines() {
+        // A delete line has no new-side number, so it should never match and
+        // must not advance the new counter.
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -5,3 +5,3 @@
+ ctx
+-deleted
++added
+",
+        )
+        .unwrap();
+        // new=5 = ctx @ row 2; new=6 = added @ row 4 (delete @ row 3 skipped)
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 0, 5), Some(2));
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 0, 6), Some(4));
+    }
+
+    #[test]
+    fn row_for_new_line_unknown_file() {
+        let review = two_file_review();
+        assert_eq!(ViewportQuery::row_for_new_line(&review, 99, 1), None);
     }
 }

@@ -24,7 +24,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::ir::Review;
-use crate::tui::app::App;
+use crate::tui::app::{App, Selections};
 use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
@@ -39,6 +39,19 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// Carried into the run loop so `--watch` can re-fetch the diff without
 /// touching the terminal from a background thread.
 pub type Reloader = Box<dyn FnMut() -> Result<String>>;
+
+/// Agent-bridge options threaded from the CLI into the run loop. All fields are
+/// optional/empty by default, so callers that don't care about the agent
+/// features (`--focus` / `--note` / `--select`) construct `ReviewOptions::default()`.
+#[derive(Debug, Default, Clone)]
+pub struct ReviewOptions {
+    /// `--focus`: scroll here on startup.
+    pub focus: Option<app::FocusTarget>,
+    /// `--note`: agent annotations to render.
+    pub notes: Vec<app::Note>,
+    /// `--select`: enable the per-hunk accept/reject gate; emit JSON on quit.
+    pub select_mode: bool,
+}
 
 /// RAII guard that restores the terminal on drop. crossterm 0.28 ships no
 /// built-in guard, so we define our own to guarantee cleanup even on panic.
@@ -79,7 +92,8 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 /// started), the loop hot-reloads the review on filesystem changes, preserving
 /// scroll / selection as described in [`App::reload_review`].
 ///
-/// Returns `Ok(())` on clean quit. Errors only on fatal terminal I/O. If the
+/// Returns the [`Selections`] (always present; empty buckets when not in
+/// `--select` mode) on clean quit. Errors only on fatal terminal I/O. If the
 /// process's stdout is not a tty, crossterm will typically still enter raw
 /// mode and the caller may choose to fall back to a non-interactive summary.
 pub fn run_review_tui(
@@ -88,7 +102,8 @@ pub fn run_review_tui(
     start_highlight: bool,
     theme: Option<String>,
     workdir: Option<PathBuf>,
-) -> Result<()> {
+    options: ReviewOptions,
+) -> Result<Selections> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
     }
@@ -112,9 +127,13 @@ pub fn run_review_tui(
         .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
-    // prime viewport height from an initial draw
-    run_loop(&mut terminal, &mut app, reloader, workdir)?;
-    Ok(())
+    // Inject agent-bridge options, then resolve the startup focus before the
+    // first draw so the viewport opens at the agent's intended position.
+    app.focus_target = options.focus;
+    app.notes = options.notes;
+    app.select_mode = options.select_mode;
+    app.apply_focus();
+    run_loop(&mut terminal, &mut app, reloader, workdir)
 }
 
 fn run_loop(
@@ -122,7 +141,7 @@ fn run_loop(
     app: &mut App,
     mut reloader: Option<Reloader>,
     workdir: Option<PathBuf>,
-) -> Result<()> {
+) -> Result<Selections> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
     // that case we keep running without live reload and surface a status note.
@@ -177,7 +196,8 @@ fn run_loop(
         if let Event::Key(key) = event {
             app.handle_key(key);
             if app.should_quit {
-                return Ok(());
+                // Emit the per-hunk decisions (empty buckets outside --select).
+                return Ok(app.selections());
             }
             // `o` requested opening a file in the editor. Suspend the TUI
             // (leave alt screen + raw mode so the editor gets a clean terminal),
@@ -300,7 +320,7 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty, None, true, None, None).is_err());
+        assert!(run_review_tui(empty, None, true, None, None, ReviewOptions::default()).is_err());
     }
 
     #[test]
@@ -704,6 +724,158 @@ diff --git a/a.rs b/a.rs
         assert!(
             has_white_bg,
             "light theme should paint at least one cell with White background"
+        );
+    }
+
+    /// Build an app with a known 2-hunk layout for select-mode rendering tests.
+    /// Layout: a.rs with hunk0 @ row 2 (after file header @ row 1).
+    fn select_sample_app() -> App {
+        use crate::ir::parse_unified_diff;
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::new(review);
+        app.viewport_height = 20;
+        app
+    }
+
+    fn rendered_buffer(app: &mut App, w: u16, h: u16) -> String {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        buf.content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn select_mode_shows_undecided_marker_by_default() {
+        let mut app = select_sample_app();
+        app.select_mode = true;
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        // Hunk header is around row 2; should carry the undecided "?" marker.
+        assert!(
+            rendered.contains("[?]"),
+            "select mode should show [?] on undecided hunk header: {rendered}"
+        );
+    }
+
+    #[test]
+    fn select_mode_shows_accept_marker_after_decision() {
+        use crate::tui::app::{Decision, HunkId};
+        let mut app = select_sample_app();
+        app.select_mode = true;
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            rendered.contains("[✓]"),
+            "accepted hunk should show [✓]: {rendered}"
+        );
+        assert!(
+            !rendered.contains("[?]"),
+            "decided hunk should not show [?]: {rendered}"
+        );
+    }
+
+    #[test]
+    fn select_mode_off_shows_no_markers() {
+        let mut app = select_sample_app();
+        // select_mode stays false (default).
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            !rendered.contains("[?]") && !rendered.contains("[✓]"),
+            "no markers outside select mode: {rendered}"
+        );
+    }
+
+    #[test]
+    fn line_note_renders_below_target() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        // a.rs new line 1 is the +new line at row 4. Attach a note to it.
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "agent says hi".into(),
+        });
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            rendered.contains("💬"),
+            "line note should render a 💬 marker: {rendered}"
+        );
+        assert!(
+            rendered.contains("agent says hi"),
+            "note text should appear: {rendered}"
+        );
+    }
+
+    #[test]
+    fn hunk_note_renders_below_header() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        // a.rs hunk 1 (1-based) → header row 2.
+        app.notes.push(Note {
+            target: NoteTarget::Hunk {
+                path: "a.rs".into(),
+                hunk: 1,
+            },
+            text: "review this hunk".into(),
+        });
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            rendered.contains("💬") && rendered.contains("review this hunk"),
+            "hunk note should render: {rendered}"
+        );
+    }
+
+    #[test]
+    fn banner_note_renders_in_status_bar() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        app.notes.push(Note {
+            target: NoteTarget::Banner,
+            text: "summary here".into(),
+        });
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            rendered.contains("summary here"),
+            "banner note should appear in status bar: {rendered}"
+        );
+    }
+
+    #[test]
+    fn note_for_unknown_target_is_dropped() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "missing.rs".into(),
+                line: 1,
+            },
+            text: "ghost".into(),
+        });
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            !rendered.contains("ghost"),
+            "note targeting a missing file should not render: {rendered}"
         );
     }
 }
