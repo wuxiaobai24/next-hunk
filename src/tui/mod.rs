@@ -371,7 +371,16 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn run_review_tui_errors_on_empty() {
         let empty = Review::default();
-        assert!(run_review_tui(empty, None, true, None, None, ReviewOptions::default(), None).is_err());
+        assert!(run_review_tui(
+            empty,
+            None,
+            true,
+            None,
+            None,
+            ReviewOptions::default(),
+            None
+        )
+        .is_err());
     }
 
     #[test]

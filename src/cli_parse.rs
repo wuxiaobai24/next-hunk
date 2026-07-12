@@ -191,14 +191,26 @@ mod tests {
     #[test]
     fn note_line() {
         let n = parse_note("a.rs:42=explanation").unwrap();
-        assert_eq!(n.target, NoteTarget::Line { path: "a.rs".into(), line: 42 });
+        assert_eq!(
+            n.target,
+            NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 42
+            }
+        );
         assert_eq!(n.text, "explanation");
     }
 
     #[test]
     fn note_hunk() {
         let n = parse_note("a.rs:h2=note text").unwrap();
-        assert_eq!(n.target, NoteTarget::Hunk { path: "a.rs".into(), hunk: 2 });
+        assert_eq!(
+            n.target,
+            NoteTarget::Hunk {
+                path: "a.rs".into(),
+                hunk: 2
+            }
+        );
         assert_eq!(n.text, "note text");
     }
 

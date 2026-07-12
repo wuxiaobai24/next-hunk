@@ -241,7 +241,15 @@ fn run() -> Result<()> {
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
-            open_review_from_text(&text, None, true, None, None, ReviewOptions::default(), None)
+            open_review_from_text(
+                &text,
+                None,
+                true,
+                None,
+                None,
+                ReviewOptions::default(),
+                None,
+            )
         }
         Commands::Inspect { path, staged } => {
             let text = if let Some(path) = path {
@@ -275,7 +283,15 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
-            open_review_from_text(&buf, None, true, cfg.theme, workdir, ReviewOptions::default(), None)
+            open_review_from_text(
+                &buf,
+                None,
+                true,
+                cfg.theme,
+                workdir,
+                ReviewOptions::default(),
+                None,
+            )
         }
         Commands::Serve {
             staged,
@@ -409,7 +425,10 @@ fn run_decision() -> Result<()> {
     let repo = find_repo(&cwd)?;
     let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
 
-    match next_hunk::tui::server::send_command(&socket, &next_hunk::tui::server::ServerCommand::Decision) {
+    match next_hunk::tui::server::send_command(
+        &socket,
+        &next_hunk::tui::server::ServerCommand::Decision,
+    ) {
         Ok(next_hunk::tui::server::ServerReply::Decisions(selections)) => {
             println!("{}", serde_json::to_string(&selections)?);
             Ok(())
@@ -447,9 +466,7 @@ fn bail_on_no_server(err: anyhow::Error) -> Result<()> {
 /// `ServerArg` is a type alias for `ServerListener` under the `serve` feature,
 /// so we return the listener directly.
 #[cfg(all(feature = "serve", unix))]
-fn spawn_serve_listener(
-    repo: &std::path::Path,
-) -> Result<next_hunk::tui::ServerArg> {
+fn spawn_serve_listener(repo: &std::path::Path) -> Result<next_hunk::tui::ServerArg> {
     let socket = next_hunk::cli_parse::runtime_socket_path(repo);
     next_hunk::tui::server::ServerListener::spawn(socket)
 }
@@ -463,23 +480,17 @@ fn run_serve(
     _note: Vec<String>,
     _extra: Vec<String>,
 ) -> Result<()> {
-    bail!(
-        "`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
-    );
+    bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
-    bail!(
-        "`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
-    );
+    bail!("`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_decision() -> Result<()> {
-    bail!(
-        "`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)"
-    )
+    bail!("`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 fn open_review_from_text(

@@ -337,13 +337,8 @@ impl App {
             .into_iter()
             .find_map(|row| match row {
                 crate::ir::StreamRow::HunkHeader {
-                    file_idx,
-                    hunk_idx,
-                    ..
-                } => Some(HunkId {
-                    file_idx,
-                    hunk_idx,
-                }),
+                    file_idx, hunk_idx, ..
+                } => Some(HunkId { file_idx, hunk_idx }),
                 _ => None,
             })
     }
@@ -1890,7 +1885,7 @@ diff --git a/a.rs b/a.rs
     fn select_keys_inert_outside_select_mode() {
         let mut app = multi_hunk_app();
         app.scroll_y = 1; // a.rs hunk0 header
-        // select_mode is false → 'a'/'r'/'u' are no-ops, no decision recorded.
+                          // select_mode is false → 'a'/'r'/'u' are no-ops, no decision recorded.
         let before_scroll = app.scroll_y;
         app.handle_key(char_key('a'));
         app.handle_key(char_key('r'));

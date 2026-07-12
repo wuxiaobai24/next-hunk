@@ -307,16 +307,8 @@ fn stream_row_to_line(
             // In --select mode, prefix the header with a decision marker so
             // the human can see at a glance which hunks they've ruled on.
             if app.select_mode {
-                let id = HunkId {
-                    file_idx,
-                    hunk_idx,
-                };
-                let (mark, mark_color) = match app
-                    .decisions
-                    .get(&id)
-                    .copied()
-                    .unwrap_or_default()
-                {
+                let id = HunkId { file_idx, hunk_idx };
+                let (mark, mark_color) = match app.decisions.get(&id).copied().unwrap_or_default() {
                     Decision::Accept => ("✓", app.theme.add),
                     Decision::Reject => ("✗", app.theme.delete),
                     Decision::Undecided => ("?", app.theme.dim),

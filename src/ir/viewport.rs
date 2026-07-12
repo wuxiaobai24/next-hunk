@@ -291,10 +291,11 @@ impl ViewportQuery {
     /// `display_path`, `new_path`, and `old_path` (in that order) so `--focus`
     /// accepts any of them. Returns `None` when no file matches.
     pub fn file_index_for_path(review: &Review, path: &str) -> Option<usize> {
-        review
-            .files
-            .iter()
-            .position(|f| f.display_path == path || f.new_path.as_deref() == Some(path) || f.old_path.as_deref() == Some(path))
+        review.files.iter().position(|f| {
+            f.display_path == path
+                || f.new_path.as_deref() == Some(path)
+                || f.old_path.as_deref() == Some(path)
+        })
     }
 
     /// Absolute stream row of the `hunk_idx`-th hunk header within `file_idx`.
@@ -332,7 +333,9 @@ impl ViewportQuery {
             let mut new_no = hunk.new_start;
             for line_entry in &hunk.lines {
                 use crate::ir::model::DiffLineKind;
-                if new_no == line && matches!(line_entry.kind, DiffLineKind::Context | DiffLineKind::Add) {
+                if new_no == line
+                    && matches!(line_entry.kind, DiffLineKind::Context | DiffLineKind::Add)
+                {
                     return Some(row);
                 }
                 match line_entry.kind {
@@ -640,7 +643,10 @@ diff --git a/a.rs b/a.rs
         assert_eq!(ViewportQuery::file_index_for_path(&review, "a.rs"), Some(0));
         assert_eq!(ViewportQuery::file_index_for_path(&review, "b.rs"), Some(1));
         assert_eq!(ViewportQuery::file_index_for_path(&review, "c.rs"), Some(2));
-        assert_eq!(ViewportQuery::file_index_for_path(&review, "missing.rs"), None);
+        assert_eq!(
+            ViewportQuery::file_index_for_path(&review, "missing.rs"),
+            None
+        );
     }
 
     #[test]

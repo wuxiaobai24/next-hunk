@@ -178,8 +178,8 @@ fn handle_connection(mut stream: UnixStream, tx: &mpsc::Sender<ServerRequest>) -
     reader
         .read_line(&mut line)
         .context("read command line from socket")?;
-    let command: ServerCommand = serde_json::from_str(line.trim())
-        .map_err(|e| anyhow::anyhow!("parse command: {e}"))?;
+    let command: ServerCommand =
+        serde_json::from_str(line.trim()).map_err(|e| anyhow::anyhow!("parse command: {e}"))?;
 
     // Pair with a reply channel and ship to the main loop.
     let (reply_tx, reply_rx) = mpsc::channel::<ServerReply>();
@@ -329,8 +329,8 @@ mod tests {
         let sock = TempSocket::new("stale");
         std::fs::write(&sock.path, b"not a socket").unwrap();
         // connect to a non-socket file errors → treated as stale.
-        let _listener = ServerListener::spawn(sock.path.clone())
-            .expect("spawn should reclaim the stale file");
+        let _listener =
+            ServerListener::spawn(sock.path.clone()).expect("spawn should reclaim the stale file");
     }
 
     #[test]
