@@ -5,7 +5,6 @@ edition = "2021"
 description = "High-performance terminal review engine for large changesets"
 license = "MIT"
 readme = "README.md"
-# TODO: point these at the real repo before publishing to crates.io.
 repository = "https://github.com/wuxiaobai24/next-hunk"
 homepage = "https://github.com/wuxiaobai24/next-hunk"
 keywords = ["diff", "git", "tui", "review", "performance"]
