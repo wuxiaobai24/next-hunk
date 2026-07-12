@@ -21,7 +21,7 @@
 
 ## 状态
 
-早期原型（`v0.1.0-dev`）：
+`v0.1.0` — 日常 review diff 可用：
 
 - [x] 项目骨架 + 紧凑 unified-diff IR（运行时模型）
 - [x] 视口查询（基于文件 span 的二分查找）
@@ -33,18 +33,31 @@
 - [x] 搜索：stream 内 `/` 内容搜索 + 文件栏 `f` 路径过滤
 - [x] Hunk 跳转：`]h` / `[h` 下一个/上一个 hunk（二分定位 hunk 索引）
 - [x] Watch 模式：`--watch` 实时重载（notify，debounce；保持滚动/选中）
+- [x] Pager 模式：`next-hunk pager` 作 git 的 `core.pager`
+- [x] `o` 打开到编辑器：跳转到光标行
+- [x] 状态栏 diff 统计（per-file + 全局 `+ins/−del`）
+- [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
 - [ ] Agent 导出（JSON / Markdown）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
 
-## 安装（开发）
+## 安装
 
 ```bash
+# 从 GitHub 安装（当前发布渠道）
+cargo install --git https://github.com/wuxiaobai24/next-hunk
+# 或本地克隆后安装
 cargo install --path .
-# 或
+# 或直接运行
 cargo run --release -- diff
-# 开启实时重载 watch 模式（默认启用）：
-cargo run --release -- diff --watch
+```
+
+### 设为 git 的 pager（推荐）
+
+安装后，让日常 `git diff` / `show` / `log` 直接打开 review TUI：
+
+```bash
+git config --global core.pager "next-hunk pager"
 ```
 
 ## 用法

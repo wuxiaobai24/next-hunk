@@ -64,9 +64,9 @@ the viewport materializes only what's on screen. Full numbers live in
 ## Install
 
 ```bash
-# from crates.io (once published)
-cargo install next-hunk
-# or build from source
+# from GitHub (canonical release channel)
+cargo install --git https://github.com/wuxiaobai24/next-hunk
+# or build from a local clone
 cargo install --path .
 # or just run it
 cargo run --release -- diff

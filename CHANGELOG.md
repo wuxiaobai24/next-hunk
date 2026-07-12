@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## Distribution
+
+As of 0.1.0, **next-hunk is distributed via GitHub**:
+
+```bash
+cargo install --git https://github.com/wuxiaobai24/next-hunk
+```
+
+It is intentionally **not** published to crates.io yet (GitHub-only distribution
+chosen for the first release). A crates.io publish may happen in a later release.
+
 ## [0.1.0] - 2026-07-12
 
 First usable release — a terminal review engine for large changesets.
