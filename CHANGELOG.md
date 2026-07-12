@@ -6,6 +6,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-13
+
+### Added — Agent ↔ Human review bridge
+
+next-hunk now bridges a coding agent's changes to the human reviewer. The agent
+calls the CLI; the human gets an interactive TUI pointed at what matters.
+
+- **`--focus <path>[:<line>|:h<n>]`** (`diff`) — scroll the TUI to a file, line,
+  or hunk on startup, so the human lands where the agent wants their attention.
+- **`--note <target>=<text>`** (`diff`, repeatable) — agent annotations rendered
+  in the TUI: `<path>:<line>=<text>` shows under that line, `<path>:h<n>=<text>`
+  under a hunk header, `banner=<text>` in the status bar. Rendered via a
+  viewport fan-out that leaves `stream_len` / `hunk_starts` / search indices
+  untouched.
+- **`--select`** (`diff`) — per-hunk approval gate. The human presses `a`
+  (accept) / `r` (reject) / `u` (undecided); on quit the decisions are emitted
+  as JSON on stdout for the agent to parse:
+  `{"accepted":[...],"rejected":[...],"undecided":[...]}`. Hunk keys are
+  `"<path>:h<n>"` (1-based). Requires an interactive terminal (errors clearly
+  otherwise, so an agent scripting it gets an unambiguous signal).
+- **Agent skill** (`skill/next-hunk/SKILL.md`) — a ready-made skill that
+  teaches a coding agent when and how to call next-hunk.
+
+### Added — Internals
+
+- `ViewportQuery::file_index_for_path` / `hunk_start_row` / `row_for_new_line`
+  — forward-resolve helpers (path→file, (file,hunk)→row, (file,line)→row) that
+  the agent-bridge features build on.
+- `StreamRow::HunkHeader` now carries `hunk_idx`, threaded through to the
+  renderer for `--select` markers and hunk-level `--note` targeting.
+
+### Added — Server mode (persistent TUI + live push)
+
+Optional **server mode** lets an agent stream multiple updates into a single
+persistent review TUI and read the human's decisions in real time, without
+re-launching a process per interaction.
+
+- **`next-hunk serve`** — opens a persistent review TUI (with select mode on)
+  that also listens on a Unix socket derived from the repo root. Supports
+  `--watch`, `--focus`, `--note`, and pathspecs like `diff`.
+- **`next-hunk push --focus … --note …`** — sends a focus/note update into the
+  running `serve` in this repo; returns immediately with `ok`.
+- **`next-hunk decision`** — reads the human's accumulated per-hunk decisions
+  from the running `serve`, printed as one JSON line on stdout (same shape as
+  `--select` quit output). Returns immediately; does not wait for the human to
+  quit.
+- The socket path is deterministic per repo (`runtime_socket_path`), so
+  `push`/`decision` find the server automatically — no `--socket` flag.
+- Gated behind the `serve` feature (on by default) on Unix; on other builds the
+  subcommands report unavailability at runtime, mirroring the `watch` feature.
+
 ## Distribution
 
 As of 0.1.0, **next-hunk is distributed via GitHub**:

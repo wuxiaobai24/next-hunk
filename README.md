@@ -11,7 +11,7 @@ High-performance terminal review engine for large changesets.
 | **Performance** | Viewport-only rendering, compact runtime IR, hard bench gates |
 | **Scale** | Multi-file review streams without loading every row into widgets |
 | **Experience** | Interactive multi-file navigation, readable layout, scriptable CLI |
-| **Agent-era** | Structured export for humans *and* coding agents (roadmap) |
+| **Agent-era** | Terminal-native, scriptable for humans *and* coding agents (roadmap) |
 
 Binary size is **not** a product goal. We optimize latency and runtime memory on large diffs, not “smallest binary wins”.
 
@@ -37,8 +37,9 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Open in editor: `o` jumps to the focused line in `$EDITOR`
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
+- [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
+- [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
 - [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
-- [ ] Agent export (JSON / Markdown)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
 
 ## Performance
@@ -180,6 +181,68 @@ watch = true
 ```
 
 CLI overrides: `--staged`, `--watch`, `--no-highlight`.
+
+## Agent integration
+
+next-hunk bridges a coding agent's changes to the human reviewer. The agent
+calls the CLI; the human gets an interactive TUI pointed at what matters.
+
+**Show changes (no feedback):**
+
+```bash
+next-hunk diff \
+  --focus src/auth.rs:42 \
+  --note src/auth.rs:42="Extracted token validation into its own function" \
+  --note banner="Auth refactor — core change is the validation split"
+```
+
+- `--focus <path>[:<line>|:h<n>]` — scroll to a file / line / hunk on open.
+- `--note <target>=<text>` — agent annotations (repeatable): `<path>:<line>`,
+  `<path>:h<n>`, or `banner=<summary>`. Rendered in the TUI.
+
+**Get per-hunk approval (`--select`):**
+
+```bash
+next-hunk diff --select --focus src/db/migrate.rs:140 \
+  --note src/db/migrate.rs:140="Drops the legacy column — irreversible"
+# blocks until the human quits; stdout then gets one JSON line:
+# {"accepted":["src/db/migrate.rs:h1"],"rejected":[...],"undecided":[...]}
+```
+
+In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
+(undecided) per hunk; on quit the decisions are emitted as JSON for the agent
+to parse. `--select` requires an interactive terminal and errors out otherwise.
+
+### Agent skill
+
+A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when
+and how to call next-hunk — install it into your agent's skills directory. See
+the skill file for the full decision guide and examples.
+
+### Server mode (persistent TUI + live push)
+
+The default is **stateless** (each `next-hunk diff` is a one-shot process).
+Optional **server mode** lets an agent stream multiple updates into a single
+persistent TUI and read the human's decisions in real time, without
+re-launching:
+
+```bash
+# Human opens the persistent review TUI (runs with select mode on):
+next-hunk serve
+
+# Agent pushes a new focus/note into the live TUI (returns immediately):
+next-hunk push --focus src/auth.rs:88 --note banner="please check the token expiry"
+
+# Agent reads the human's accumulated decisions (one JSON line, returns immediately):
+next-hunk decision
+# {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+```
+
+`serve` binds a Unix socket derived from the repo root, so `push`/`decision`
+run from anywhere in the same repo find it automatically — no `--socket` flag.
+Requires the `serve` feature (on by default) and a Unix OS; on other builds the
+subcommands report that they're unavailable. The `decision` output matches the
+`--select` quit shape, so an agent parses both identically.
 
 ## Testing & benchmarks
 

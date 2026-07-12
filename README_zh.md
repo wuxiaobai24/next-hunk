@@ -11,7 +11,7 @@
 | **性能** | 仅视口渲染、紧凑运行时 IR、硬性 bench 门禁 |
 | **规模** | 多文件 review 流，不为每一行建 widget |
 | **体验** | 交互式多文件导航、可读布局、可脚本化 CLI |
-| **Agent 时代** | 面向人类与 coding agent 的结构化导出（路线图） |
+| **Agent 时代** | 终端原生、可脚本化，面向人类与 coding agent（路线图） |
 
 **二进制体积不是产品目标。** 我们优化的是大 diff 下的延迟与运行时内存，不是「谁更小谁赢」。
 
@@ -37,8 +37,9 @@
 - [x] `o` 打开到编辑器：跳转到光标行
 - [x] 状态栏 diff 统计（per-file + 全局 `+ins/−del`）
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
+- [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
+- [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
 - [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
-- [ ] Agent 导出（JSON / Markdown）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
 
 ## 安装
@@ -158,6 +159,55 @@ watch = true
 ```
 
 CLI 覆盖:`--staged`、`--watch`、`--no-highlight`。
+
+## Agent 集成
+
+next-hunk 把 coding agent 的改动桥接给人类审查者。Agent 调 CLI,人拿到一个指向关键位置的交互式 TUI。
+
+**展示改动(无需反馈):**
+
+```bash
+next-hunk diff \
+  --focus src/auth.rs:42 \
+  --note src/auth.rs:42="把 token 校验抽成了独立函数" \
+  --note banner="Auth 重构 —— 核心是校验逻辑的拆分"
+```
+
+- `--focus <path>[:<line>|:h<n>]` —— 启动时滚动到某文件 / 行 / hunk。
+- `--note <target>=<text>` —— agent 注解(可重复):`<path>:<line>`、`<path>:h<n>` 或 `banner=<摘要>`。渲染在 TUI 里。
+
+**获取逐 hunk 审批(`--select`):**
+
+```bash
+next-hunk diff --select --focus src/db/migrate.rs:140 \
+  --note src/db/migrate.rs:140="删掉旧列 —— 不可逆"
+# 阻塞到人退出;stdout 随后输出一行 JSON:
+# {"accepted":["src/db/migrate.rs:h1"],"rejected":[...],"undecided":[...]}
+```
+
+`--select` 模式下,人按 `a`(接受)/ `r`(拒绝)/ `u`(未决)逐 hunk 决策;退出时把决策以 JSON 输出供 agent 解析。`--select` 需要交互式终端,否则报错。
+
+### Agent skill
+
+仓库内置一个现成 skill(`skill/next-hunk/SKILL.md`),教 coding agent 何时、如何调用 next-hunk —— 把它装进你的 agent skills 目录即可。完整决策指南和示例见 skill 文件。
+
+### Server 模式（常驻 TUI + 实时推送）
+
+默认是**无状态**的（每次 `next-hunk diff` 都是一次性进程）。可选 **server 模式**让 agent 把多次更新流式推送到单个常驻 TUI，并实时读取人的决策，无需每次交互重启进程：
+
+```bash
+# 人打开常驻审查 TUI（select 模式自动开启）：
+next-hunk serve
+
+# agent 把新的 focus/note 推送到常驻 TUI（立即返回）：
+next-hunk push --focus src/auth.rs:88 --note banner="请检查 token 过期"
+
+# agent 读取人累积的逐 hunk 决策（一行 JSON，立即返回）：
+next-hunk decision
+# {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+```
+
+`serve` 绑定一个由仓库根目录派生的 Unix socket，所以 `push`/`decision` 在同仓库任意位置运行都能自动找到它 —— 无需 `--socket` 参数。需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。
 
 ## 测试与基准
 

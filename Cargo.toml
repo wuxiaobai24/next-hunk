@@ -1,6 +1,6 @@
 [package]
 name = "next-hunk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "High-performance terminal review engine for large changesets"
 license = "MIT"
@@ -26,6 +26,8 @@ crossterm = "0.28"
 gix = "0.85"
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
+# serde_json: serialize `--select` decisions to stdout for the agent to consume.
+serde_json = "1"
 # syntect: pure-Rust regex engine (default-fancy) — no Oniguruma C toolchain.
 # Optional behind the `highlight` feature so constrained/offline environments
 # can build without it (the TUI gracefully degrades to plain text).
@@ -40,7 +42,7 @@ toml = "0.8"
 notify = { version = "6", optional = true }
 
 [features]
-default = ["highlight", "watch"]
+default = ["highlight", "watch", "serve"]
 # Syntax highlighting via syntect. When disabled, the TUI renders plain text
 # (highlight toggle is inert).
 highlight = ["dep:syntect"]
@@ -48,6 +50,10 @@ highlight = ["dep:syntect"]
 # `--watch` flag works out of the box; when disabled, `--watch` reports that
 # the feature is not compiled in.
 watch = ["dep:notify"]
+# Optional server mode (`next-hunk serve` + `push`/`decision`) for live
+# agent→human streaming into a persistent TUI. Uses std Unix sockets (no new
+# crate), so on non-Unix the subcommands exist but error at runtime.
+serve = []
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }

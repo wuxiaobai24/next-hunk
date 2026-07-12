@@ -10,8 +10,17 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
 
 use crate::highlight::{HighlightCache, Highlighter};
-use crate::ir::{Review, ViewportQuery};
+use crate::ir::{Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
+
+/// Format a [`FocusTarget`] for status messages (compact, human-readable).
+fn focus_display(target: &FocusTarget) -> String {
+    match target {
+        FocusTarget::File(p) => p.clone(),
+        FocusTarget::FileLine(p, l) => format!("{p}:{l}"),
+        FocusTarget::FileHunk(p, h) => format!("{p}:h{h}"),
+    }
+}
 
 /// Which input mode the TUI is in. Determines how `handle_key` routes keys.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -113,6 +122,18 @@ pub struct App {
     /// the TUI, spawns `$EDITOR`, and resumes. Keeping it as a field (not an
     /// I/O side effect) keeps `App` pure and headless-testable.
     pub open_request: Option<OpenTarget>,
+
+    /// `--focus`: where to scroll on startup. Set by the run loop before the
+    /// first draw and consumed (cleared) by [`App::apply_focus`].
+    pub focus_target: Option<FocusTarget>,
+    /// `--note`: agent annotations. Indexed by the view during the viewport
+    /// fan-out to render note rows below their target.
+    pub notes: Vec<Note>,
+    /// `--select`: when true, `a`/`r`/`?` set per-hunk decisions and the run
+    /// loop emits [`Selections`] JSON on quit.
+    pub select_mode: bool,
+    /// `--select`: per-hunk decisions keyed by [`HunkId`].
+    pub decisions: std::collections::HashMap<HunkId, Decision>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -123,6 +144,67 @@ pub struct OpenTarget {
     pub path: String,
     /// 1-based line number to jump to (new-side line number when available).
     pub line: u32,
+}
+
+/// `--focus` target: where the TUI should scroll to on startup. Parsed from the
+/// CLI spec `path` / `path:line` / `path:h<n>` and resolved to an absolute
+/// stream row by [`App::apply_focus`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FocusTarget {
+    /// Scroll to the first hunk of this file.
+    File(String),
+    /// Scroll to the code line with this new-side source line number.
+    FileLine(String, u32),
+    /// Scroll to the `n`-th hunk (1-based) within this file.
+    FileHunk(String, usize),
+}
+
+/// `--note` target: where an agent annotation attaches.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum NoteTarget {
+    /// Show under the code line with this new-side source line number.
+    Line { path: String, line: u32 },
+    /// Show under the `n`-th (1-based) hunk header of this file.
+    Hunk { path: String, hunk: usize },
+    /// Show as a transient banner in the status bar.
+    Banner,
+}
+
+/// One agent annotation (`--note path:line=text`). Kept on `App` so the view
+/// can render note rows during the viewport fan-out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Note {
+    pub target: NoteTarget,
+    pub text: String,
+}
+
+/// Stable identity of a hunk: file index + hunk index within that file. Used as
+/// the key for `--select` decisions. Serialized as `"{display_path}:h{n}"`
+/// (1-based hunk ordinal) in the output JSON.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HunkId {
+    pub file_idx: usize,
+    /// 0-based index within the file's `hunks` vec.
+    pub hunk_idx: usize,
+}
+
+/// A per-hunk review decision set by the human in `--select` mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Decision {
+    /// Not yet reviewed (the default).
+    #[default]
+    Undecided,
+    Accept,
+    Reject,
+}
+
+/// `--select` output: the human's per-hunk decisions, grouped for the agent to
+/// consume from stdout. Hunk keys are `"{display_path}:h{n}"` (1-based).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Selections {
+    pub accepted: Vec<String>,
+    pub rejected: Vec<String>,
+    pub undecided: Vec<String>,
 }
 
 impl App {
@@ -172,6 +254,10 @@ impl App {
             path_filter: String::new(),
             pending_prefix: None,
             open_request: None,
+            focus_target: None,
+            notes: Vec::new(),
+            select_mode: false,
+            decisions: std::collections::HashMap::new(),
         }
     }
 
@@ -200,6 +286,112 @@ impl App {
         };
         self.scroll_y = next;
         self.sync_selected_file();
+    }
+
+    /// Consume `focus_target`: resolve it to an absolute stream row and move the
+    /// viewport there. Called once by the run loop before the first draw. On an
+    /// unknown path/line/hunk the focus silently falls back to the top with a
+    /// status hint (the review still opens normally).
+    pub fn apply_focus(&mut self) {
+        let Some(target) = self.focus_target.take() else {
+            return;
+        };
+        let row = match &target {
+            FocusTarget::File(path) => {
+                match ViewportQuery::file_index_for_path(&self.review, path) {
+                    Some(idx) => Some(ViewportQuery::file_start_row(&self.review, idx)),
+                    None => None,
+                }
+            }
+            FocusTarget::FileLine(path, line) => {
+                ViewportQuery::file_index_for_path(&self.review, path)
+                    .and_then(|idx| ViewportQuery::row_for_new_line(&self.review, idx, *line))
+            }
+            FocusTarget::FileHunk(path, hunk) => {
+                // CLI hunk ordinals are 1-based; HunkId/storage is 0-based.
+                let hunk0 = hunk.saturating_sub(1);
+                ViewportQuery::file_index_for_path(&self.review, path)
+                    .and_then(|idx| ViewportQuery::hunk_start_row(&self.review, idx, hunk0))
+            }
+        };
+        match row {
+            Some(row) => {
+                self.scroll_y = row.min(self.max_scroll());
+                self.sync_selected_file();
+                self.status = format!("📍 focus: {}", focus_display(&target));
+            }
+            None => {
+                self.status = format!("focus not found: {}", focus_display(&target));
+            }
+        }
+    }
+
+    /// The [`HunkId`] of the first hunk header within the current viewport, if
+    /// any. Used by `--select` keys to decide which hunk `a`/`r`/`?` act on.
+    fn current_hunk_id(&self) -> Option<HunkId> {
+        let viewport = Viewport {
+            start: self.scroll_y,
+            height: self.viewport_height.max(1),
+        };
+        ViewportQuery::rows(&self.review, viewport)
+            .into_iter()
+            .find_map(|row| match row {
+                crate::ir::StreamRow::HunkHeader {
+                    file_idx, hunk_idx, ..
+                } => Some(HunkId { file_idx, hunk_idx }),
+                _ => None,
+            })
+    }
+
+    /// Record a decision for the current viewport's first hunk, then advance to
+    /// the next hunk so the human can keep reviewing. No-op (besides status)
+    /// when there is no hunk in view.
+    fn decide_current(&mut self, decision: Decision) {
+        if let Some(id) = self.current_hunk_id() {
+            self.decisions.insert(id, decision);
+            self.jump_hunk(true);
+            self.status = format!(
+                "{:?} — {}",
+                decision,
+                self.review
+                    .files
+                    .get(id.file_idx)
+                    .map(|f| f.display_path.as_str())
+                    .unwrap_or("?")
+            );
+        } else {
+            self.status = "no hunk in view".into();
+        }
+    }
+
+    /// Build the `--select` output from the current decision map. Every hunk in
+    /// the review appears in exactly one bucket; unreviewed hunks are
+    /// `undecided`. Hunk keys are `"{display_path}:h{n}"` (1-based ordinal).
+    /// Pure function — safe to unit-test headlessly.
+    pub fn selections(&self) -> Selections {
+        let mut accepted = Vec::new();
+        let mut rejected = Vec::new();
+        let mut undecided = Vec::new();
+        for (file_idx, file) in self.review.files.iter().enumerate() {
+            for hunk_idx in 0..file.hunks.len() {
+                let key = format!("{}:h{}", file.display_path, hunk_idx + 1);
+                match self
+                    .decisions
+                    .get(&HunkId { file_idx, hunk_idx })
+                    .copied()
+                    .unwrap_or_default()
+                {
+                    Decision::Accept => accepted.push(key),
+                    Decision::Reject => rejected.push(key),
+                    Decision::Undecided => undecided.push(key),
+                }
+            }
+        }
+        Selections {
+            accepted,
+            rejected,
+            undecided,
+        }
     }
 
     /// Handle a single key event. Pure: mutates state only, no I/O.
@@ -425,6 +617,18 @@ impl App {
             }
             KeyCode::Char('N') => {
                 self.advance_match(false);
+            }
+            // --select mode: accept / reject / mark undecided on the current
+            // hunk, then jump to the next. These keys are inert outside select
+            // mode (a/r/u fall through to the no-op catch-all).
+            KeyCode::Char('a') if self.select_mode => {
+                self.decide_current(Decision::Accept);
+            }
+            KeyCode::Char('r') if self.select_mode => {
+                self.decide_current(Decision::Reject);
+            }
+            KeyCode::Char('u') if self.select_mode => {
+                self.decide_current(Decision::Undecided);
             }
             _ => {}
         }
@@ -1530,5 +1734,186 @@ diff --git a/a.rs b/a.rs
         assert_eq!(app.review.file_count(), 1);
         assert_eq!(app.selected_file, 0, "clamped to 0 when old path is gone");
         assert_eq!(app.current_path(), "a.rs");
+    }
+
+    // ---- --focus: apply_focus ----
+
+    #[test]
+    fn apply_focus_to_file_line() {
+        let mut app = multi_hunk_app();
+        // file0 hunk0: @@ -1,2 +1,2 @@ → ctx is new line 1, +new1 is new line 2.
+        // ctx @ row 2, +new1 @ row 4. Focus on new line 2 → row 4.
+        app.focus_target = Some(FocusTarget::FileLine("a.rs".into(), 2));
+        app.apply_focus();
+        assert_eq!(app.scroll_y, 4);
+        assert_eq!(app.selected_file, 0);
+        // focus_target is consumed
+        assert!(app.focus_target.is_none());
+        assert!(app.status.contains("focus"));
+    }
+
+    #[test]
+    fn apply_focus_to_hunk_ordinal() {
+        let mut app = multi_hunk_app();
+        // b.rs hunk1 (1-based = "h2") is at row 13.
+        app.focus_target = Some(FocusTarget::FileHunk("b.rs".into(), 2));
+        app.apply_focus();
+        assert_eq!(app.scroll_y, 13);
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn apply_focus_to_file_start() {
+        let mut app = multi_hunk_app();
+        // Focusing b.rs lands on its header row (9).
+        app.focus_target = Some(FocusTarget::File("b.rs".into()));
+        app.apply_focus();
+        assert_eq!(app.scroll_y, 9);
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn apply_focus_unknown_path_falls_back_gracefully() {
+        let mut app = multi_hunk_app();
+        app.focus_target = Some(FocusTarget::File("missing.rs".into()));
+        app.apply_focus();
+        // Stays at the top; status explains the miss.
+        assert_eq!(app.scroll_y, 0);
+        assert!(app.status.contains("not found"));
+    }
+
+    #[test]
+    fn apply_focus_none_is_noop() {
+        let mut app = multi_hunk_app();
+        app.apply_focus(); // no target set
+        assert_eq!(app.scroll_y, 0);
+    }
+
+    // ---- --select: decisions + selections() ----
+
+    #[test]
+    fn selections_empty_when_no_decisions() {
+        let app = multi_hunk_app();
+        let s = app.selections();
+        // 2 files × 2 hunks = 4 undecided, none accepted/rejected.
+        assert!(s.accepted.is_empty());
+        assert!(s.rejected.is_empty());
+        assert_eq!(s.undecided.len(), 4);
+        // 1-based ordinals in the key format.
+        assert!(s.undecided.contains(&"a.rs:h1".to_string()));
+        assert!(s.undecided.contains(&"b.rs:h2".to_string()));
+    }
+
+    #[test]
+    fn selections_buckets_by_decision() {
+        let mut app = multi_hunk_app();
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        app.decisions.insert(
+            HunkId {
+                file_idx: 1,
+                hunk_idx: 1,
+            },
+            Decision::Reject,
+        );
+        let s = app.selections();
+        assert_eq!(s.accepted, vec!["a.rs:h1".to_string()]);
+        assert_eq!(s.rejected, vec!["b.rs:h2".to_string()]);
+        // The other 2 remain undecided.
+        assert_eq!(s.undecided.len(), 2);
+    }
+
+    #[test]
+    fn current_hunk_id_finds_first_visible_hunk() {
+        let mut app = multi_hunk_app();
+        // At row 1 the first hunk header is file0 hunk0.
+        app.scroll_y = 1;
+        app.viewport_height = 4;
+        let id = app.current_hunk_id().unwrap();
+        assert_eq!(id.file_idx, 0);
+        assert_eq!(id.hunk_idx, 0);
+    }
+
+    #[test]
+    fn current_hunk_id_advances_with_scroll() {
+        let mut app = multi_hunk_app();
+        // Scroll to row 13 (b.rs hunk1 header).
+        app.scroll_y = 13;
+        app.viewport_height = 4;
+        let id = app.current_hunk_id().unwrap();
+        assert_eq!(id.file_idx, 1);
+        assert_eq!(id.hunk_idx, 1);
+    }
+
+    // ---- --select: key-driven decisions ----
+
+    #[test]
+    fn select_accept_marks_current_hunk() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1; // a.rs hunk0 header
+        app.handle_key(char_key('a'));
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            Some(&Decision::Accept)
+        );
+        // And it advances to the next hunk (a.rs hunk1 @ row 5).
+        assert_eq!(app.scroll_y, 5);
+    }
+
+    #[test]
+    fn select_reject_then_accept_accumulates() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1; // a.rs hunk0
+        app.handle_key(char_key('r')); // reject hunk0 → advance to hunk1 @ 5
+        app.handle_key(char_key('a')); // accept hunk1 → advance (wraps or next file)
+        let s = app.selections();
+        assert_eq!(s.accepted, vec!["a.rs:h2".to_string()]);
+        assert_eq!(s.rejected, vec!["a.rs:h1".to_string()]);
+    }
+
+    #[test]
+    fn select_keys_inert_outside_select_mode() {
+        let mut app = multi_hunk_app();
+        app.scroll_y = 1; // a.rs hunk0 header
+                          // select_mode is false → 'a'/'r'/'u' are no-ops, no decision recorded.
+        let before_scroll = app.scroll_y;
+        app.handle_key(char_key('a'));
+        app.handle_key(char_key('r'));
+        app.handle_key(char_key('u'));
+        assert!(app.decisions.is_empty());
+        assert_eq!(app.scroll_y, before_scroll, "no jump outside select mode");
+    }
+
+    #[test]
+    fn select_undecided_resets_prior_decision() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1;
+        app.handle_key(char_key('a')); // accept hunk0
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            Some(&Decision::Accept)
+        );
+        // Jump back and mark it undecided — should overwrite to Undecided.
+        app.scroll_y = 1;
+        app.handle_key(char_key('u'));
+        // Undecided is the default, so it's not stored distinctly — but
+        // selections() must now bucket it as undecided again.
+        let s = app.selections();
+        assert!(s.accepted.is_empty());
+        assert!(s.undecided.contains(&"a.rs:h1".to_string()));
     }
 }
