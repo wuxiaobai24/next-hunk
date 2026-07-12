@@ -17,6 +17,13 @@ cargo install --git https://github.com/wuxiaobai24/next-hunk
 It is intentionally **not** published to crates.io yet (GitHub-only distribution
 chosen for the first release). A crates.io publish may happen in a later release.
 
+### Static binary
+
+Tagged releases also publish a **fully static, all-features** x86_64 musl
+binary (single ~2.6 MB xz file, no runtime deps — runs on Alpine/distroless/old
+glibc). Built automatically by the `release` workflow on every `v*` tag. See
+the README "Prebuilt static binary" section.
+
 ## [0.1.0] - 2026-07-12
 
 First usable release — a terminal review engine for large changesets.

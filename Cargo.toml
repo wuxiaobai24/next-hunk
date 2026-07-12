@@ -58,6 +58,17 @@ criterion = { version = "0.5", default-features = false }
 [profile.release]
 lto = "thin"
 
+# Distribution profile: for shipped static binaries (musl). Trades a little
+# build time and runtime perf for a much smaller binary — fat LTO, symbol
+# stripping, and abort-on-panic (drops the unwinder). CI builds the release
+# artifacts with `--profile dist`.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"
+panic = "abort"
+
 # Benches (PERF.md §3). `harness = false` so criterion_main! drives main().
 [[bench]]
 name = "parse"

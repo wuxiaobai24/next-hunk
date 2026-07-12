@@ -72,6 +72,37 @@ cargo install --path .
 cargo run --release -- diff
 ```
 
+### Prebuilt static binary (musl)
+
+Each tagged release publishes a **fully static, all-features** x86_64 musl
+binary — a single ~2.6 MB (xz) file with no runtime dependencies, so it runs on
+any Linux (Alpine, distroless, old glibc, etc.) without installing Rust or a C
+library. Grab it from the [Releases page](https://github.com/wuxiaobai24/next-hunk/releases):
+
+```bash
+# example for v0.1.0 (adjust the URL/version as needed):
+curl -L https://github.com/wuxiaobai24/next-hunk/releases/latest/download/next-hunk-0.1.0-x86_64-musl.tar.xz \
+  | tar -xJ
+sudo install -m 0755 next-hunk-0.1.0-x86_64-musl/next-hunk /usr/local/bin/
+next-hunk --version
+```
+
+#### Build a static binary yourself
+
+next-hunk is pure Rust (gix instead of libgit2, syntect's default-fancy regex,
+`zlib-rs`), so **no C cross-toolchain is needed** — just the musl rust-std
+target:
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --profile dist --all-features --target x86_64-unknown-linux-musl
+# → target/x86_64-unknown-linux-musl/dist/next-hunk  (statically linked)
+ldd target/x86_64-unknown-linux-musl/dist/next-hunk   # "statically linked"
+```
+
+The `dist` profile (fat LTO + strip + `panic=abort`) yields a ~7 MB binary
+(~2.6 MB xz). A normal `--release` build stays optimized for speed instead.
+
 ### Set as git's pager (recommended)
 
 Once installed, make everyday `git diff` / `show` / `log` open the review TUI:

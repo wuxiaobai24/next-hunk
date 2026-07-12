@@ -52,6 +52,36 @@ cargo install --path .
 cargo run --release -- diff
 ```
 
+### 预编译静态二进制（musl）
+
+每个带 tag 的 release 都会发布一个**全静态、全特性**的 x86_64 musl 二进制
+—— 单个 ~2.6 MB（xz）文件，无任何运行时依赖，可直接在任何 Linux 上运行
+（Alpine、distroless、老版本 glibc 等），无需装 Rust 或 C 库。从
+[Releases 页](https://github.com/wuxiaobai24/next-hunk/releases) 下载：
+
+```bash
+# 以 v0.1.0 为例（URL/版本按实际调整）：
+curl -L https://github.com/wuxiaobai24/next-hunk/releases/latest/download/next-hunk-0.1.0-x86_64-musl.tar.xz \
+  | tar -xJ
+sudo install -m 0755 next-hunk-0.1.0-x86_64-musl/next-hunk /usr/local/bin/
+next-hunk --version
+```
+
+#### 自己编静态二进制
+
+next-hunk 是纯 Rust（用 gix 而非 libgit2、syntect 的 default-fancy regex、
+`zlib-rs`），**不需要 C 交叉工具链**，只要 musl 的 rust-std target：
+
+```bash
+rustup target add x86_64-unknown-linux-musl
+cargo build --profile dist --all-features --target x86_64-unknown-linux-musl
+# → target/x86_64-unknown-linux-musl/dist/next-hunk （静态链接）
+ldd target/x86_64-unknown-linux-musl/dist/next-hunk   # 输出 "statically linked"
+```
+
+`dist` profile（fat LTO + strip + `panic=abort`）产出 ~7 MB 二进制
+（xz 后 ~2.6 MB）。普通 `--release` 构建仍以运行速度为优先。
+
 ### 设为 git 的 pager（推荐）
 
 安装后，让日常 `git diff` / `show` / `log` 直接打开 review TUI：
