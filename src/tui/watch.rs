@@ -56,10 +56,7 @@ mod imp {
             inner
                 .watch(workdir, RecursiveMode::Recursive)
                 .map_err(|e| anyhow::anyhow!("watch {workdir:?}: {e}"))?;
-            Ok(Self {
-                rx,
-                _inner: inner,
-            })
+            Ok(Self { rx, _inner: inner })
         }
 
         /// Non-blocking: drain all pending events. Returns `true` if at least

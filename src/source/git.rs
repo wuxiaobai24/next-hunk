@@ -27,7 +27,8 @@ pub fn find_repo(start: &Path) -> Result<PathBuf> {
 
 /// Open a repository discovered from `start`.
 pub fn open_repo(start: &Path) -> Result<Repository> {
-    gix::discover(start).with_context(|| format!("not a git repository (or any parent): {}", start.display()))
+    gix::discover(start)
+        .with_context(|| format!("not a git repository (or any parent): {}", start.display()))
 }
 
 /// Working-tree or staged diff as a unified-diff string.
@@ -148,7 +149,8 @@ fn diff_worktree(repo: &Repository, pathspecs: &[String]) -> Result<String> {
 
     for item in iter {
         let item = item.context("index-worktree item")?;
-        if let Err(e) = append_worktree_item(repo, &mut resource_cache, &mut out, &item, pathspecs) {
+        if let Err(e) = append_worktree_item(repo, &mut resource_cache, &mut out, &item, pathspecs)
+        {
             eprintln!("warning: skip worktree change {}: {e:#}", item.rela_path());
         }
         resource_cache.clear_resource_cache_keep_allocation();
@@ -493,6 +495,12 @@ fn append_tree_change(
 
 // ─── unified patch helpers ───────────────────────────────────────────────────
 
+/// Populate a diff platform with both sides of a file pair.
+///
+/// The argument list mirrors gix's resource model (two resources × id/kind/path)
+/// and is kept flat to read at the call sites; grouping into a struct would
+/// just add ceremony without clarifying intent.
+#[allow(clippy::too_many_arguments)]
 fn set_pair(
     cache: &mut gix::diff::blob::Platform,
     repo: &Repository,

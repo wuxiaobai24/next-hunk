@@ -132,13 +132,7 @@ impl ViewportQuery {
             .files
             .get(file_idx)
             .map(|f| f.stream_start)
-            .unwrap_or_else(|| {
-                review
-                    .files
-                    .last()
-                    .map(|f| f.stream_start)
-                    .unwrap_or(0)
-            })
+            .unwrap_or_else(|| review.files.last().map(|f| f.stream_start).unwrap_or(0))
     }
 
     /// Advance `file_idx` to the next/previous file, wrapping or clamping.
@@ -205,10 +199,7 @@ impl ViewportQuery {
     /// Computed by locating the row's hunk within its file and walking from the
     /// hunk's `old_start`/`new_start`, incrementing per line kind. Used by the
     /// line-number gutter and by `o` (open in editor).
-    pub fn row_line_numbers(
-        review: &Review,
-        row: usize,
-    ) -> Option<(Option<u32>, Option<u32>)> {
+    pub fn row_line_numbers(review: &Review, row: usize) -> Option<(Option<u32>, Option<u32>)> {
         use crate::ir::model::DiffLineKind;
         let (file_idx, line_in_file) = Self::file_and_line(review, row)?;
         let file = &review.files[file_idx];
@@ -353,21 +344,11 @@ diff --git a/b.rs b/b.rs
         let f0_end = review.files[0].stream_start + review.files[0].stream_len;
         // start a couple rows before the boundary, take enough to cross into file 1
         let start = f0_end.saturating_sub(1);
-        let rows = ViewportQuery::rows(
-            &review,
-            Viewport {
-                start,
-                height: 4,
-            },
-        );
+        let rows = ViewportQuery::rows(&review, Viewport { start, height: 4 });
         // should contain a FileHeader for file 1 somewhere
-        assert!(rows.iter().any(|r| matches!(
-            r,
-            StreamRow::FileHeader {
-                file_idx: 1,
-                ..
-            }
-        )));
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, StreamRow::FileHeader { file_idx: 1, .. })));
     }
 
     #[test]
@@ -376,14 +357,20 @@ diff --git a/b.rs b/b.rs
         let f0 = &review.files[0];
         let f1 = &review.files[1];
         // first row of file 0
-        assert_eq!(ViewportQuery::file_at_row(&review, f0.stream_start), Some(0));
+        assert_eq!(
+            ViewportQuery::file_at_row(&review, f0.stream_start),
+            Some(0)
+        );
         // last row of file 0
         assert_eq!(
             ViewportQuery::file_at_row(&review, f0.stream_start + f0.stream_len - 1),
             Some(0)
         );
         // first row of file 1
-        assert_eq!(ViewportQuery::file_at_row(&review, f1.stream_start), Some(1));
+        assert_eq!(
+            ViewportQuery::file_at_row(&review, f1.stream_start),
+            Some(1)
+        );
     }
 
     #[test]
@@ -402,10 +389,19 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn file_start_row_helper() {
         let review = two_file_review();
-        assert_eq!(ViewportQuery::file_start_row(&review, 0), review.files[0].stream_start);
-        assert_eq!(ViewportQuery::file_start_row(&review, 1), review.files[1].stream_start);
+        assert_eq!(
+            ViewportQuery::file_start_row(&review, 0),
+            review.files[0].stream_start
+        );
+        assert_eq!(
+            ViewportQuery::file_start_row(&review, 1),
+            review.files[1].stream_start
+        );
         // out of range clamps to last file start
-        assert_eq!(ViewportQuery::file_start_row(&review, 99), review.files[1].stream_start);
+        assert_eq!(
+            ViewportQuery::file_start_row(&review, 99),
+            review.files[1].stream_start
+        );
     }
 
     #[test]

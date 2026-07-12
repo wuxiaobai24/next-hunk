@@ -16,10 +16,10 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event};
+use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
@@ -95,12 +95,8 @@ pub fn run_review_tui(
 
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
-    execute!(
-        io::stdout(),
-        EnterAlternateScreen,
-        EnableMouseCapture
-    )
-    .context("enter alternate screen")?;
+    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+        .context("enter alternate screen")?;
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("create terminal")?;
@@ -112,8 +108,8 @@ pub fn run_review_tui(
         .as_deref()
         .map(theme::ThemeMode::parse)
         .unwrap_or_default();
-    let highlighter =
-        crate::highlight::Highlighter::load().unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
+    let highlighter = crate::highlight::Highlighter::load()
+        .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
     // prime viewport height from an initial draw
@@ -217,25 +213,24 @@ fn launch_editor(target: &app::OpenTarget, workdir: Option<&std::path::Path>) ->
     let editor = std::env::var("EDITOR")
         .ok()
         .filter(|s| !s.trim().is_empty())
-        .or_else(|| std::env::var("VISUAL").ok().filter(|s| !s.trim().is_empty()))
+        .or_else(|| {
+            std::env::var("VISUAL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
         .unwrap_or_else(|| "vi".to_string());
 
     // Resolve the file path against the repo workdir, else the cwd. This keeps
     // `o` working even when the review was launched from a subdirectory.
-    let base = workdir
-        .map(|w| w.to_path_buf())
-        .unwrap_or_else(|| {
-            std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-        });
+    let base = workdir.map(|w| w.to_path_buf()).unwrap_or_else(|| {
+        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    });
     let file = base.join(&target.path);
 
     // Split the editor command on whitespace to support `code -w`, `vim -p`,
     // etc. (no shell, so quoting stays simple). Insert `+line` before the path.
     let line_arg = format!("+{}", target.line);
-    let mut parts: Vec<String> = editor
-        .split_whitespace()
-        .map(|s| s.to_string())
-        .collect();
+    let mut parts: Vec<String> = editor.split_whitespace().map(|s| s.to_string()).collect();
     let program = parts.remove(0);
     parts.push(line_arg);
 
@@ -401,7 +396,10 @@ diff --git a/b.rs b/b.rs
             .map(|c| c.symbol().chars().next().unwrap_or(' '))
             .collect();
         // prompt line should show the "/" search indicator
-        assert!(rendered.contains('/'), "search prompt should render: {rendered}");
+        assert!(
+            rendered.contains('/'),
+            "search prompt should render: {rendered}"
+        );
 
         // type + finalize
         app.handle_key(key(KeyCode::Char('n')));
@@ -647,7 +645,7 @@ diff --git a/a.rs b/a.rs
 
     #[test]
     fn mouse_click_is_ignored() {
-        use crossterm::event::{MouseEvent, MouseEventKind, MouseButton};
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         let mut app = sample_app();
         let before = app.scroll_y;
         // A click must not move the scroll position.
@@ -699,9 +697,10 @@ diff --git a/a.rs b/a.rs
 
         // The status bar is the second-to-last rendered row. Find a cell with
         // White background (the light theme's status_bg). Scan all cells.
-        let has_white_bg = buf.content().iter().any(|c| {
-            c.style().bg == Some(ratatui::style::Color::White)
-        });
+        let has_white_bg = buf
+            .content()
+            .iter()
+            .any(|c| c.style().bg == Some(ratatui::style::Color::White));
         assert!(
             has_white_bg,
             "light theme should paint at least one cell with White background"

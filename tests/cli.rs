@@ -23,7 +23,11 @@ fn inspect_on_fixture_succeeds() {
         .args(["inspect", "fixtures/tiny_simple.patch"])
         .output()
         .expect("run next-hunk");
-    assert!(out.status.success(), "exit non-zero: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "exit non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.starts_with("files=2"), "inspect summary: {stdout}");
     assert!(stdout.contains("stream_rows="));
@@ -46,7 +50,10 @@ fn inspect_empty_stdin_reports_zero() {
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("files=0"), "empty diff should report files=0: {stdout}");
+    assert!(
+        stdout.contains("files=0"),
+        "empty diff should report files=0: {stdout}"
+    );
 }
 
 #[test]
@@ -62,16 +69,27 @@ fn patch_stdin_falls_back_to_inspect() {
         .expect("spawn");
     let mut child = out;
     use std::io::Write;
-    child.stdin.take().unwrap().write_all(patch.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
-    assert!(out.status.success(), "patch - should exit 0 even on non-tty");
+    assert!(
+        out.status.success(),
+        "patch - should exit 0 even on non-tty"
+    );
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     // fallback inspect summary should appear
-    assert!(combined.contains("files=2"), "expected inspect fallback: {combined}");
+    assert!(
+        combined.contains("files=2"),
+        "expected inspect fallback: {combined}"
+    );
 }
 
 #[test]
@@ -82,7 +100,10 @@ fn patch_missing_file_errors() {
         .expect("run next-hunk");
     assert!(!out.status.success(), "should fail on missing file");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("not found"), "stderr should mention not found: {stderr}");
+    assert!(
+        stderr.contains("not found"),
+        "stderr should mention not found: {stderr}"
+    );
 }
 
 #[test]
@@ -178,7 +199,12 @@ fn pager_reads_stdin_and_renders() {
         .expect("spawn");
     let mut child = out;
     use std::io::Write;
-    child.stdin.take().unwrap().write_all(patch.as_bytes()).unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(patch.as_bytes())
+        .unwrap();
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "pager should exit 0 on non-tty");
     let combined = format!(

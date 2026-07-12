@@ -20,7 +20,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
-use crate::ir::{word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion};
+use crate::ir::{
+    word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion,
+};
 use crate::tui::app::{App, InputMode, ViewMode};
 
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
@@ -131,14 +133,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     let title = app.current_path().to_string();
     let lines: Vec<Line> = owned_rows
         .into_iter()
-        .map(|r| {
-            stream_row_to_line(
-                app,
-                r,
-                current_match_row,
-                &match_rows,
-            )
-        })
+        .map(|r| stream_row_to_line(app, r, current_match_row, &match_rows))
         .collect();
 
     let para = Paragraph::new(lines).block(
@@ -152,8 +147,12 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
 /// Owned snapshot of a stream row's display data, so we can release the
 /// `&app.review` borrow before mutating `app` for highlight caching.
 enum OwnedRow {
-    FileHeader { path: String },
-    HunkHeader { text: String },
+    FileHeader {
+        path: String,
+    },
+    HunkHeader {
+        text: String,
+    },
     Line {
         kind: DiffLineKind,
         text: String,
@@ -172,8 +171,12 @@ enum OwnedRow {
 impl OwnedRow {
     fn from_stream_row(review: &Review, row: StreamRow, abs_row: usize) -> Self {
         match row {
-            StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader { path: path.to_string() },
-            StreamRow::HunkHeader { text, .. } => OwnedRow::HunkHeader { text: text.to_string() },
+            StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader {
+                path: path.to_string(),
+            },
+            StreamRow::HunkHeader { text, .. } => OwnedRow::HunkHeader {
+                text: text.to_string(),
+            },
             StreamRow::Line {
                 kind,
                 text,
@@ -245,8 +248,7 @@ fn stream_row_to_line(
             };
 
             // Compute highlight runs for the code text (viewport-only, cached).
-            let line_in_file =
-                ViewportQuery::file_and_line(&app.review, abs_row).map(|(_, li)| li);
+            let line_in_file = ViewportQuery::file_and_line(&app.review, abs_row).map(|(_, li)| li);
             let hl_runs = if app.highlight_on {
                 if let Some(li) = line_in_file {
                     let path = app.review.display_path(file_idx);
@@ -284,8 +286,12 @@ fn stream_row_to_line(
             // Optional line-number gutter: " old new " right-aligned in 5 cols.
             if app.line_numbers_on {
                 let dim = Style::default().fg(app.theme.dim);
-                let old_s = old_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
-                let new_s = new_no.map(|n| format!("{n:>5}")).unwrap_or_else(|| "     ".into());
+                let old_s = old_no
+                    .map(|n| format!("{n:>5}"))
+                    .unwrap_or_else(|| "     ".into());
+                let new_s = new_no
+                    .map(|n| format!("{n:>5}"))
+                    .unwrap_or_else(|| "     ".into());
                 spans.push(Span::styled(format!(" {old_s} {new_s} "), dim));
             }
             spans.push(Span::styled(prefix.to_string(), kind_style));
@@ -297,7 +303,11 @@ fn stream_row_to_line(
     };
 
     if is_current_match {
-        line.style(Style::default().bg(app.theme.match_active_bg).fg(app.theme.match_active_fg))
+        line.style(
+            Style::default()
+                .bg(app.theme.match_active_bg)
+                .fg(app.theme.match_active_fg),
+        )
     } else if is_other_match {
         line.style(Style::default().bg(app.theme.match_inactive_bg))
     } else {
@@ -330,10 +340,7 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     let right = format!(" {} ", app.status);
     let line = Line::from(vec![
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(
-            totals,
-            Style::default().fg(app.theme.dim),
-        ),
+        Span::styled(totals, Style::default().fg(app.theme.dim)),
         Span::styled(right, Style::default().fg(app.theme.dim)),
     ]);
     let para = Paragraph::new(line).style(Style::default().bg(app.theme.status_bg));
@@ -359,7 +366,9 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     };
     let style = match app.mode {
         InputMode::Normal => Style::default().fg(app.theme.dim),
-        _ => Style::default().fg(app.theme.edit_mode_fg).add_modifier(Modifier::BOLD),
+        _ => Style::default()
+            .fg(app.theme.edit_mode_fg)
+            .add_modifier(Modifier::BOLD),
     };
     let para = Paragraph::new(content).style(style);
     frame.render_widget(para, area);
@@ -453,10 +462,7 @@ fn refine_with_word_regions(
     // fall back to the plain hl_runs (never lose content).
     let out_len: usize = out.iter().map(|(_, t)| t.chars().count()).sum();
     if out_len != total {
-        return hl_runs
-            .iter()
-            .map(|(s, t)| (*s, t.clone()))
-            .collect();
+        return hl_runs.iter().map(|(s, t)| (*s, t.clone())).collect();
     }
     out
 }
@@ -464,7 +470,12 @@ fn refine_with_word_regions(
 /// Style for a changed word within a +/- line. Keeps the base syntax style but
 /// adds bold and shifts the foreground toward a brighter shade of the line's
 /// diff color so the change pops without hiding syntax coloring.
-fn word_emphasis_style(base: &Style, kind: DiffLineKind, word_add: Color, word_del: Color) -> Style {
+fn word_emphasis_style(
+    base: &Style,
+    kind: DiffLineKind,
+    word_add: Color,
+    word_del: Color,
+) -> Style {
     let style = match kind {
         DiffLineKind::Add => base.fg(word_add),
         DiffLineKind::Delete => base.fg(word_del),

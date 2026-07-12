@@ -127,7 +127,10 @@ pub struct OpenTarget {
 
 impl App {
     pub fn new(review: Review) -> Self {
-        Self::with_highlighter(review, Highlighter::load().unwrap_or_else(|_| Highlighter::load_noop()))
+        Self::with_highlighter(
+            review,
+            Highlighter::load().unwrap_or_else(|_| Highlighter::load_noop()),
+        )
     }
 
     /// Construct with an explicit highlighter (used by `run_review_tui` to
@@ -139,11 +142,7 @@ impl App {
 
     /// Construct with an explicit highlighter and theme mode (used by
     /// `run_review_tui` to honor `config.toml`'s `theme`).
-    pub fn with_theme(
-        review: Review,
-        highlighter: Highlighter,
-        theme_mode: ThemeMode,
-    ) -> Self {
+    pub fn with_theme(review: Review, highlighter: Highlighter, theme_mode: ThemeMode) -> Self {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
@@ -178,9 +177,7 @@ impl App {
 
     /// Maximum valid top-row so the last row remains visible.
     pub fn max_scroll(&self) -> usize {
-        self.review
-            .stream_len
-            .saturating_sub(self.viewport_height)
+        self.review.stream_len.saturating_sub(self.viewport_height)
     }
 
     /// Sync `selected_file` to whatever file owns the current top scroll row.
@@ -199,8 +196,7 @@ impl App {
                 .saturating_add(delta as usize)
                 .min(self.max_scroll())
         } else {
-            self.scroll_y
-                .saturating_sub((-delta) as usize)
+            self.scroll_y.saturating_sub((-delta) as usize)
         };
         self.scroll_y = next;
         self.sync_selected_file();
@@ -414,18 +410,15 @@ impl App {
                 self.status = "filter: ".into();
             }
             // open the focused line's file in $EDITOR
-            KeyCode::Char('o') => {
-                match self.compute_open_target() {
-                    Some(t) => {
-                        self.status =
-                            format!("opening {}:{}…", t.path, t.line);
-                        self.open_request = Some(t);
-                    }
-                    None => {
-                        self.status = "nothing to open here (move to a code line)".into();
-                    }
+            KeyCode::Char('o') => match self.compute_open_target() {
+                Some(t) => {
+                    self.status = format!("opening {}:{}…", t.path, t.line);
+                    self.open_request = Some(t);
                 }
-            }
+                None => {
+                    self.status = "nothing to open here (move to a code line)".into();
+                }
+            },
             // next / prev search match
             KeyCode::Char('n') => {
                 self.advance_match(true);
@@ -564,7 +557,11 @@ impl App {
                 return;
             }
         }
-        self.status = format!("filter: {:?} ({} files)", self.path_filter, self.visible_files().len());
+        self.status = format!(
+            "filter: {:?} ({} files)",
+            self.path_filter,
+            self.visible_files().len()
+        );
     }
 
     /// Indices of files matching the current path filter (all if empty).
@@ -712,7 +709,10 @@ impl App {
     fn compute_open_target(&self) -> Option<OpenTarget> {
         // Search the visible window for the first code line with a line number.
         let start = self.scroll_y;
-        let end = self.review.stream_len.min(start + self.viewport_height.max(1));
+        let end = self
+            .review
+            .stream_len
+            .min(start + self.viewport_height.max(1));
         for row in start..end {
             // Header rows (file/hunk) have no line number — skip them and keep
             // scanning for the first code line.
@@ -1428,7 +1428,12 @@ diff --git a/b.rs b/b.rs
 
         app.reload_review(&after);
         // scroll must not exceed the new max_scroll
-        assert!(app.scroll_y <= app.max_scroll(), "scroll {} > max {}", app.scroll_y, app.max_scroll());
+        assert!(
+            app.scroll_y <= app.max_scroll(),
+            "scroll {} > max {}",
+            app.scroll_y,
+            app.max_scroll()
+        );
     }
 
     #[test]
@@ -1438,12 +1443,22 @@ diff --git a/b.rs b/b.rs
         let mut app = App::with_highlighter(review, highlighter());
         app.viewport_height = 1;
         // populate the cache by drawing a line
-        let _ = ViewportQuery::rows(&app.review, Viewport { start: 0, height: 2 });
-        app.cache.get_or_highlight(0, 1, "a.rs", "old", &app.highlighter);
+        let _ = ViewportQuery::rows(
+            &app.review,
+            Viewport {
+                start: 0,
+                height: 2,
+            },
+        );
+        app.cache
+            .get_or_highlight(0, 1, "a.rs", "old", &app.highlighter);
         assert!(!app.cache.is_empty());
 
         app.reload_review(&after);
-        assert!(app.cache.is_empty(), "highlight cache should be invalidated");
+        assert!(
+            app.cache.is_empty(),
+            "highlight cache should be invalidated"
+        );
     }
 
     #[test]
@@ -1476,12 +1491,20 @@ diff --git a/b.rs b/b.rs
 
         // empty text → reload reports empty without dropping the review
         app.reload_review("");
-        assert_eq!(app.review.file_count(), files_before, "review kept on empty reload");
+        assert_eq!(
+            app.review.file_count(),
+            files_before,
+            "review kept on empty reload"
+        );
         assert!(app.status.contains("empty"));
 
         // garbage that fails to parse
         app.reload_review("not a diff at all");
-        assert_eq!(app.review.file_count(), files_before, "review kept on parse failure");
+        assert_eq!(
+            app.review.file_count(),
+            files_before,
+            "review kept on parse failure"
+        );
         assert!(app.status.contains("reload failed"));
     }
 

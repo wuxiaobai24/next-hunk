@@ -111,7 +111,10 @@ fn setup_repo() -> RepoGuard {
     git_in(root, &["commit", "-q", "-m", "initial"]);
 
     // staged change: modify lib.rs and add a new file
-    write(&root.join("src/lib.rs"), "fn a() {}\nfn b() {}\nfn c() {}\n");
+    write(
+        &root.join("src/lib.rs"),
+        "fn a() {}\nfn b() {}\nfn c() {}\n",
+    );
     write(&root.join("src/new.rs"), "pub fn new() {}\n");
     git_in(root, &["add", "."]);
 
@@ -119,7 +122,10 @@ fn setup_repo() -> RepoGuard {
     // worktree diff under src/ has real content (untracked files are excluded
     // by the adapter).
     write(&root.join("README.md"), "hello world\nchanged\n");
-    write(&root.join("src/lib.rs"), "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n");
+    write(
+        &root.join("src/lib.rs"),
+        "fn a() {}\nfn b() {}\nfn c() {}\nfn d() {}\n",
+    );
     repo
 }
 
@@ -134,7 +140,11 @@ fn worktree_diff_round_trips() {
     assert!(review.file_count() >= 1);
 
     // README should appear as a modified file in the worktree diff
-    let paths: Vec<&str> = review.files.iter().map(|f| f.display_path.as_str()).collect();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
     assert!(
         paths.iter().any(|p| p.ends_with("README.md")),
         "README.md should be in worktree diff: {paths:?}"
@@ -163,7 +173,11 @@ fn staged_diff_round_trips() {
 
     let review = parse_unified_diff(&text).unwrap();
     // staged changes include src/lib.rs modification and src/new.rs addition
-    let paths: Vec<&str> = review.files.iter().map(|f| f.display_path.as_str()).collect();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
     assert!(
         paths.iter().any(|p| p.ends_with("lib.rs")),
         "staged diff should include lib.rs: {paths:?}"
@@ -190,7 +204,11 @@ fn show_head_matches_commit() {
     let review = parse_unified_diff(&text).unwrap();
     // HEAD commit added src/lib.rs and README.md initially
     assert!(review.file_count() >= 1);
-    let paths: Vec<&str> = review.files.iter().map(|f| f.display_path.as_str()).collect();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
     assert!(
         paths.iter().any(|p| p.ends_with("lib.rs")),
         "HEAD show should include lib.rs: {paths:?}"
@@ -229,7 +247,11 @@ fn pathspec_filters_files() {
     let text = git_diff(&repo.workdir(), false, &["src/".to_string()]).unwrap();
     let review = parse_unified_diff(&text).unwrap();
 
-    let paths: Vec<&str> = review.files.iter().map(|f| f.display_path.as_str()).collect();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
     assert!(
         !paths.iter().any(|p| p.ends_with("README.md")),
         "pathspec src/ should exclude README.md: {paths:?}"

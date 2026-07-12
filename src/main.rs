@@ -178,11 +178,7 @@ fn run() -> Result<()> {
 
 /// Build the live-reload closure for `--watch`: re-runs the same git diff.
 /// Captures the repo path, staged flag, and pathspecs by value.
-fn make_diff_reloader(
-    repo: PathBuf,
-    staged: bool,
-    extra: Vec<String>,
-) -> next_hunk::tui::Reloader {
+fn make_diff_reloader(repo: PathBuf, staged: bool, extra: Vec<String>) -> next_hunk::tui::Reloader {
     Box::new(move || git_diff(&repo, staged, &extra).context("re-run git diff for --watch"))
 }
 

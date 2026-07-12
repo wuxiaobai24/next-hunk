@@ -100,10 +100,7 @@ fn collapse_whitespace_runs(arena: &str, lines: &mut [DiffLine]) {
 
         let dels = &lines[del_start..del_end];
         let adds = &lines[add_start..add_end];
-        if dels.is_empty()
-            || adds.is_empty()
-            || dels.len() != adds.len()
-        {
+        if dels.is_empty() || adds.is_empty() || dels.len() != adds.len() {
             continue;
         }
         // Collapse only if every pair is equal ignoring whitespace.

@@ -98,11 +98,8 @@ mod imp {
     /// Foreground color + bold/italic/underline only; background is ignored so
     /// it doesn't fight the diff `+`/`-` line tint applied by the view.
     fn syntect_to_ratatui(s: SynStyle) -> Style {
-        let mut style = Style::default().fg(Color::Rgb(
-            s.foreground.r,
-            s.foreground.g,
-            s.foreground.b,
-        ));
+        let mut style =
+            Style::default().fg(Color::Rgb(s.foreground.r, s.foreground.g, s.foreground.b));
         let mut add = Modifier::empty();
         if s.font_style.contains(FontStyle::BOLD) {
             add |= Modifier::BOLD;

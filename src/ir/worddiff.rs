@@ -347,8 +347,12 @@ mod tests {
     fn single_word_change() {
         // "old" → "new" at the start
         let ops = line_pair_diff("old bar", "new bar");
-        let has_del = ops.iter().any(|o| matches!(o, WordOp::Del(w) if w == "old"));
-        let has_ins = ops.iter().any(|o| matches!(o, WordOp::Ins(w) if w == "new"));
+        let has_del = ops
+            .iter()
+            .any(|o| matches!(o, WordOp::Del(w) if w == "old"));
+        let has_ins = ops
+            .iter()
+            .any(|o| matches!(o, WordOp::Ins(w) if w == "new"));
         assert!(has_del, "expected a Del(old): {ops:?}");
         assert!(has_ins, "expected an Ins(new): {ops:?}");
         // "bar" should remain equal
@@ -359,14 +363,18 @@ mod tests {
     fn pure_insertion() {
         let ops = line_pair_diff("foo", "foo bar");
         assert!(ops.iter().any(|o| matches!(o, WordOp::Eq(w) if w == "foo")));
-        assert!(ops.iter().any(|o| matches!(o, WordOp::Ins(w) if w == "bar")));
+        assert!(ops
+            .iter()
+            .any(|o| matches!(o, WordOp::Ins(w) if w == "bar")));
         assert!(!ops.iter().any(|o| matches!(o, WordOp::Del(_))));
     }
 
     #[test]
     fn pure_deletion() {
         let ops = line_pair_diff("foo bar", "foo");
-        assert!(ops.iter().any(|o| matches!(o, WordOp::Del(w) if w == "bar")));
+        assert!(ops
+            .iter()
+            .any(|o| matches!(o, WordOp::Del(w) if w == "bar")));
         assert!(!ops.iter().any(|o| matches!(o, WordOp::Ins(_))));
     }
 
@@ -413,7 +421,10 @@ mod tests {
             .filter(|(r, _)| *r == WordRegion::Changed)
             .map(|(_, t)| t.as_str())
             .collect();
-        assert_eq!(changed, "old", "changed text should be just 'old': {runs:?}");
+        assert_eq!(
+            changed, "old",
+            "changed text should be just 'old': {runs:?}"
+        );
         // Full reconstruction preserves original.
         let reconstructed: String = runs.iter().map(|(_, t)| t.as_str()).collect();
         assert_eq!(reconstructed, "old bar");
@@ -428,7 +439,9 @@ mod tests {
         // Leading "    " is Same, "x" is Changed.
         assert_eq!(runs[0], (WordRegion::Same, "    ".to_string()));
         // "x" is the changed token.
-        assert!(runs.iter().any(|(r, t)| *r == WordRegion::Changed && t == "x"));
+        assert!(runs
+            .iter()
+            .any(|(r, t)| *r == WordRegion::Changed && t == "x"));
     }
 
     #[test]
@@ -533,7 +546,10 @@ diff --git a/a.rs b/a.rs
         .unwrap();
         // stream: 0=header, 1=hunk header, 2=-foo, 3=-bar, 4=+replacement
         // -foo (idx 0) pairs with +replacement
-        assert_eq!(counterpart_text(&review, 2), Some("replacement".to_string()));
+        assert_eq!(
+            counterpart_text(&review, 2),
+            Some("replacement".to_string())
+        );
         // -bar (idx 1) has no counterpart add → None
         assert_eq!(counterpart_text(&review, 3), None);
         // +replacement (idx 0 of adds) pairs with -foo

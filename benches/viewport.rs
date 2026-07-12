@@ -24,7 +24,10 @@ fn huge_review_text() -> String {
 struct Lcg(u64);
 impl Lcg {
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         self.0
     }
 }
@@ -48,10 +51,7 @@ fn bench_viewport(c: &mut Criterion) {
         b.iter(|| {
             let mut acc = 0usize;
             for &start in black_box(&starts) {
-                let rows = ViewportQuery::rows(
-                    black_box(&review),
-                    Viewport { start, height },
-                );
+                let rows = ViewportQuery::rows(black_box(&review), Viewport { start, height });
                 acc += rows.len();
             }
             black_box(acc);
@@ -62,10 +62,7 @@ fn bench_viewport(c: &mut Criterion) {
     c.bench_function("viewport_single_h40", |b| {
         let start = stream_len / 2;
         b.iter(|| {
-            let rows = ViewportQuery::rows(
-                black_box(&review),
-                Viewport { start, height },
-            );
+            let rows = ViewportQuery::rows(black_box(&review), Viewport { start, height });
             black_box(rows.len());
         })
     });

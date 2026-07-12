@@ -356,10 +356,7 @@ fn parse_hunk_header(line: &str) -> (u32, u32, u32, u32) {
 
 fn parse_range(spec: &str) -> (u32, u32) {
     if let Some((a, b)) = spec.split_once(',') {
-        (
-            a.parse().unwrap_or(0),
-            b.parse().unwrap_or(1).max(1),
-        )
+        (a.parse().unwrap_or(0), b.parse().unwrap_or(1).max(1))
     } else {
         (spec.parse().unwrap_or(0), 1)
     }
@@ -423,7 +420,10 @@ diff --git a/a.txt b/a.txt
         assert_eq!(hunk.lines[0].kind, DiffLineKind::Delete);
         assert_eq!(hunk.lines[1].kind, DiffLineKind::Meta);
         assert_eq!(hunk.lines[2].kind, DiffLineKind::Add);
-        assert_eq!(review.text(hunk.lines[1].text.clone()), "\\ No newline at end of file");
+        assert_eq!(
+            review.text(hunk.lines[1].text.clone()),
+            "\\ No newline at end of file"
+        );
     }
 
     #[test]
@@ -566,7 +566,11 @@ diff --git a/c.rs b/c.rs
         assert_eq!(review.hunk_starts.len(), 6);
         // strictly ascending
         for w in review.hunk_starts.windows(2) {
-            assert!(w[0] < w[1], "hunk_starts not ascending: {:?}", review.hunk_starts);
+            assert!(
+                w[0] < w[1],
+                "hunk_starts not ascending: {:?}",
+                review.hunk_starts
+            );
         }
         // first hunk header = file0 header (row 0) + 1 = row 1
         assert_eq!(review.hunk_starts[0], 1);

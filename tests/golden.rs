@@ -24,7 +24,10 @@ fn tiny_simple_parses_two_files() {
     assert_eq!(h0.lines[1].kind, DiffLineKind::Delete);
     assert_eq!(h0.lines[2].kind, DiffLineKind::Add);
     assert_eq!(h0.lines[3].kind, DiffLineKind::Add);
-    assert_eq!(review.text(h0.lines[1].text.clone()), "    println!(\"hi\");");
+    assert_eq!(
+        review.text(h0.lines[1].text.clone()),
+        "    println!(\"hi\");"
+    );
 
     // stream rows contiguous across the two files
     let f0 = &review.files[0];
@@ -82,8 +85,5 @@ fn viewport_over_golden_fixture() {
 
     // file_at_row agrees with file spans
     let f1_start = review.files[1].stream_start;
-    assert_eq!(
-        ViewportQuery::file_at_row(&review, f1_start),
-        Some(1)
-    );
+    assert_eq!(ViewportQuery::file_at_row(&review, f1_start), Some(1));
 }
