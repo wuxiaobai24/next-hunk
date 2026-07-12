@@ -41,14 +41,43 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [ ] Agent export (JSON / Markdown)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
 
-## Install (dev)
+## Performance
+
+Parsing and rendering stay in the millisecond / sub-millisecond range even on
+megabyte-scale diffs, because the runtime IR is compact and only visible rows
+are ever materialized. Measured on the bundled fixtures (release build, one
+core; reproduce with `cargo bench`):
+
+| benchmark | input | median |
+|---|---|---|
+| `parse/huge` | 1.1 MB / 38k-line diff | **~1.3 ms** |
+| `parse/medium` | 191 KB / 6.5k-line diff | ~150 µs |
+| `parse/small` | 6 KB / 213-line diff | ~5 µs |
+| `viewport_huge_h40` | materialize a 40-row window over the huge diff | **~300 µs** |
+| `viewport_single_h40` | resolve a file span + clip to viewport | **~190 ns** |
+
+The key idea: navigation (`]h`/`[`h`, file rail) resolves against a
+binary-searched index in **nanoseconds**, independent of total diff size, and
+the viewport materializes only what's on screen. Full numbers live in
+[CHANGELOG.md](./CHANGELOG.md).
+
+## Install
 
 ```bash
+# from crates.io (once published)
+cargo install next-hunk
+# or build from source
 cargo install --path .
-# or
+# or just run it
 cargo run --release -- diff
-# with live-reload watch mode (enabled by default):
-cargo run --release -- diff --watch
+```
+
+### Set as git's pager (recommended)
+
+Once installed, make everyday `git diff` / `show` / `log` open the review TUI:
+
+```bash
+git config --global core.pager "next-hunk pager"
 ```
 
 ## Usage
