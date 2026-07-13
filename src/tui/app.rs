@@ -22,6 +22,27 @@ fn focus_display(target: &FocusTarget) -> String {
     }
 }
 
+/// Remove the trailing whitespace-separated word from `s`, plus any whitespace
+/// immediately before it. Mirrors the readline backward-kill-word gesture
+/// (Ctrl-W) used by shells and most TUI inputs. Operates on `char`s so it is
+/// correct for non-ASCII paths/queries.
+fn drop_last_word(s: &mut String) {
+    // Operate on a char vec so slicing is O(1) and UTF-8-safe. Walk back from
+    // the end: drop trailing whitespace, drop the word, then drop the
+    // separating whitespace before it (readline backward-kill-word semantics).
+    let mut chars: Vec<char> = s.chars().collect();
+    while chars.last().map(|c| c.is_whitespace()).unwrap_or(false) {
+        chars.pop();
+    }
+    while chars.last().map(|c| !c.is_whitespace()).unwrap_or(false) {
+        chars.pop();
+    }
+    while chars.last().map(|c| c.is_whitespace()).unwrap_or(false) {
+        chars.pop();
+    }
+    *s = chars.iter().collect();
+}
+
 /// Which input mode the TUI is in. Determines how `handle_key` routes keys.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum InputMode {
@@ -735,6 +756,23 @@ impl App {
 
     /// Handle keys while editing the search query.
     fn handle_search_input(&mut self, key: KeyEvent) {
+        // Line-editing shortcuts honored before the Char catch-all (which
+        // would otherwise swallow Ctrl-U/Ctrl-W as literal chars).
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('u') => {
+                    self.search.query.clear();
+                    self.status = "search: ".into();
+                    return;
+                }
+                KeyCode::Char('w') => {
+                    drop_last_word(&mut self.search.query);
+                    self.status = format!("search: {}", self.search.query);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Enter => {
                 self.finalize_search();
@@ -759,6 +797,21 @@ impl App {
 
     /// Handle keys while editing the path filter.
     fn handle_filter_input(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('u') => {
+                    self.path_filter.clear();
+                    self.status = "filter: ".into();
+                    return;
+                }
+                KeyCode::Char('w') => {
+                    drop_last_word(&mut self.path_filter);
+                    self.status = format!("filter: {}", self.path_filter);
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Enter => {
                 self.apply_filter();
@@ -1085,6 +1138,86 @@ diff --git a/b.rs b/b.rs
 
     fn char_key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    #[test]
+    fn drop_last_word_removes_trailing_word_and_ws() {
+        let mut s = String::from("foo bar baz");
+        drop_last_word(&mut s);
+        assert_eq!(s, "foo bar");
+    }
+
+    #[test]
+    fn drop_last_word_clears_all_when_only_ws_and_word() {
+        let mut s = String::from("   onlyword");
+        drop_last_word(&mut s);
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn drop_last_word_handles_trailing_whitespace() {
+        // backward-kill-word: trailing ws + the word + its preceding ws all go.
+        let mut s = String::from("foo bar   ");
+        drop_last_word(&mut s);
+        assert_eq!(s, "foo");
+    }
+
+    #[test]
+    fn drop_last_word_on_empty_is_noop() {
+        let mut s = String::new();
+        drop_last_word(&mut s);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn search_ctrl_u_clears_query() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('/'));
+        for c in "hello world".chars() {
+            app.handle_key(char_key(c));
+        }
+        assert_eq!(app.search.query, "hello world");
+        app.handle_key(ctrl('u'));
+        assert!(app.search.query.is_empty());
+    }
+
+    #[test]
+    fn search_ctrl_w_drops_last_word() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('/'));
+        for c in "foo bar baz".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(ctrl('w'));
+        assert_eq!(app.search.query, "foo bar");
+    }
+
+    #[test]
+    fn filter_ctrl_u_clears_filter() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('f'));
+        for c in "src/mod".chars() {
+            app.handle_key(char_key(c));
+        }
+        assert_eq!(app.path_filter, "src/mod");
+        app.handle_key(ctrl('u'));
+        assert!(app.path_filter.is_empty());
+    }
+
+    #[test]
+    fn filter_ctrl_w_drops_last_word() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('f'));
+        for c in "src lib/parse".chars() {
+            app.handle_key(char_key(c));
+        }
+        // backward-kill-word drops "lib/parse" and the space before it.
+        app.handle_key(ctrl('w'));
+        assert_eq!(app.path_filter, "src");
     }
 
     #[test]
@@ -2115,10 +2248,6 @@ diff --git a/a.rs b/a.rs
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.scroll_y, 3);
-    }
-
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
     }
 
     /// A three-file review, for testing the `1-9` jump-to-Nth-file keys.

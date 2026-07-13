@@ -432,16 +432,131 @@ fn stream_row_to_line(
     };
 
     if is_current_match {
-        line.style(
-            Style::default()
-                .bg(app.theme.match_active_bg)
-                .fg(app.theme.match_active_fg),
+        // Re-slice the line's spans so the matched substrings get the active
+        // match style (gold bg + black fg + bold) while the rest of the line
+        // keeps its syntax color, with a subdued bg so the whole match row
+        // still reads as "the hit". This shows *where* in the line the match
+        // is, instead of painting the whole line one color.
+        highlight_current_match_line(
+            line,
+            app.search.query.as_str(),
+            app.theme.match_active_fg,
+            app.theme.match_active_bg,
+            app.theme.match_inactive_bg,
         )
     } else if is_other_match {
         line.style(Style::default().bg(app.theme.match_inactive_bg))
     } else {
         line
     }
+}
+
+/// Rewrite a line's spans so that every (case-insensitive) occurrence of
+/// `needle` is painted with the active-match style, and the remaining spans
+/// get a subdued background. Used for the *current* search-match row only;
+/// other match rows keep their whole-line subdued bg (see `is_other_match`).
+///
+/// Works on the already-rendered spans (gutter + prefix + syntax/word-diff
+/// runs), re-slicing them at match boundaries. Spans that carry their own bg
+/// keep it outside matches; matched substrings are forced to the active style.
+fn highlight_current_match_line(
+    mut line: Line<'static>,
+    needle: &str,
+    active_fg: Color,
+    active_bg: Color,
+    inactive_bg: Color,
+) -> Line<'static> {
+    if needle.is_empty() {
+        return line.style(Style::default().bg(active_bg).fg(active_fg));
+    }
+    // Reconstruct the full line text + per-char source-span index, so we can
+    // find match offsets and then re-slice the original spans at those points.
+    let spans = std::mem::take(&mut line.spans);
+    // Build (text, style) flat list and cumulative char offsets.
+    let mut parts: Vec<(String, Style)> = Vec::with_capacity(spans.len());
+    let mut offsets: Vec<usize> = Vec::with_capacity(spans.len() + 1);
+    let mut acc = 0usize;
+    for sp in &spans {
+        let t = sp.content.to_string();
+        offsets.push(acc);
+        acc += t.chars().count();
+        parts.push((t, sp.style));
+    }
+    offsets.push(acc);
+    let total = acc;
+    let full: String = parts.iter().map(|(t, _)| t.as_str()).collect();
+
+    // Find all match ranges (char offsets) in the full text, case-insensitive.
+    let needle_lc = needle.to_lowercase();
+    let full_lc = full.to_lowercase();
+    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut start = 0usize;
+    let needle_chars = needle_lc.chars().count();
+    if needle_chars == 0 {
+        return Line::from(spans).style(Style::default().bg(active_bg).fg(active_fg));
+    }
+    while let Some(rel) = full_lc[start..].find(&needle_lc) {
+        let s = start + rel;
+        let e = s + needle_chars;
+        ranges.push((s, e));
+        start = e;
+        if start >= total {
+            break;
+        }
+    }
+
+    if ranges.is_empty() {
+        // No substring (e.g. needle matched a header row this line isn't) —
+        // fall back to a whole-line active style so the row still stands out.
+        return Line::from(spans).style(Style::default().bg(active_bg).fg(active_fg));
+    }
+
+    // Build a per-char "is this char inside a match?" mask.
+    let mut in_match = vec![false; total];
+    for (s, e) in &ranges {
+        in_match[*s..*e].fill(true);
+    }
+
+    // Re-slice each source span at match boundaries. For every char we know
+    // (a) its source span's style and (b) whether it falls inside a match.
+    // Coalesce runs of identical resulting style into single spans.
+    let active = Style::default()
+        .fg(active_fg)
+        .bg(active_bg)
+        .add_modifier(Modifier::BOLD);
+    let dim_bg = Style::default().bg(inactive_bg);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let push_run = |out: &mut Vec<Span<'static>>, st: Style, text: String| {
+        if text.is_empty() {
+            return;
+        }
+        if let Some(last) = out.last_mut() {
+            if last.style == st {
+                last.content = format!("{}{}", last.content, text).into();
+                return;
+            }
+        }
+        out.push(Span::styled(text, st));
+    };
+    for (idx, (text, style)) in parts.iter().enumerate() {
+        let span_start = offsets[idx];
+        let mut buf = String::new();
+        let mut buf_style: Option<Style> = None;
+        for (i, c) in text.chars().enumerate() {
+            let global = span_start + i;
+            let m = in_match.get(global).copied().unwrap_or(false);
+            let st = if m { active } else { style.patch(dim_bg) };
+            if buf_style != Some(st) {
+                push_run(&mut out, buf_style.unwrap_or(st), std::mem::take(&mut buf));
+                buf_style = Some(st);
+            }
+            buf.push(c);
+        }
+        if let Some(st) = buf_style {
+            push_run(&mut out, st, std::mem::take(&mut buf));
+        }
+    }
+    Line::from(out)
 }
 
 fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
@@ -792,6 +907,12 @@ fn file_stats_tail(inserts: u64, deletes: u64) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::highlight::Highlighter;
+    use crate::ir::parse_unified_diff;
+
+    fn highlighter() -> Highlighter {
+        Highlighter::load_noop()
+    }
 
     #[test]
     fn file_stats_tail_both_sides() {
@@ -827,7 +948,6 @@ mod tests {
     /// buffer; we assert the add count appears as a styled span.
     #[test]
     fn draw_rail_shows_per_file_tally() {
-        use crate::ir::parse_unified_diff;
         let review = parse_unified_diff(
             "\
 diff --git a/a.rs b/a.rs
@@ -837,7 +957,7 @@ diff --git a/a.rs b/a.rs
 -old
 +new value
 diff --git a/b.rs b/b.rs
---- a/b.rs
+--- b/b.rs
 +++ b/b.rs
 @@ -1,2 +1,2 @@
 -foo
@@ -846,7 +966,7 @@ diff --git a/b.rs b/b.rs
 ",
         )
         .unwrap();
-        let mut app = App::with_highlighter(review, crate::highlight::Highlighter::load_noop());
+        let mut app = App::with_highlighter(review, highlighter());
         let backend = ratatui::backend::TestBackend::new(40, 10);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(&mut app, f)).unwrap();
@@ -867,5 +987,78 @@ diff --git a/b.rs b/b.rs
             rendered.contains("−1"),
             "rail should show −1 tally: {rendered}"
         );
+    }
+
+    /// Search for a term, then render and confirm the current-match row's
+    /// buffer carries the active-match background somewhere on the matched
+    /// text (i.e. the inline highlight is applied, not just a whole-line wash).
+    #[test]
+    fn search_match_is_highlighted_inline() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old value here
++new value here
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        // Drive the search through the public handle_key path.
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in "value".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.search.active);
+        assert!(!app.search.matches.is_empty());
+
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        // At least one cell must carry the active-match background (gold),
+        // proving the inline highlight fired rather than a whole-line wash
+        // (which would also set bg, so we additionally assert the matched
+        // line is NOT uniformly the inactive bg everywhere).
+        let buf = terminal.backend().buffer();
+        let active_bg = app.theme.match_active_bg;
+        let mut found_active = false;
+        for cell in buf.content().iter() {
+            if cell.bg == active_bg {
+                found_active = true;
+                break;
+            }
+        }
+        assert!(found_active, "expected an inline active-match cell");
+    }
+
+    /// No active search -> no match background anywhere in the buffer.
+    #[test]
+    fn no_match_highlight_without_search() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        let backend = ratatui::backend::TestBackend::new(40, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let active_bg = app.theme.match_active_bg;
+        for cell in terminal.backend().buffer().content().iter() {
+            assert_ne!(cell.bg, active_bg, "no active match expected");
+        }
     }
 }
