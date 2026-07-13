@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Reviewer experience
+- **Status bar no longer overflows on long paths** — the focused file's path
+  in the status bar is now capped at ~half the terminal width and truncated
+  toward the basename (e.g. `…/file.rs`), so a deeply-nested path can no
+  longer push the diff totals, banner note, and status message off the right
+  edge of a narrow terminal. Previously the full path was laid out
+  unconditionally, which on a long path swallowed the rest of the status row.
+
 ### Added — Development
 - **`pre-commit` git hook (auto-installed)** — running `cargo test` in a fresh
   clone now installs a `pre-commit` hook (via [cargo-husky](https://github.com/rhysd/cargo-husky))
