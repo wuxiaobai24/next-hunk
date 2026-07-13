@@ -286,6 +286,31 @@ locally so formatting/clippy drift never reaches CI. It's installed
 [cargo-husky](https://github.com/rhysd/cargo-husky)). To bypass it for an
 experimental commit, use `git commit --no-verify`.
 
+### Releasing
+
+`scripts/release.sh` is a one-command, PR-only release helper. It bumps
+`Cargo.toml`, rotates the CHANGELOG `[Unreleased]` section into a dated
+version heading, opens a release PR, and (in a second step) tags the merge to
+trigger `release.yml`. It never commits to `main` directly — tagging the
+release is the one deliberate exception.
+
+```bash
+# Stage 1 — prepare the release PR (from a clean main):
+./scripts/release.sh 0.3.0            # or: --bump patch | minor | major
+./scripts/release.sh 0.3.0 --dry-run  # preview the plan, change nothing
+
+# Stage 2 — after the PR is reviewed & merged, tag main to build & publish:
+./scripts/release.sh --tag v0.3.0
+```
+
+`--dry-run` shows the planned diffs without touching git; `--no-pr` commits to
+a local branch only (no push/PR). The CHANGELOG rotation also repairs the
+bottom link-reference table. Unit-test the rotation logic with:
+
+```bash
+bash scripts/release.test.sh
+```
+
 ## Architecture (short)
 
 ```

@@ -229,6 +229,37 @@ cargo bench --bench parse
 cargo bench --bench viewport
 ```
 
+### Git hooks（贡献者用）
+
+`pre-commit` 钩子会在提交前本地执行 `cargo fmt --check` 和
+`cargo clippy -- -D warnings`,避免格式/clippy 漂移进入 CI。首次在本仓库
+运行 `cargo test` 时**自动安装**(via [cargo-husky](https://github.com/rhysd/cargo-husky))。
+临时绕过可用 `git commit --no-verify`。
+
+### 发布版本
+
+`scripts/release.sh` 是一个命令式、走 PR 的发版助手:它改 `Cargo.toml`
+版本号、把 CHANGELOG 的 `[Unreleased]` 段转成带日期的版本标题、开一个
+发版 PR,并在第二步给合并后的 main 打 tag 来触发 `release.yml`。它绝不
+直接提交到 `main` —— 打 tag 发版是唯一的、文档化的例外。
+
+```bash
+# 第一步 —— 准备发版 PR(在干净的 main 上):
+./scripts/release.sh 0.3.0            # 或: --bump patch | minor | major
+./scripts/release.sh 0.3.0 --dry-run  # 预览计划,不改动任何东西
+
+# 第二步 —— PR 评审合并后,给 main 打 tag 触发构建与发布:
+./scripts/release.sh --tag v0.3.0
+```
+
+`--dry-run` 展示计划 diff 但不碰 git;`--no-pr` 只在本地分支提交(不 push/
+不开 PR)。CHANGELOG 转换还会顺带修复底部的版本链接对照表。用以下命令
+对转换逻辑做单元测试:
+
+```bash
+bash scripts/release.test.sh
+```
+
 ## 架构（简）
 
 ```

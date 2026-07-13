@@ -59,6 +59,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   writable). Falls back to `cargo install --git` on platforms without a
   prebuilt binary (macOS, aarch64). Flags: `--prefix`, `--bin-dir`,
   `--version`, `--as-pager`, `--force`, `--no-verify-checksum`.
+- **Release helper** (`scripts/release.sh`) — one-command, PR-only release flow.
+  Bumps `Cargo.toml`, rotates the CHANGELOG `[Unreleased]` section into a dated
+  version heading (and repairs the bottom link-reference table as a side
+  effect), opens a release PR, then tags the merge to trigger `release.yml`.
+  Supports `<version>` or `--bump patch|minor|major`, plus `--dry-run`,
+  `--no-pr`, and a separate `--tag vX.Y.Z` stage. Never commits to `main`
+  directly — tagging the release is the one documented exception.
 
 ## [0.2.1] - 2026-07-13
 
