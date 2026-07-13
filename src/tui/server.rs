@@ -173,6 +173,18 @@ fn accept_loop(listener: UnixListener, tx: mpsc::Sender<ServerRequest>) {
 /// Read one newline-delimited JSON command, forward it to the main loop, await
 /// the reply, and write it back as one newline-delimited JSON line.
 fn handle_connection(mut stream: UnixStream, tx: &mpsc::Sender<ServerRequest>) -> Result<()> {
+    // The listener is non-blocking (so the accept loop can poll-and-sleep),
+    // and on *some* platforms (notably macOS) that flag is inherited by the
+    // accepted stream. A non-blocking stream makes the blocking `read_line` /
+    // `write_all` below return WouldBlock immediately, which surfaces to the
+    // client as ENOTCONN — observed flakily in `decision_returns_selections`
+    // on the macOS CI runner. Restore blocking I/O here so this connection
+    // does a straightforward blocking request/response exchange. (Linux does
+    // not inherit the flag, so this is a no-op there.)
+    stream
+        .set_nonblocking(false)
+        .context("set accepted stream blocking")?;
+
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
     reader
