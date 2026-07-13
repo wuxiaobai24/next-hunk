@@ -2250,10 +2250,6 @@ diff --git a/a.rs b/a.rs
         assert_eq!(app.scroll_y, 3);
     }
 
-    fn ctrl(c: char) -> KeyEvent {
-        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
-    }
-
     /// A three-file review, for testing the `1-9` jump-to-Nth-file keys.
     fn three_file_app() -> App {
         let review = parse_unified_diff(
