@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   users reach for these instinctively; previously they got appended as
   literal characters.
 
+### Fixed — Reviewer experience
+- **Status bar no longer overflows on long paths** — the focused file's path
+  in the status bar is now capped at ~half the terminal width and truncated
+  toward the basename (e.g. `…/file.rs`), so a deeply-nested path can no
+  longer push the diff totals, banner note, and status message off the right
+  edge of a narrow terminal. Previously the full path was laid out
+  unconditionally, which on a long path swallowed the rest of the status row.
+
 ### Added — Reviewer experience
 - **Per-file change tally in the file rail** — each file in the left rail now
   shows a compact `+ins` (green) / `−del` (red) tally, right-aligned next to the
