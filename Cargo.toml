@@ -57,6 +57,17 @@ serve = []
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
+# cargo-husky: auto-installs a .git/hooks/pre-commit that runs `cargo fmt
+# --check` and `cargo clippy -- -D warnings` on the first `cargo test`. Keeps
+# the rustfmt/clippy drift out of commits (and CI) without anyone remembering
+# to wire up a hook by hand. Pure build-script crate — no runtime dep, no
+# effect on release artifacts or the --no-default-features build.
+#   precommit-hook   -> install on pre-commit (not pre-push)
+#   run-cargo-fmt    -> `cargo fmt -- --check`
+#   run-cargo-clippy -> `cargo clippy -- -D warnings`
+# default-features = false drops the default prepush-hook + run-cargo-test +
+# run-for-all, which we don't want here.
+cargo-husky = { version = "1", default-features = false, features = ["precommit-hook", "run-cargo-fmt", "run-cargo-clippy"] }
 
 # Release profile: optimize for runtime speed of the review path.
 # Binary size is not a product goal — do not use panic="abort"/extreme strip
