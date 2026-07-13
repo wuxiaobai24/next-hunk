@@ -390,6 +390,12 @@ theme = \"dark\"
 
     #[test]
     fn load_layers_user_and_project() {
+        // This test mutates the process-global $HOME / $XDG_CONFIG_HOME, which
+        // races with any other test (here or in cli_parse) that reads those
+        // vars under parallel execution. Serialize on a shared mutex so the
+        // environment is consistent for the duration of the test.
+        static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_MUTEX.lock().unwrap();
         // We can only realistically test the project layer here (user path
         // depends on $HOME/$XDG). But load() == user.merge(project); with no
         // user config present it should equal the project config.

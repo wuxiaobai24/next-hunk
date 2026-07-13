@@ -137,8 +137,10 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         let w = Watcher::spawn(&dir).expect("spawn watcher");
-        // initial state: nothing yet
-        assert!(!w.drain());
+        // Drain any initial event the watcher may fire for the freshly-watched
+        // directory (some backends, notably macOS FSEvents, emit one). We don't
+        // assert on it - the signal we care about is the write below.
+        let _ = w.drain();
         // write a file → should observe an event
         fs::write(dir.join("a.txt"), "hi").unwrap();
         assert!(

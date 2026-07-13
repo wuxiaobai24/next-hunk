@@ -44,7 +44,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features --no-fail-fast
+      - name: cargo test
+        run: cargo test --all-features --no-fail-fast
+        # Backstop: if a test hangs (e.g. a stdin/pipe deadlock that only
+        # manifests on one OS), fail the job in minutes instead of running
+        # to GitHub's 6h cap. Normal runs finish in well under 10 min.
+        timeout-minutes: 10
 
   # Verify the crate builds with no default features — the headline
   # `--watch` and syntax-highlight flags must degrade gracefully, not break

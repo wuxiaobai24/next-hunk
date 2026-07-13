@@ -508,8 +508,20 @@ fn open_review_from_text(
     }
     let review = parse_review(text)?;
     let select_mode = options.select_mode;
-    // Interactive TUI (Phase 2). If it fails (e.g. stdout is not a tty),
-    // fall back to a short inspect summary so the CLI path stays usable.
+    // Interactive TUI (Phase 2). If stdout is not a terminal (piped, e.g. when
+    // used as git's pager in a pipeline or scripted in CI), or if opening the
+    // TUI fails for any other reason, fall back to a short inspect summary so
+    // the CLI path stays usable.
+    //
+    // We check `is_terminal()` explicitly rather than relying on crossterm to
+    // error out, because on Windows crossterm's console calls can *block* on a
+    // non-console (pipe) stdout instead of returning promptly - which would
+    // hang the process (observed: `pager`/`patch -` deadlocked indefinitely in
+    // piped integration tests). The upfront check is portable and avoids that.
+    if !std::io::stdout().is_terminal() {
+        print_inspect(&review);
+        return Ok(());
+    }
     match run_review_tui(
         review.clone(),
         reloader,
