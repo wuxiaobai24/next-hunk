@@ -102,8 +102,7 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             let tail = format!("  {}{}", plus, minus);
             let need_pad = !plus.is_empty() || !minus.is_empty();
             let used = head.chars().count() + path.chars().count();
-            let mut spans: Vec<Span> =
-                vec![Span::styled(head, style), Span::styled(path, style)];
+            let mut spans: Vec<Span> = vec![Span::styled(head, style), Span::styled(path, style)];
             if need_pad {
                 let pad = rail_inner_w.saturating_sub(used + tail.chars().count());
                 spans.push(Span::raw(" ".repeat(pad)));
@@ -774,8 +773,16 @@ fn short_path(path: &str) -> String {
 /// add-only file shows just `+12` and a pure delete just `−3`. Uses the
 /// Unicode minus (`−`) to match the status bar's existing style.
 fn file_stats_tail(inserts: u64, deletes: u64) -> (String, String) {
-    let plus = if inserts > 0 { format!("+{}", inserts) } else { String::new() };
-    let minus = if deletes > 0 { format!("−{}", deletes) } else { String::new() };
+    let plus = if inserts > 0 {
+        format!("+{}", inserts)
+    } else {
+        String::new()
+    };
+    let minus = if deletes > 0 {
+        format!("−{}", deletes)
+    } else {
+        String::new()
+    };
     (plus, minus)
 }
 
@@ -849,7 +856,13 @@ diff --git a/b.rs b/b.rs
             .collect();
         // a.rs has +1/−1, b.rs has +1/−1. Both "+1" and the Unicode minus "−1"
         // should appear in the rendered rail area.
-        assert!(rendered.contains("+1"), "rail should show +1 tally: {rendered}");
-        assert!(rendered.contains("−1"), "rail should show −1 tally: {rendered}");
+        assert!(
+            rendered.contains("+1"),
+            "rail should show +1 tally: {rendered}"
+        );
+        assert!(
+            rendered.contains("−1"),
+            "rail should show −1 tally: {rendered}"
+        );
     }
 }
