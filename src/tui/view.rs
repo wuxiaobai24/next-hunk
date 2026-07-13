@@ -440,7 +440,13 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     // banner, and status text off the right edge of a narrow terminal.
     // Budget: reserve ~half the width for the path; the rest is for the
     // suffix (file index, position, stats) plus the right-side spans.
-    let non_path_suffix = format!("  [{}]  {}  {}{} ", app.selected_file + 1, pos, file_stats, hl);
+    let non_path_suffix = format!(
+        "  [{}]  {}  {}{} ",
+        app.selected_file + 1,
+        pos,
+        file_stats,
+        hl
+    );
     let path_budget = (area.width as usize / 2).max(12);
     let shown_path = status_path(app.current_path(), path_budget);
     let left = format!(" {}{}", shown_path, non_path_suffix);
