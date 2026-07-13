@@ -45,8 +45,11 @@ fn inspect_empty_stdin_reports_zero() {
         .spawn()
         .expect("spawn");
     let mut child = out;
-    use std::io::Write;
-    child.stdin.take().unwrap().write_all(b"   \n").unwrap();
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        use std::io::Write;
+        stdin.write_all(b"   \n").unwrap();
+    }
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -68,13 +71,14 @@ fn patch_stdin_falls_back_to_inspect() {
         .spawn()
         .expect("spawn");
     let mut child = out;
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
+    {
+        // Write stdin, then drop the ChildStdin to close the pipe. Closing
+        // before wait is required so the child sees EOF; on Windows a still-
+        // open write end deadlocks the child's read_to_string indefinitely.
+        let mut stdin = child.stdin.take().expect("stdin");
+        use std::io::Write;
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
     let out = child.wait_with_output().unwrap();
     assert!(
         out.status.success(),
@@ -303,8 +307,11 @@ fn pager_empty_stdin_exits_clean() {
         .spawn()
         .expect("spawn");
     let mut child = out;
-    use std::io::Write;
-    child.stdin.take().unwrap().write_all(b"   \n").unwrap();
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        use std::io::Write;
+        stdin.write_all(b"   \n").unwrap();
+    }
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "empty pager stdin should exit 0");
     let combined = format!(
@@ -331,13 +338,15 @@ fn pager_reads_stdin_and_renders() {
         .spawn()
         .expect("spawn");
     let mut child = out;
-    use std::io::Write;
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(patch.as_bytes())
-        .unwrap();
+    {
+        // Close stdin before waiting (see patch_stdin_falls_back_to_inspect):
+        // on Windows the child's read_to_string blocks until EOF, so an
+        // un-dropped write end deadlocks. This is the test that hung Windows
+        // CI (6h+) before this explicit close was added.
+        let mut stdin = child.stdin.take().expect("stdin");
+        use std::io::Write;
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
     let out = child.wait_with_output().unwrap();
     assert!(out.status.success(), "pager should exit 0 on non-tty");
     let combined = format!(
