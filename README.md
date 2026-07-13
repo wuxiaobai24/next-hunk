@@ -64,6 +64,20 @@ the viewport materializes only what's on screen. Full numbers live in
 
 ## Install
 
+### One-click (Linux x86_64)
+
+Downloads the latest static musl binary from Releases, verifies its sha256, and
+installs it to `/usr/local/bin` (or `~/.local/bin` if that isn't writable):
+
+```bash
+curl -fsSL https://github.com/wuxiaobai24/next-hunk/raw/main/scripts/install.sh | bash
+```
+
+Inspect the script first if you prefer; options include `--prefix <dir>`,
+`--bin-dir <dir>`, `--version <ver>`, `--as-pager` (also wires it into
+`git core.pager`), and `--force`. On platforms without a prebuilt binary
+(macOS, aarch64) it falls back to `cargo install --git`.
+
 ```bash
 # from GitHub (canonical release channel)
 cargo install --git https://github.com/wuxiaobai24/next-hunk
