@@ -572,14 +572,20 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         Some(f) => format!("+{}/−{}", f.inserts, f.deletes),
         None => String::new(),
     };
-    let left = format!(
-        " {}  [{}]  {}  {}{} ",
-        app.current_path(),
+    // Cap the path's display width so a long path can't push the totals,
+    // banner, and status text off the right edge of a narrow terminal.
+    // Budget: reserve ~half the width for the path; the rest is for the
+    // suffix (file index, position, stats) plus the right-side spans.
+    let non_path_suffix = format!(
+        "  [{}]  {}  {}{} ",
         app.selected_file + 1,
         pos,
         file_stats,
         hl
     );
+    let path_budget = (area.width as usize / 2).max(12);
+    let shown_path = status_path(app.current_path(), path_budget);
+    let left = format!(" {}{}", shown_path, non_path_suffix);
     let totals = format!(" Σ +{}/−{} ", app.review.inserts, app.review.deletes);
     let right = format!(" {} ", app.status);
     // A banner note (`--note banner=text`) is surfaced in the status bar so the
@@ -904,6 +910,31 @@ fn file_stats_tail(inserts: u64, deletes: u64) -> (String, String) {
     (plus, minus)
 }
 
+/// Truncate a path for the status bar, capped at `max_chars` display columns
+/// and biased toward keeping the trailing filename (that's what identifies the
+/// file to the reviewer). When the path fits, it's returned unchanged. When it
+/// doesn't, we keep the last `max_chars - 1` chars and prefix an ellipsis —
+/// unless there's a directory separator, in which case we prefer `…/<basename>`
+/// so the truncation reads naturally. Operates on chars (UTF-8 safe).
+fn status_path(path: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = path.chars().collect();
+    if chars.len() <= max_chars || max_chars == 0 {
+        return path.to_string();
+    }
+    // Try to keep the basename (last segment after '/') intact under the cap.
+    if let Some(slash) = chars.iter().rposition(|&c| c == '/') {
+        let basename: String = chars[slash + 1..].iter().collect();
+        // "…/" + basename
+        if basename.chars().count() + 2 <= max_chars {
+            return format!("…/{}", basename);
+        }
+    }
+    // Fall back: keep the trailing (max_chars - 1) chars with a leading ellipsis.
+    let keep = max_chars.saturating_sub(1);
+    let tail: String = chars[chars.len() - keep..].iter().collect();
+    format!("…{}", tail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1060,5 +1091,82 @@ diff --git a/a.rs b/a.rs
         for cell in terminal.backend().buffer().content().iter() {
             assert_ne!(cell.bg, active_bg, "no active match expected");
         }
+    }
+
+    #[test]
+    fn status_path_short_path_unchanged() {
+        assert_eq!(status_path("a.rs", 20), "a.rs");
+        assert_eq!(status_path("src/mod.rs", 20), "src/mod.rs");
+    }
+
+    #[test]
+    fn status_path_keeps_basename_when_too_long() {
+        // Long path, generous cap: basename fits under "…/<basename>".
+        let p = "very/deeply/nested/module/path/file.rs";
+        assert_eq!(status_path(p, 16), "…/file.rs");
+    }
+
+    #[test]
+    fn status_path_basename_too_long_keeps_tail() {
+        // Both the path and its basename exceed the cap: fall back to a
+        // leading ellipsis + the trailing (cap-1) chars.
+        let p = "src/some/really/long/basename_that_exceeds.rs";
+        // cap=10 -> keep 9 trailing chars, prefixed with ellipsis.
+        assert_eq!(status_path(p, 10), "…xceeds.rs");
+    }
+
+    #[test]
+    fn status_path_no_separator_uses_tail() {
+        assert_eq!(status_path("abcdefghij", 5), "…ghij");
+    }
+
+    #[test]
+    fn status_path_zero_budget_returns_unchanged() {
+        // A zero budget is a guard; we return the path as-is rather than panic.
+        assert_eq!(status_path("a.rs", 0), "a.rs");
+    }
+
+    /// A long path must not force the status row wider than the terminal.
+    /// Render at a narrow width with a deep path and assert the rendered
+    /// status line does not overflow the area (no content past the right edge).
+    #[test]
+    fn long_path_does_not_overflow_narrow_status() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/very/deeply/nested/module/path/file_with_long_name.rs b/very/deeply/nested/module/path/file_with_long_name.rs
+--- a/very/deeply/nested/module/path/file_with_long_name.rs
++++ b/very/deeply/nested/module/path/file_with_long_name.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        // 24 cols wide — narrower than the full path. The status row must fit.
+        let backend = ratatui::backend::TestBackend::new(24, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        // The status bar is the second-to-last row. Read its cells and confirm
+        // the rendered path was truncated (an ellipsis is present), proving the
+        // width budget kicked in rather than the full path being laid out.
+        let buf = terminal.backend().buffer();
+        let width = 24usize;
+        let status_row = 4usize; // main area is rows 0..3, status at row 4
+        let row_text: String = (0..width)
+            .map(|x| {
+                buf[(x as u16, status_row as u16)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' ')
+            })
+            .collect();
+        assert!(
+            row_text.contains('…'),
+            "expected the path to be truncated with an ellipsis, got: {row_text:?}"
+        );
     }
 }
