@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Distribution
+- **One-click install script** (`scripts/install.sh`) — `curl | bash` installer
+  that resolves the latest Release, downloads the static musl binary, verifies
+  its sha256, and installs to `/usr/local/bin` (or `~/.local/bin` if not
+  writable). Falls back to `cargo install --git` on platforms without a
+  prebuilt binary (macOS, aarch64). Flags: `--prefix`, `--bin-dir`,
+  `--version`, `--as-pager`, `--force`, `--no-verify-checksum`.
+
 ## [0.2.1] - 2026-07-13
 
 ### Added — Reviewer experience
