@@ -106,7 +106,16 @@ pub use imp::DEBOUNCE;
 /// Placeholder debounce constant for the no-op build (unused).
 pub const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(200);
 
-#[cfg(all(test, feature = "watch"))]
+// These tests drive a live filesystem watcher end to end, which depends on
+// OS-specific fs-event semantics. On Linux (inotify) and macOS (FSEvents /
+// kqueue) they're fast and reliable. On Windows (ReadDirectoryChangesW) we've
+// seen the GitHub-hosted runner stall for hours inside `notify`'s backend —
+// either the watcher never delivers the write event, or `recommended_watcher`
+// blocks. Since this is exercising platform behavior (not our logic — the
+// `drain`/`spawn` glue is trivial and OS-independent), we skip it on Windows
+// rather than let a flaky backend hang CI. The CI test step also has a timeout
+// as a backstop (see .github/workflows/ci.yml).
+#[cfg(all(test, feature = "watch", not(windows)))]
 mod tests {
     use super::*;
     use std::fs;
