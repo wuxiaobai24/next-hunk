@@ -405,7 +405,10 @@ impl App {
         // can't navigate behind the overlay.
         if self.show_help {
             match key.code {
-                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter
+                KeyCode::Char('?')
+                | KeyCode::Esc
+                | KeyCode::Char('q')
+                | KeyCode::Enter
                 | KeyCode::Char(' ') => {
                     self.show_help = false;
                 }
@@ -463,8 +466,9 @@ impl App {
                             let visible = self.visible_files();
                             let idx_in_visible = (ev.row.saturating_sub(r.y)) as usize;
                             if let Some(&fidx) = visible.get(idx_in_visible) {
-                                let row = crate::ir::ViewportQuery::file_start_row(&self.review, fidx)
-                                    .min(self.max_scroll());
+                                let row =
+                                    crate::ir::ViewportQuery::file_start_row(&self.review, fidx)
+                                        .min(self.max_scroll());
                                 self.selected_file = fidx;
                                 self.scroll_y = row;
                                 self.status = format!("→ {}", self.review.display_path(fidx));

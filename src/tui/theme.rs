@@ -66,23 +66,23 @@ impl Theme {
     /// (`#100F0F`), using the brighter 400-level accents.
     pub fn dark() -> Self {
         Self {
-            add: hex(0x879A39), // green-400
+            add: hex(0x879A39),    // green-400
             delete: hex(0xD14D41), // red-400
             // Word-level emphasis is rendered reversed+bold, so the brighter
             // 300-level shades become solid color blocks that pop on dark.
-            word_add: hex(0xA0AF54), // green-300
-            word_del: hex(0xE8705F), // red-300
-            dim: hex(0x878580), // base-500 (gutter, meta, help line)
-            file_header: hex(0xCE5D97), // magenta-400 (bold)
-            hunk_header: hex(0x4385BE), // blue-400 (bold)
-            selection_fg: hex(0xFFFCF0), // paper
-            selection_bg: hex(0x575653), // base-700 (rail bar)
-            match_active_fg: hex(0x100F0F), // black
-            match_active_bg: hex(0xDFB431), // yellow-300 (gold match)
+            word_add: hex(0xA0AF54),          // green-300
+            word_del: hex(0xE8705F),          // red-300
+            dim: hex(0x878580),               // base-500 (gutter, meta, help line)
+            file_header: hex(0xCE5D97),       // magenta-400 (bold)
+            hunk_header: hex(0x4385BE),       // blue-400 (bold)
+            selection_fg: hex(0xFFFCF0),      // paper
+            selection_bg: hex(0x575653),      // base-700 (rail bar)
+            match_active_fg: hex(0x100F0F),   // black
+            match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
             match_inactive_bg: hex(0x403E3C), // base-800 (subdued)
-            edit_mode_fg: hex(0xDA702C), // orange-400 (active prompt)
-            status_bg: hex(0x282726), // base-900 (status band)
-            note: hex(0x3AA99F), // cyan-400 (italic agent notes)
+            edit_mode_fg: hex(0xDA702C),      // orange-400 (active prompt)
+            status_bg: hex(0x282726),         // base-900 (status band)
+            note: hex(0x3AA99F),              // cyan-400 (italic agent notes)
         }
     }
 
@@ -94,21 +94,21 @@ impl Theme {
     /// pops without fighting the line color.
     pub fn light() -> Self {
         Self {
-            add: hex(0x66800B), // green-600
-            delete: hex(0xAF3029), // red-600
-            word_add: hex(0x879A39), // green-400
-            word_del: hex(0xD14D41), // red-400
-            dim: hex(0x6F6E69), // base-600 (gutter, meta, help line)
-            file_header: hex(0xA02F6F), // magenta-600 (bold)
-            hunk_header: hex(0x205EA6), // blue-600 (bold)
-            selection_fg: hex(0x100F0F), // black ink
-            selection_bg: hex(0xCECDC3), // base-200 (rail bar)
-            match_active_fg: hex(0x100F0F), // black
-            match_active_bg: hex(0xDFB431), // yellow-300 (gold match)
+            add: hex(0x66800B),               // green-600
+            delete: hex(0xAF3029),            // red-600
+            word_add: hex(0x879A39),          // green-400
+            word_del: hex(0xD14D41),          // red-400
+            dim: hex(0x6F6E69),               // base-600 (gutter, meta, help line)
+            file_header: hex(0xA02F6F),       // magenta-600 (bold)
+            hunk_header: hex(0x205EA6),       // blue-600 (bold)
+            selection_fg: hex(0x100F0F),      // black ink
+            selection_bg: hex(0xCECDC3),      // base-200 (rail bar)
+            match_active_fg: hex(0x100F0F),   // black
+            match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
             match_inactive_bg: hex(0xCECDC3), // base-200 (subdued)
-            edit_mode_fg: hex(0xBC5215), // orange-600 (active prompt)
-            status_bg: hex(0xE6E4D9), // base-100 (status band)
-            note: hex(0x24837B), // cyan-600 (italic agent notes)
+            edit_mode_fg: hex(0xBC5215),      // orange-600 (active prompt)
+            status_bg: hex(0xE6E4D9),         // base-100 (status band)
+            note: hex(0x24837B),              // cyan-600 (italic agent notes)
         }
     }
 }
