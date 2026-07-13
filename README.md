@@ -275,6 +275,14 @@ cargo bench --bench parse
 cargo bench --bench viewport
 ```
 
+### Git hooks (for contributors)
+
+A `pre-commit` hook runs `cargo fmt --check` and `cargo clippy -- -D warnings`
+locally so formatting/clippy drift never reaches CI. It's installed
+**automatically** the first time you run `cargo test` in this repo (via
+[cargo-husky](https://github.com/rhysd/cargo-husky)). To bypass it for an
+experimental commit, use `git commit --no-verify`.
+
 ## Architecture (short)
 
 ```

@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Development
+- **`pre-commit` git hook (auto-installed)** — running `cargo test` in a fresh
+  clone now installs a `pre-commit` hook (via [cargo-husky](https://github.com/rhysd/cargo-husky))
+  that runs `cargo fmt --check` and `cargo clippy -- -D warnings` before each
+  commit, so formatting/clippy drift is caught locally instead of turning the
+  CI `rustfmt`/`clippy` jobs red. Bypass with `git commit --no-verify`.
+
 ### Added — Distribution
 - **One-click install script** (`scripts/install.sh`) — `curl | bash` installer
   that resolves the latest Release, downloads the static musl binary, verifies
