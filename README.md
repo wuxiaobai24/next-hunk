@@ -140,17 +140,21 @@ git show HEAD   # → launches the review TUI
 | `G` / `End` | jump to bottom |
 | `]h` | next hunk (wraps across files) |
 | `[h` | previous hunk (wraps across files) |
+| `Space` | next hunk (quick `]h` alias) |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
+| `b` | toggle the file-rail sidebar |
+| click file rail | select that file |
+| click stream | position the viewport on that row |
 | `H` | toggle syntax highlight |
 | `#` | toggle line-number gutter |
 | `w` | toggle word-level inline diff |
 | `W` | toggle ignore-whitespace (hide whitespace-only changes) |
-| `s` | toggle unified / split layout |
-| `t` | cycle theme: dark → light → auto |
+| `t` | cycle theme: light → auto → dark |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
+| `?` | toggle the full-screen keybinding help |
 | `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 
 ## Configuration
@@ -169,9 +173,8 @@ Fields:
 | `staged` | bool | `false` | review staged changes |
 | `highlight` | bool | `true` | syntax highlighting |
 | `watch` | bool | `false` | live-reload on file changes |
-| `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles) |
-| `wrap_lines` | bool | — | _not yet rendered_ |
-| `theme` | string | `"dark"` | `"dark"` / `"light"` / `"auto"` (`t` cycles) |
+| `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
+| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
 

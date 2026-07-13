@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-13
+
+### Added — Reviewer experience
+- **Flexoki theme** — both palettes (`light` / `dark`) now use the
+  [Flexoki](https://flexoki.com) color system via exact RGB values. The default
+  theme is now **light** (Flexoki paper); `t` still cycles light → auto → dark.
+  The previous light palette was nearly unreadable on white terminals (it used
+  the pale `Light*` ANSI variants meant for dark backgrounds).
+- **`?` help overlay** — a full-screen keybinding reference (`?` toggles;
+  `Esc`/`q`/`Enter`/`Space` dismiss). Previously `?` did nothing.
+- **`Space`** — quick next-hunk jump (single-key alias for `]h`).
+- **`b`** — toggle the file-rail sidebar.
+- **Mouse clicks** — click a file in the rail to select it; click the stream to
+  position the viewport on that row (wheel scroll unchanged).
+
+### Fixed
+- **Rail highlight now follows `K`/`PageUp`** — paging up no longer left the
+  file-rail selection stuck on the old file. (`sync_selected_file` was missing
+  on that one scroll path.)
+
+### Removed
+- **`s` (split layout)** — never implemented (the key silently rendered unified
+  while claiming "split layout"). Removed the key, the `ViewMode` plumbing, and
+  its help/docs entry. Side-by-side split remains on the roadmap.
+- **`wrap_lines` config field** — accepted in `config.toml` but never rendered.
+  Removed so config no longer advertises a no-op (line wrapping needs a viewport
+  model change; tracked separately).
+
 ## [0.2.0] - 2026-07-13
 
 ### Added — Agent ↔ Human review bridge

@@ -7,7 +7,7 @@
 //! headlessly by feeding scripted `KeyEvent`s and asserting on `App` fields or
 //! a rendered `TestBackend` buffer.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::highlight::{HighlightCache, Highlighter};
 use crate::ir::{Review, Viewport, ViewportQuery};
@@ -32,16 +32,6 @@ pub enum InputMode {
     Search,
     /// Editing a file-rail path filter.
     Filter,
-}
-
-/// Stream layout: single unified column or two side-by-side columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ViewMode {
-    /// One column, traditional unified diff (default).
-    #[default]
-    Unified,
-    /// Two columns, old on the left / new on the right.
-    Split,
 }
 
 /// In-stream content search state.
@@ -97,11 +87,16 @@ pub struct App {
     pub line_numbers_on: bool,
     /// Highlight changed words within a line (word-diff). ON by default.
     pub word_diff_on: bool,
-    /// Stream layout (unified vs split). Unified by default.
-    pub view_mode: ViewMode,
-    /// Split left/right column ratio (0..=100 = percent for the LEFT column).
-    /// Only meaningful under [`ViewMode::Split`].
-    pub split_ratio: u16,
+
+    /// Show the left file-rail sidebar (toggle with `b`).
+    pub show_rail: bool,
+    /// Last drawn rail area (None when the rail is hidden). Set by draw_main.
+    pub rail_rect: Option<ratatui::layout::Rect>,
+    /// Last drawn stream area. Set by draw_main.
+    pub stream_rect: Option<ratatui::layout::Rect>,
+
+    /// Show the full-screen keybinding help overlay (toggle with `?`).
+    pub show_help: bool,
 
     /// User's theme choice (dark / light / auto). `theme` is the resolved
     /// palette the view reads from; `t` cycles the mode and refreshes it.
@@ -216,10 +211,11 @@ impl App {
     }
 
     /// Construct with an explicit highlighter (used by `run_review_tui` to
-    /// reuse a single loaded `Highlighter` and by tests). Defaults to the dark
-    /// theme. Use [`App::with_theme`] to inject a config-driven theme.
+    /// reuse a single loaded `Highlighter` and by tests). Defaults to the light
+    /// (Flexoki paper) theme. Use [`App::with_theme`] to inject a config-driven
+    /// theme.
     pub fn with_highlighter(review: Review, highlighter: Highlighter) -> Self {
-        Self::with_theme(review, highlighter, ThemeMode::Dark)
+        Self::with_theme(review, highlighter, ThemeMode::default())
     }
 
     /// Construct with an explicit highlighter and theme mode (used by
@@ -245,8 +241,10 @@ impl App {
             highlighter,
             line_numbers_on: true,
             word_diff_on: true,
-            view_mode: ViewMode::Unified,
-            split_ratio: 50,
+            show_rail: true,
+            rail_rect: None,
+            stream_rect: None,
+            show_help: false,
             theme_mode,
             theme,
             mode: InputMode::Normal,
@@ -402,6 +400,20 @@ impl App {
             return;
         }
 
+        // When the help overlay is up, every key is intercepted: `?`, Esc, q,
+        // Enter, or Space dismiss it; anything else is swallowed so the user
+        // can't navigate behind the overlay.
+        if self.show_help {
+            match key.code {
+                KeyCode::Char('?') | KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter
+                | KeyCode::Char(' ') => {
+                    self.show_help = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
         // Route by input mode first.
         match self.mode {
             InputMode::Search => {
@@ -420,10 +432,12 @@ impl App {
 
     /// Handle a single mouse event. Pure: mutates state only, no I/O.
     ///
-    /// Only wheel scroll is handled (one row per notch; Shift widens it to a
-    /// half-page, mirroring `j`/`J`). Clicks/drags/moves are ignored. Keeping
-    /// this in `App` means mouse behavior is exercisable headlessly, the same
-    /// as keys.
+    /// Wheel scroll is handled (one row per notch; Shift widens it to a
+    /// half-page, mirroring `j`/`J`). Left-clicks on the file rail select the
+    /// clicked file and scroll to its start; left-clicks on the stream position
+    /// the viewport so the clicked row is on top. Other clicks/drags/moves are
+    /// ignored. Keeping this in `App` means mouse behavior is exercisable
+    /// headlessly, the same as keys.
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
         let half = (self.viewport_height.max(1) / 2) as i64;
         match ev.kind {
@@ -441,9 +455,43 @@ impl App {
                     self.scroll_by(-1);
                 }
             }
-            // Clicks, drags, and horizontal scroll are ignored for now.
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Click in the file rail → select that file and scroll to its start.
+                if self.show_rail {
+                    if let Some(r) = self.rail_rect {
+                        if Self::point_in_rect(ev.column, ev.row, r) {
+                            let visible = self.visible_files();
+                            let idx_in_visible = (ev.row.saturating_sub(r.y)) as usize;
+                            if let Some(&fidx) = visible.get(idx_in_visible) {
+                                let row = crate::ir::ViewportQuery::file_start_row(&self.review, fidx)
+                                    .min(self.max_scroll());
+                                self.selected_file = fidx;
+                                self.scroll_y = row;
+                                self.status = format!("→ {}", self.review.display_path(fidx));
+                            }
+                            return;
+                        }
+                    }
+                }
+                // Click in the stream → position the viewport so the clicked row is on top.
+                if let Some(r) = self.stream_rect {
+                    if Self::point_in_rect(ev.column, ev.row, r) {
+                        let off = (ev.row.saturating_sub(r.y)) as usize;
+                        let target = self.scroll_y.saturating_add(off).min(self.max_scroll());
+                        self.scroll_y = target;
+                        self.sync_selected_file();
+                    }
+                }
+            }
+            // Other clicks, drags, and horizontal scroll are ignored for now.
             _ => {}
         }
+    }
+
+    /// Returns `true` when the point `(x, y)` lies within the rectangle `r`
+    /// (inclusive of the left/top edge, exclusive of the right/bottom edge).
+    fn point_in_rect(x: u16, y: u16, r: ratatui::layout::Rect) -> bool {
+        x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
@@ -496,6 +544,7 @@ impl App {
             // half-page up
             KeyCode::Char('K') | KeyCode::PageUp => {
                 self.scroll_y = self.scroll_y.saturating_sub(half);
+                self.sync_selected_file();
             }
             // top / bottom
             KeyCode::Char('g') | KeyCode::Home => {
@@ -533,6 +582,11 @@ impl App {
             KeyCode::Char('[') => {
                 self.pending_prefix = Some('[');
                 self.status = "[".into();
+            }
+            // space: jump to the next hunk (wraps across files). A fast
+            // single-key alternative to the `]h` two-key sequence.
+            KeyCode::Char(' ') => {
+                self.jump_hunk(true);
             }
             // toggle highlight
             KeyCode::Char('H') => {
@@ -572,15 +626,13 @@ impl App {
                     "ignore-whitespace off".into()
                 };
             }
-            // toggle unified / split layout
-            KeyCode::Char('s') => {
-                self.view_mode = match self.view_mode {
-                    ViewMode::Unified => ViewMode::Split,
-                    ViewMode::Split => ViewMode::Unified,
-                };
-                self.status = match self.view_mode {
-                    ViewMode::Unified => "unified layout".into(),
-                    ViewMode::Split => "split layout".into(),
+            // toggle the file-rail sidebar
+            KeyCode::Char('b') => {
+                self.show_rail = !self.show_rail;
+                self.status = if self.show_rail {
+                    "rail shown".into()
+                } else {
+                    "rail hidden".into()
                 };
             }
             // cycle theme: dark → light → auto → dark
@@ -617,6 +669,10 @@ impl App {
             }
             KeyCode::Char('N') => {
                 self.advance_match(false);
+            }
+            // toggle the full-screen keybinding help overlay
+            KeyCode::Char('?') => {
+                self.show_help = !self.show_help;
             }
             // --select mode: accept / reject / mark undecided on the current
             // hunk, then jump to the next. These keys are inert outside select
@@ -1079,7 +1135,24 @@ diff --git a/b.rs b/b.rs
         assert_eq!(app.selected_file, 1);
     }
 
-    // ---- highlight ----
+    #[test]
+    fn page_up_down_syncs_selected_file() {
+        let mut app = two_file_app();
+        // Stream: a.rs (rows 0-3), b.rs (rows 4-7). viewport_height=4, half=2.
+        // max_scroll = 8 - 4 = 4.
+        // Two PageDowns from 0 → 4 (file 1, b.rs).
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.scroll_y, 2);
+        app.handle_key(key(KeyCode::Char('J')));
+        assert_eq!(app.scroll_y, 4);
+        assert_eq!(app.selected_file, 1, "PageDown should sync to file 1");
+        // Two PageUps from 4 → 0 (file 0, a.rs).
+        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.scroll_y, 2);
+        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.scroll_y, 0);
+        assert_eq!(app.selected_file, 0, "PageUp should sync back to file 0");
+    }
 
     #[test]
     fn highlight_on_by_default() {
@@ -1117,13 +1190,33 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn toggle_view_mode() {
+    fn question_toggles_help_overlay() {
         let mut app = two_file_app();
-        assert_eq!(app.view_mode, ViewMode::Unified);
-        app.handle_key(char_key('s'));
-        assert_eq!(app.view_mode, ViewMode::Split);
-        app.handle_key(char_key('s'));
-        assert_eq!(app.view_mode, ViewMode::Unified);
+        assert!(!app.show_help, "help hidden by default");
+        app.handle_key(char_key('?'));
+        assert!(app.show_help);
+        // While the overlay is up, navigation keys are swallowed (do not move
+        // the viewport or quit).
+        let scroll_before = app.scroll_y;
+        app.handle_key(char_key('j'));
+        assert_eq!(app.scroll_y, scroll_before, "j swallowed behind help");
+        assert!(!app.should_quit, "no keys quit behind help except Ctrl+C");
+        // `?` / Esc / q / Enter / Space all dismiss it.
+        app.handle_key(char_key('q'));
+        assert!(!app.show_help, "q dismisses help (does not quit)");
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn b_toggles_show_rail() {
+        let mut app = two_file_app();
+        assert!(app.show_rail, "rail shown by default");
+        app.handle_key(char_key('b'));
+        assert!(!app.show_rail);
+        assert!(app.status.contains("rail hidden"));
+        app.handle_key(char_key('b'));
+        assert!(app.show_rail);
+        assert!(app.status.contains("rail shown"));
     }
 
     // ---- ignore whitespace (W) ----
@@ -1915,5 +2008,62 @@ diff --git a/a.rs b/a.rs
         let s = app.selections();
         assert!(s.accepted.is_empty());
         assert!(s.undecided.contains(&"a.rs:h1".to_string()));
+    }
+
+    // ---- mouse clicks ----
+
+    #[test]
+    fn mouse_click_on_file_rail_selects_file() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        let mut app = two_file_app();
+        app.scroll_y = 0;
+        app.rail_rect = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 10,
+        });
+        app.stream_rect = Some(Rect {
+            x: 20,
+            y: 0,
+            width: 60,
+            height: 10,
+        });
+        // Click on the 2nd visible file entry in the rail (row 1, col 0).
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        // The 2nd visible file is b.rs (index 1). It starts at row 4.
+        assert_eq!(app.selected_file, 1);
+        assert_eq!(app.scroll_y, 4);
+        assert!(app.status.contains("b.rs"));
+    }
+
+    #[test]
+    fn mouse_click_in_stream_positions_viewport() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        let mut app = two_file_app();
+        app.scroll_y = 0;
+        app.stream_rect = Some(Rect {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 5,
+        });
+        // Click on stream row 3 → scroll_y should become 3.
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 10,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, 3);
     }
 }

@@ -7,8 +7,7 @@
 //!
 //! All config fields are `Option<T>` so an absent key is distinct from an
 //! explicit `false` — that is what lets "lower layer sets it, upper layer
-//! leaves it" compose correctly. The `wrap_lines` field is accepted and stored
-//! for forward-compat but not yet rendered.
+//! leaves it" compose correctly.
 
 use std::path::{Path, PathBuf};
 
@@ -22,8 +21,6 @@ pub struct Config {
     pub watch: Option<bool>,
     /// P1: show a line-number column (accepted, not yet rendered).
     pub line_numbers: Option<bool>,
-    /// P1: wrap long lines (accepted, not yet rendered).
-    pub wrap_lines: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
 }
@@ -43,9 +40,6 @@ impl Config {
         }
         if other.line_numbers.is_some() {
             self.line_numbers = other.line_numbers;
-        }
-        if other.wrap_lines.is_some() {
-            self.wrap_lines = other.wrap_lines;
         }
         if other.theme.is_some() {
             self.theme = other.theme;
@@ -333,7 +327,6 @@ staged = true
 highlight = false
 watch = true
 line_numbers = true
-wrap_lines = false
 theme = \"dark\"
 ",
         );
@@ -342,7 +335,6 @@ theme = \"dark\"
         assert_eq!(cfg.highlight, Some(false));
         assert_eq!(cfg.watch, Some(true));
         assert_eq!(cfg.line_numbers, Some(true));
-        assert_eq!(cfg.wrap_lines, Some(false));
         assert_eq!(cfg.theme.as_deref(), Some("dark"));
     }
 

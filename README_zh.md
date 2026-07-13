@@ -119,17 +119,21 @@ git show HEAD   # → 启动 review TUI
 | `G` / `End` | 跳到底部 |
 | `]h` | 下一个 hunk（跨文件回绕） |
 | `[h` | 上一个 hunk（跨文件回绕） |
+| `Space` | 下一个 hunk（`]h` 的快捷单键） |
 | `Tab` / `l` / `→` | 下一个文件 |
 | `Shift+Tab` / `h` / `←` | 上一个文件 |
+| `b` | 切换文件侧边栏显示 |
+| 点击文件栏 | 选中该文件 |
+| 点击 diff 区 | 把视口定位到该行 |
 | `H` | 切换语法高亮 |
 | `#` | 切换行号显示 |
 | `w` | 切换词级行内 diff |
 | `W` | 切换忽略空白（隐藏仅空白变化） |
-| `s` | 切换 unified / split 布局 |
-| `t` | 循环主题：dark → light → auto |
+| `t` | 循环主题：light → auto → dark |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
 | `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
+| `?` | 切换全屏快捷键帮助 |
 | `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
 
 ## 配置
@@ -147,9 +151,8 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `staged` | bool | `false` | 查看 staged 改动 |
 | `highlight` | bool | `true` | 语法高亮 |
 | `watch` | bool | `false` | 文件变化时实时重载 |
-| `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 切换） |
-| `wrap_lines` | bool | — | _暂未渲染_ |
-| `theme` | string | `"dark"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换） |
+| `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
+| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
 示例 `~/.config/next-hunk/config.toml`:
 

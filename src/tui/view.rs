@@ -14,16 +14,16 @@
 //! (architecture §7 anti-pattern). Syntax highlighting is viewport-only and
 //! cached per (file, line) in `App.cache`.
 
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 use ratatui::Frame;
 
 use crate::ir::{
     word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion,
 };
-use crate::tui::app::{App, Decision, HunkId, InputMode, ViewMode};
+use crate::tui::app::{App, Decision, HunkId, InputMode};
 
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
 const RAIL_MAX_WIDTH: u16 = 32;
@@ -48,17 +48,29 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
 
     draw_status(app, frame, chunks[1]);
     draw_help_or_prompt(app, frame, chunks[2]);
+
+    // The keybinding help overlay is drawn last so it sits on top of everything.
+    if app.show_help {
+        draw_help_overlay(app, frame);
+    }
 }
 
 fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
-    let rail_w = RAIL_MAX_WIDTH.min(area.width / 4).max(12);
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(rail_w), Constraint::Min(0)])
-        .split(area);
-
-    draw_rail(app, frame, cols[0]);
-    draw_stream(app, frame, cols[1]);
+    if app.show_rail {
+        let rail_w = RAIL_MAX_WIDTH.min(area.width / 4).max(12);
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Length(rail_w), Constraint::Min(0)])
+            .split(area);
+        app.rail_rect = Some(cols[0]);
+        app.stream_rect = Some(cols[1]);
+        draw_rail(app, frame, cols[0]);
+        draw_stream(app, frame, cols[1]);
+    } else {
+        app.rail_rect = None;
+        app.stream_rect = Some(area);
+        draw_stream(app, frame, area);
+    }
 }
 
 fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
@@ -95,11 +107,7 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
-    match app.view_mode {
-        ViewMode::Unified => draw_stream_unified(app, frame, area),
-        // Split rendering is added later; fall back to unified for now.
-        ViewMode::Split => draw_stream_unified(app, frame, area),
-    }
+    draw_stream_unified(app, frame, area);
 }
 
 fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -471,7 +479,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · Tab file · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · q quit "
+            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
                 .to_string()
         }
     };
@@ -483,6 +491,135 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     };
     let para = Paragraph::new(content).style(style);
     frame.render_widget(para, area);
+}
+
+/// Full-screen keybinding reference, drawn on top of the review when the user
+/// presses `?`. Rendered as a centered, bordered panel with the bindings grouped
+/// by category; section headers use the hunk-header color so they stand out
+/// without fighting the Flexoki chrome.
+fn draw_help_overlay(app: &App, frame: &mut Frame) {
+    let area = frame.area();
+
+    // A centered panel: up to 64 cols wide and as tall as the content needs,
+    // clamped to the terminal with a 1-row margin.
+    let width = 64u16.min(area.width.saturating_sub(2));
+    let height = 26u16.min(area.height.saturating_sub(2));
+    let popup = centered_rect(width, height, area);
+
+    // Clear the underlying cells so the overlay reads as a floating panel.
+    frame.render_widget(Clear, popup);
+
+    let key = Style::default()
+        .fg(app.theme.hunk_header)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(app.theme.dim);
+    let head = Style::default()
+        .fg(app.theme.file_header)
+        .add_modifier(Modifier::BOLD);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    push_help_section(
+        &mut lines,
+        "Navigation",
+        &[
+            ("j / ↓", "scroll down one row"),
+            ("k / ↑", "scroll up one row"),
+            ("J / PgDn", "scroll half a page"),
+            ("K / PgUp", "scroll half a page up"),
+            ("g / Home", "jump to top"),
+            ("G / End", "jump to bottom"),
+            ("]h / [h", "next / previous hunk (wraps files)"),
+            ("SPC", "next hunk"),
+            ("Tab / l", "next file"),
+            ("BackTab / h", "previous file"),
+            ("b", "toggle file rail"),
+            ("o", "open focused line in $EDITOR"),
+        ],
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "View",
+        &[
+            ("H", "toggle syntax highlight"),
+            ("#", "toggle line-number gutter"),
+            ("w", "toggle word-level inline diff"),
+            ("W", "toggle ignore-whitespace"),
+            ("t", "cycle theme (light → auto → dark)"),
+        ],
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "Search & filter",
+        &[
+            ("/", "search diff content"),
+            ("n / N", "next / previous match"),
+            ("f", "filter files by path substring"),
+        ],
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "Agent (--select)",
+        &[("a / r / u", "accept / reject / undecided on hunk")],
+        head,
+        key,
+        dim,
+    );
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        " ? / Esc / q / Enter  dismiss this help",
+        Style::default().fg(app.theme.edit_mode_fg),
+    )));
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(
+            " next-hunk — keybindings ",
+            Style::default()
+                .fg(app.theme.file_header)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .style(Style::default().bg(app.theme.status_bg));
+    let para = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Left);
+    frame.render_widget(para, popup);
+}
+
+/// Push a titled group of keybinding rows into the help-overlay line list.
+/// Uses `&'static str` so the built `Line<'static>` borrows the literal text
+/// directly (no allocation, no lifetime knot from a closure).
+fn push_help_section(
+    lines: &mut Vec<Line<'static>>,
+    title: &'static str,
+    rows: &[(&'static str, &'static str)],
+    head: Style,
+    key: Style,
+    dim: Style,
+) {
+    lines.push(Line::from(Span::styled(format!(" {title}"), head)));
+    for (k, d) in rows {
+        lines.push(Line::from(vec![
+            Span::styled(format!("  {:<14}", k), key),
+            Span::styled(*d, dim),
+        ]));
+    }
+    lines.push(Line::from(""));
+}
+
+/// Center a `w × h` rect inside `area` (used by the help overlay).
+fn centered_rect(w: u16, h: u16, area: Rect) -> Rect {
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    Rect::new(x, y, w.min(area.width), h.min(area.height))
 }
 
 /// Refine syntax-highlight runs with word-level change regions.

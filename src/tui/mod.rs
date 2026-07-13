@@ -742,14 +742,9 @@ diff --git a/a.rs b/a.rs
     fn t_key_cycles_theme_mode_and_status() {
         use crate::tui::theme::ThemeMode;
         let mut app = sample_app();
-        assert_eq!(app.theme_mode, ThemeMode::Dark);
-        let dark_add = app.theme.add;
-
-        // Dark → Light
-        app.handle_key(key(KeyCode::Char('t')));
+        // The default theme is now Light (Flexoki paper).
         assert_eq!(app.theme_mode, ThemeMode::Light);
-        assert_ne!(app.theme.add, dark_add); // palette changed
-        assert!(app.status.contains("light"));
+        let light_add = app.theme.add;
 
         // Light → Auto
         app.handle_key(key(KeyCode::Char('t')));
@@ -759,11 +754,17 @@ diff --git a/a.rs b/a.rs
         // Auto → Dark
         app.handle_key(key(KeyCode::Char('t')));
         assert_eq!(app.theme_mode, ThemeMode::Dark);
+        assert_ne!(app.theme.add, light_add); // palette changed
         assert!(app.status.contains("dark"));
+
+        // Dark → Light
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_mode, ThemeMode::Light);
+        assert!(app.status.contains("light"));
     }
 
     #[test]
-    fn light_theme_paints_status_bar_white() {
+    fn light_theme_paints_status_bar() {
         use crate::tui::theme::ThemeMode;
         let mut app = sample_app();
         // Switch to the light theme explicitly.
@@ -775,15 +776,41 @@ diff --git a/a.rs b/a.rs
         terminal.draw(|f| view::draw(&mut app, f)).unwrap();
         let buf = terminal.backend().buffer();
 
-        // The status bar is the second-to-last rendered row. Find a cell with
-        // White background (the light theme's status_bg). Scan all cells.
-        let has_white_bg = buf
+        // The light theme's status bar is painted with Flexoki base-100.
+        let status_bg = ratatui::style::Color::Rgb(0xE6, 0xE4, 0xD9);
+        let has_bg = buf
             .content()
             .iter()
-            .any(|c| c.style().bg == Some(ratatui::style::Color::White));
+            .any(|c| c.style().bg == Some(status_bg));
         assert!(
-            has_white_bg,
-            "light theme should paint at least one cell with White background"
+            has_bg,
+            "light theme should paint the status bar with Flexoki base-100"
+        );
+    }
+
+    #[test]
+    fn help_overlay_renders_keybindings() {
+        let mut app = sample_app();
+        // Open the overlay with `?`.
+        app.handle_key(key(KeyCode::Char('?')));
+        assert!(app.show_help);
+
+        let backend = TestBackend::new(80, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        // Flatten the rendered cells into a string and look for tell-tale text.
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(text.contains("keybindings"), "overlay title missing");
+        assert!(text.contains("Navigation"), "overlay section missing");
+        assert!(
+            text.contains("ignore-whitespace"),
+            "overlay should list the W binding"
         );
     }
 
