@@ -524,7 +524,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     // A centered panel: up to 64 cols wide and as tall as the content needs,
     // clamped to the terminal with a 1-row margin.
     let width = 64u16.min(area.width.saturating_sub(2));
-    let height = 26u16.min(area.height.saturating_sub(2));
+    let height = 30u16.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
 
     // Clear the underlying cells so the overlay reads as a floating panel.
@@ -547,12 +547,15 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("k / ↑", "scroll up one row"),
             ("J / PgDn", "scroll half a page"),
             ("K / PgUp", "scroll half a page up"),
+            ("Ctrl-D / Ctrl-U", "scroll half a page down / up"),
+            ("Ctrl-F / Ctrl-B", "scroll a full page down / up"),
             ("g / Home", "jump to top"),
             ("G / End", "jump to bottom"),
             ("]h / [h", "next / previous hunk (wraps files)"),
             ("SPC", "next hunk"),
             ("Tab / l", "next file"),
             ("BackTab / h", "previous file"),
+            ("1-9", "jump to the Nth file"),
             ("b", "toggle file rail"),
             ("o", "open focused line in $EDITOR"),
         ],
