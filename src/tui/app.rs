@@ -500,6 +500,32 @@ impl App {
 
     fn handle_normal_key(&mut self, key: KeyEvent) {
         let half = self.viewport_height.max(1) / 2;
+        let full = self.viewport_height.max(1);
+
+        // Vim/less-style page navigation on Ctrl-modified keys. Checked
+        // before the `match key.code` below so the modifier is honored.
+        // (Ctrl+C is handled earlier in `handle_key`.)
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => {
+                    self.scroll_by(half as i64);
+                    return;
+                }
+                KeyCode::Char('u') => {
+                    self.scroll_by(-(half as i64));
+                    return;
+                }
+                KeyCode::Char('f') => {
+                    self.scroll_by(full as i64);
+                    return;
+                }
+                KeyCode::Char('b') => {
+                    self.scroll_by(-(full as i64));
+                    return;
+                }
+                _ => {}
+            }
+        }
 
         // Two-key sequence handling for `]h` / `[h` (next/prev hunk).
         // If a prefix is pending, consume it now.
@@ -576,6 +602,19 @@ impl App {
                     self.selected_file = idx;
                     self.scroll_y = row;
                     self.status = format!("← {}", self.review.display_path(idx));
+                }
+            }
+            // Number keys 1-9 jump directly to the Nth file (1-based). A
+            // muscle-memory shortcut for large multi-file diffs, where
+            // Tab-cycling to a far-down file is tedious. Falls through
+            // (no-op) when the index is out of range.
+            KeyCode::Char(c @ ('1'..='9')) => {
+                let n = (c as u8 - b'0') as usize;
+                if n <= self.review.file_count() {
+                    let idx = n - 1;
+                    self.selected_file = idx;
+                    self.scroll_y = ViewportQuery::file_start_row(&self.review, idx);
+                    self.status = format!("→ {}", self.review.display_path(idx));
                 }
             }
             // hunk navigation prefixes: `]` / `[` await a following `h`
@@ -779,6 +818,13 @@ impl App {
     /// Move to the next/prev search match (wraps).
     fn advance_match(&mut self, forward: bool) {
         if self.search.matches.is_empty() {
+            // Silent no-op previously: the user pressed n/N and saw nothing
+            // happen, which reads as a broken keybind. Surface why instead.
+            if self.search.active {
+                self.status = format!("no matches for {:?}", self.search.query);
+            } else {
+                self.status = "no search active (press / to search)".into();
+            }
             return;
         }
         let n = self.search.matches.len();
@@ -2069,5 +2115,131 @@ diff --git a/a.rs b/a.rs
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.scroll_y, 3);
+    }
+
+    fn ctrl(c: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    /// A three-file review, for testing the `1-9` jump-to-Nth-file keys.
+    fn three_file_app() -> App {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-a
++A
+diff --git a/b.rs b/b.rs
+--- b/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-b
++B
+diff --git a/c.rs b/c.rs
+--- c/c.rs
++++ c/c.rs
+@@ -1 +1 @@
+-c
++C
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        app
+    }
+
+    #[test]
+    fn number_key_jumps_to_nth_file() {
+        let mut app = three_file_app();
+        // Press `3` → should select the 3rd file (index 2) and scroll to its start.
+        app.handle_key(char_key('3'));
+        assert_eq!(app.selected_file, 2);
+        assert_eq!(app.current_path(), "c/c.rs");
+    }
+
+    #[test]
+    fn number_key_out_of_range_is_noop() {
+        let mut app = three_file_app();
+        let before = (app.selected_file, app.scroll_y);
+        // `9` is past the 3-file count: no-op, no crash.
+        app.handle_key(char_key('9'));
+        assert_eq!(app.selected_file, before.0);
+    }
+
+    #[test]
+    fn ctrl_d_scrolls_half_page_down() {
+        let mut app = three_file_app();
+        app.viewport_height = 6; // half = 3
+        app.scroll_y = 0;
+        let start = app.scroll_y;
+        app.handle_key(ctrl('d'));
+        assert_eq!(app.scroll_y, start + 3);
+    }
+
+    #[test]
+    fn ctrl_u_scrolls_half_page_up() {
+        let mut app = three_file_app();
+        app.viewport_height = 6; // half = 3
+        app.scroll_y = 5;
+        let start = app.scroll_y;
+        app.handle_key(ctrl('u'));
+        assert_eq!(app.scroll_y, start.saturating_sub(3));
+    }
+
+    #[test]
+    fn ctrl_f_scrolls_full_page_down() {
+        let mut app = three_file_app();
+        app.viewport_height = 4; // full = 4
+        app.scroll_y = 0;
+        let start = app.scroll_y;
+        app.handle_key(ctrl('f'));
+        assert_eq!(app.scroll_y, start + 4);
+    }
+
+    #[test]
+    fn ctrl_b_scrolls_full_page_up() {
+        let mut app = three_file_app();
+        app.viewport_height = 4; // full = 4
+        app.scroll_y = 5;
+        let start = app.scroll_y;
+        app.handle_key(ctrl('b'));
+        assert_eq!(app.scroll_y, start.saturating_sub(4));
+    }
+
+    #[test]
+    fn ctrl_d_clamps_at_max_scroll() {
+        let mut app = three_file_app();
+        app.viewport_height = 6;
+        let max = app.max_scroll();
+        app.scroll_y = max; // already at the bottom
+        app.handle_key(ctrl('d'));
+        assert_eq!(app.scroll_y, max);
+    }
+
+    #[test]
+    fn n_with_no_active_search_gives_hint_status() {
+        let mut app = three_file_app();
+        app.handle_key(char_key('n'));
+        // No search was ever started: the user should learn why nothing moved.
+        assert!(app.status.contains("no search active"), "got: {}", app.status);
+    }
+
+    #[test]
+    fn n_with_active_search_no_matches_gives_status() {
+        let mut app = three_file_app();
+        // Start a search for something that doesn't exist, then confirm.
+        app.handle_key(char_key('/'));
+        for c in "zzzznotpresent".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.search.active);
+        assert!(app.search.matches.is_empty());
+        // Now pressing `n` should surface the "no matches" reason, not be silent.
+        app.handle_key(char_key('n'));
+        assert!(app.status.contains("no matches"), "got: {}", app.status);
     }
 }

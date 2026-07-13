@@ -14,6 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of having to scroll into each file to see its stats. The status bar's
   per-file/total tallies are unchanged.
 
+### Added — Navigation
+- **Vim/less-style page keys** — `Ctrl-D`/`Ctrl-U` scroll half a page
+  down/up, `Ctrl-F`/`Ctrl-B` scroll a full page. Mirrors the existing
+  `J`/`K` (half-page) keys with the muscle-memory Ctrl variants.
+- **`1`–`9` jump to the Nth file** — a direct shortcut for large multi-file
+  diffs where Tab-cycling to a far-down file is tedious. Out-of-range
+  numbers are a no-op.
+- **`n`/`N` now report why nothing moved** — pressing them with no active
+  search (or with a search that has no matches) sets a status hint instead
+  of being silent (which read as a broken keybind).
+
 ### Added — Development
 - **`pre-commit` git hook (auto-installed)** — running `cargo test` in a fresh
   clone now installs a `pre-commit` hook (via [cargo-husky](https://github.com/rhysd/cargo-husky))

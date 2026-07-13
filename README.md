@@ -150,6 +150,8 @@ git show HEAD   # → launches the review TUI
 | `k` / `↑` | scroll up one row |
 | `J` / `PgDn` | scroll half a page |
 | `K` / `PgUp` | scroll half a page up |
+| `Ctrl-D` / `Ctrl-F` | scroll down (half / full page) |
+| `Ctrl-U` / `Ctrl-B` | scroll up (half / full page) |
 | `g` / `Home` | jump to top |
 | `G` / `End` | jump to bottom |
 | `]h` | next hunk (wraps across files) |
@@ -157,6 +159,7 @@ git show HEAD   # → launches the review TUI
 | `Space` | next hunk (quick `]h` alias) |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
+| `1`–`9` | jump to the Nth file |
 | `b` | toggle the file-rail sidebar |
 | click file rail | select that file |
 | click stream | position the viewport on that row |
