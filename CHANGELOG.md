@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — Search & filter
+- **Inline search-match highlighting** — the active search match now shows
+  *where* in the line the hit is, instead of painting the whole line one
+  color. Every occurrence of the query on the current match row gets the gold
+  active style; the rest of the line keeps its syntax color under a subdued
+  background. Other match rows keep their whole-line subdued bg.
+- **Ctrl-U / Ctrl-W in the search and filter prompts** — Ctrl-U clears the
+  whole input, Ctrl-W deletes the trailing word (readline
+  backward-kill-word semantics, including the preceding whitespace). Unix
+  users reach for these instinctively; previously they got appended as
+  literal characters.
+
 ### Added — Reviewer experience
 - **Per-file change tally in the file rail** — each file in the left rail now
   shows a compact `+ins` (green) / `−del` (red) tally, right-aligned next to the
