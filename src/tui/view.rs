@@ -75,11 +75,14 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
 
 fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
     let visible = app.visible_files();
+    // Inner width available for a rail row, minus the left border and the
+    // " N " index prefix. Used to pad the path so the +/- tail right-aligns.
+    let rail_inner_w = area.width.saturating_sub(1) as usize;
     let items: Vec<ListItem> = visible
         .iter()
         .map(|&i| {
             let f = &app.review.files[i];
-            let label = format!(" {}. {}", i + 1, short_path(&f.display_path));
+            let path = short_path(&f.display_path);
             let style = if i == app.selected_file {
                 Style::default()
                     .fg(app.theme.selection_fg)
@@ -88,7 +91,26 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default()
             };
-            ListItem::new(Line::from(Span::styled(label, style)))
+            // Compact per-file change tally: `+ins` (green) next to `−del`
+            // (red), zero sides omitted (e.g. an add-only file shows `+12`,
+            // a pure delete `−3`). Colored so a glance at the rail shows
+            // where the change mass sits.
+            let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
+            let head = format!(" {}. ", i + 1);
+            // Pad the path so the tally right-aligns within the row. Count
+            // widths before moving the strings into Spans below.
+            let tail = format!("  {}{}", plus, minus);
+            let need_pad = !plus.is_empty() || !minus.is_empty();
+            let used = head.chars().count() + path.chars().count();
+            let mut spans: Vec<Span> =
+                vec![Span::styled(head, style), Span::styled(path, style)];
+            if need_pad {
+                let pad = rail_inner_w.saturating_sub(used + tail.chars().count());
+                spans.push(Span::raw(" ".repeat(pad)));
+                spans.push(Span::styled(plus, Style::default().fg(app.theme.add)));
+                spans.push(Span::styled(minus, Style::default().fg(app.theme.delete)));
+            }
+            ListItem::new(Line::from(spans))
         })
         .collect();
 
@@ -745,4 +767,89 @@ fn short_path(path: &str) -> String {
         return format!("…{}", &last[last.len() - 22..]);
     }
     format!("…{}", &path[path.len() - 22..])
+}
+
+/// Build the two halves of a file's per-file change tally for the rail.
+/// Returns `("+N", "−M")` with each side empty when it's zero, so an
+/// add-only file shows just `+12` and a pure delete just `−3`. Uses the
+/// Unicode minus (`−`) to match the status bar's existing style.
+fn file_stats_tail(inserts: u64, deletes: u64) -> (String, String) {
+    let plus = if inserts > 0 { format!("+{}", inserts) } else { String::new() };
+    let minus = if deletes > 0 { format!("−{}", deletes) } else { String::new() };
+    (plus, minus)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_stats_tail_both_sides() {
+        let (plus, minus) = file_stats_tail(12, 3);
+        assert_eq!(plus, "+12");
+        assert_eq!(minus, "−3");
+    }
+
+    #[test]
+    fn file_stats_tail_add_only() {
+        let (plus, minus) = file_stats_tail(7, 0);
+        assert_eq!(plus, "+7");
+        assert_eq!(minus, "");
+    }
+
+    #[test]
+    fn file_stats_tail_delete_only() {
+        let (plus, minus) = file_stats_tail(0, 5);
+        assert_eq!(plus, "");
+        assert_eq!(minus, "−5");
+    }
+
+    #[test]
+    fn file_stats_tail_no_changes() {
+        // A context-only file (no +/-) renders no tally — keeps the rail clean.
+        let (plus, minus) = file_stats_tail(0, 0);
+        assert!(plus.is_empty());
+        assert!(minus.is_empty());
+    }
+
+    /// The rail should now render a per-file +/- tally alongside each path.
+    /// Uses the same sample app the other draw tests use, rendered to a
+    /// buffer; we assert the add count appears as a styled span.
+    #[test]
+    fn draw_rail_shows_per_file_tally() {
+        use crate::ir::parse_unified_diff;
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,2 +1,2 @@
+-foo
++bar
+ baz
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, crate::highlight::Highlighter::load_noop());
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // a.rs has +1/−1, b.rs has +1/−1. Both "+1" and the Unicode minus "−1"
+        // should appear in the rendered rail area.
+        assert!(rendered.contains("+1"), "rail should show +1 tally: {rendered}");
+        assert!(rendered.contains("−1"), "rail should show −1 tally: {rendered}");
+    }
 }
