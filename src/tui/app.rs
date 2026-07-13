@@ -2224,7 +2224,11 @@ diff --git a/c.rs b/c.rs
         let mut app = three_file_app();
         app.handle_key(char_key('n'));
         // No search was ever started: the user should learn why nothing moved.
-        assert!(app.status.contains("no search active"), "got: {}", app.status);
+        assert!(
+            app.status.contains("no search active"),
+            "got: {}",
+            app.status
+        );
     }
 
     #[test]
