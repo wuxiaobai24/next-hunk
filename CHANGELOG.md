@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Reviewer experience
+- **Per-file change tally in the file rail** — each file in the left rail now
+  shows a compact `+ins` (green) / `−del` (red) tally, right-aligned next to the
+  path, with zero sides omitted (an add-only file shows `+12`, a pure delete
+  `−3`). Lets the reviewer spot where the change mass sits at a glance, instead
+  of having to scroll into each file to see its stats. The status bar's
+  per-file/total tallies are unchanged.
+
 ### Added — Development
 - **`pre-commit` git hook (auto-installed)** — running `cargo test` in a fresh
   clone now installs a `pre-commit` hook (via [cargo-husky](https://github.com/rhysd/cargo-husky))
