@@ -63,7 +63,7 @@
 在现有 `serve` + socket 上加厚 **CLI 语义**（不必上 HTTP broker monorepo）：
 
 - [x] `list` / `get`：发现活会话
-- [ ] `review --json`：文件/hunk 结构（默认不含全文 patch）
+- [x] `review --json`：文件/hunk 结构（默认不含全文 patch）
 - [ ] `navigate`：file / hunk / line
 - [ ] `comment add|apply|list|rm`（可先无 markup）
 - [ ] `reload`：换 diff/show 内容且尽量保 focus/notes/decisions

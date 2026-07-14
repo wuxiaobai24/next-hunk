@@ -26,6 +26,7 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
+use crate::ir::Review;
 use crate::tui::app::{FocusTarget, Note, Selections};
 
 /// A request from a CLI client (`push` / `decision`), paired with the channel
@@ -50,6 +51,76 @@ pub enum ServerCommand {
     Decision,
     /// `next-hunk get` / `next-hunk list`: request session metadata.
     Info,
+    /// `next-hunk review --json`: request file/hunk structure.
+    Review,
+}
+
+/// A serializable summary of one file in the review, suitable for agent
+/// consumption. Contains file paths and hunk metadata but **not** full line
+/// content by default (agents request the full patch separately if needed).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FileSummary {
+    pub display_path: String,
+    pub old_path: Option<String>,
+    pub new_path: Option<String>,
+    pub inserts: u64,
+    pub deletes: u64,
+    pub hunks: Vec<HunkSummary>,
+}
+
+/// A serializable summary of one hunk.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct HunkSummary {
+    pub header: String,
+    pub old_start: u32,
+    pub old_count: u32,
+    pub new_start: u32,
+    pub new_count: u32,
+    pub lines: usize,
+}
+
+/// Response to a `Review` command: full file/hunk structure.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewSummary {
+    pub file_count: usize,
+    pub stream_len: usize,
+    pub inserts: u64,
+    pub deletes: u64,
+    pub files: Vec<FileSummary>,
+}
+
+impl From<&Review> for ReviewSummary {
+    fn from(review: &Review) -> Self {
+        Self {
+            file_count: review.file_count(),
+            stream_len: review.stream_len,
+            inserts: review.inserts,
+            deletes: review.deletes,
+            files: review
+                .files
+                .iter()
+                .map(|f| FileSummary {
+                    display_path: f.display_path.clone(),
+                    old_path: f.old_path.clone(),
+                    new_path: f.new_path.clone(),
+                    inserts: f.inserts,
+                    deletes: f.deletes,
+                    hunks: f
+                        .hunks
+                        .iter()
+                        .map(|h| HunkSummary {
+                            header: review.text(h.header.clone()).to_string(),
+                            old_start: h.old_start,
+                            old_count: h.old_count,
+                            new_start: h.new_start,
+                            new_count: h.new_count,
+                            lines: h.lines.len(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Server → client reply. Same wire format.
@@ -67,6 +138,8 @@ pub enum ServerReply {
         /// Number of files in the current review.
         file_count: usize,
     },
+    /// Response to `Review`: file/hunk structure summary.
+    Review(ReviewSummary),
     /// Server-side error (e.g. malformed command).
     Error(String),
 }
@@ -410,6 +483,57 @@ mod tests {
                 assert_eq!(file_count, 3);
             }
             other => panic!("expected Info, got {other:?}"),
+        }
+        drainer.join().unwrap();
+    }
+
+    #[test]
+    fn review_returns_summary() {
+        let sock = TempSocket::new("review");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let summary = ReviewSummary {
+            file_count: 1,
+            stream_len: 5,
+            inserts: 1,
+            deletes: 1,
+            files: vec![FileSummary {
+                display_path: "a.rs".into(),
+                old_path: Some("a.rs".into()),
+                new_path: Some("a.rs".into()),
+                inserts: 1,
+                deletes: 1,
+                hunks: vec![HunkSummary {
+                    header: "@@ -1 +1 @@".into(),
+                    old_start: 1,
+                    old_count: 1,
+                    new_start: 1,
+                    new_count: 1,
+                    lines: 2,
+                }],
+            }],
+        };
+        let want = summary.clone();
+        let drainer = std::thread::spawn(move || {
+            let mut got = listener.drain();
+            while got.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                got = listener.drain();
+            }
+            for r in got {
+                let _ = r.reply.send(ServerReply::Review(want.clone()));
+            }
+        });
+
+        let reply = send_command(&sock.path, &ServerCommand::Review).unwrap();
+        match reply {
+            ServerReply::Review(s) => {
+                assert_eq!(s.file_count, 1);
+                assert_eq!(s.files.len(), 1);
+                assert_eq!(s.files[0].display_path, "a.rs");
+                assert_eq!(s.files[0].hunks.len(), 1);
+                assert_eq!(s.files[0].hunks[0].header, "@@ -1 +1 @@");
+            }
+            other => panic!("expected Review, got {other:?}"),
         }
         drainer.join().unwrap();
     }

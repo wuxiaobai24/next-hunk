@@ -348,6 +348,10 @@ fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server
                 file_count: app.review.file_count(),
             }
         }
+        ServerCommand::Review => {
+            // Return file/hunk structure (no full patch text).
+            ServerReply::Review(server::ReviewSummary::from(&app.review))
+        }
     }
 }
 

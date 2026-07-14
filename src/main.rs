@@ -157,6 +157,15 @@ enum Commands {
         /// Optional repo hash to look up (defaults to current repo).
         hash: Option<String>,
     },
+    /// Print the current review's file/hunk structure as JSON.
+    ///
+    /// Connects to a running serve session and dumps the file/hunk summary
+    /// (paths, insert/delete counts, hunk ranges) without full patch text.
+    /// Without an argument, uses the current repo's socket.
+    Review {
+        /// Optional repo hash to look up (defaults to current repo).
+        hash: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -381,6 +390,7 @@ fn run() -> Result<()> {
         Commands::Decision => run_decision(),
         Commands::List => run_list(),
         Commands::Get { hash } => run_get(hash),
+        Commands::Review { hash } => run_review(hash),
     }
 }
 
@@ -570,21 +580,7 @@ fn run_list() -> Result<()> {
 /// `next-hunk get [hash]`: show info for a specific session.
 #[cfg(all(feature = "serve", unix))]
 fn run_get(hash: Option<String>) -> Result<()> {
-    let socket = if let Some(h) = &hash {
-        // Look up by hash: scan for the matching socket.
-        let sessions = next_hunk::cli_parse::discover_live_sockets();
-        let found = sessions.iter().find(|(_, hh)| hh == h);
-        match found {
-            Some((path, _)) => path.clone(),
-            None => bail!("no live session with hash {h}"),
-        }
-    } else {
-        // Default to current repo.
-        let cwd = std::env::current_dir()?;
-        let repo = find_repo(&cwd)?;
-        next_hunk::cli_parse::runtime_socket_path(&repo)
-    };
-
+    let socket = resolve_socket(hash)?;
     match next_hunk::tui::server::send_command(
         &socket,
         &next_hunk::tui::server::ServerCommand::Info,
@@ -601,6 +597,41 @@ fn run_get(hash: Option<String>) -> Result<()> {
         Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
+    }
+}
+
+/// `next-hunk review [hash]`: print the review structure as JSON.
+#[cfg(all(feature = "serve", unix))]
+fn run_review(hash: Option<String>) -> Result<()> {
+    let socket = resolve_socket(hash)?;
+    match next_hunk::tui::server::send_command(
+        &socket,
+        &next_hunk::tui::server::ServerCommand::Review,
+    ) {
+        Ok(next_hunk::tui::server::ServerReply::Review(summary)) => {
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+            Ok(())
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
+/// Resolve a socket path from an optional hash or the current repo.
+#[cfg(all(feature = "serve", unix))]
+fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
+    if let Some(h) = &hash {
+        let sessions = next_hunk::cli_parse::discover_live_sockets();
+        let found = sessions.iter().find(|(_, hh)| hh == h);
+        match found {
+            Some((path, _)) => Ok(path.clone()),
+            None => bail!("no live session with hash {h}"),
+        }
+    } else {
+        let cwd = std::env::current_dir()?;
+        let repo = find_repo(&cwd)?;
+        Ok(next_hunk::cli_parse::runtime_socket_path(&repo))
     }
 }
 
@@ -667,6 +698,11 @@ fn run_list() -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_get(_hash: Option<String>) -> Result<()> {
     bail!("`get` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_review(_hash: Option<String>) -> Result<()> {
+    bail!("`review` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[allow(clippy::too_many_arguments)]
