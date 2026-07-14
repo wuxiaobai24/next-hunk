@@ -67,8 +67,8 @@
 - [x] `navigate`：file / hunk / line
 - [x] `comment add|apply|list|rm`（可先无 markup）
 - [x] `reload`：换 diff/show 内容且尽量保 focus/notes/decisions
-- [ ] 重写 `skill/next-hunk`：list → review → navigate → comment 工作流
-- [ ] 保留 `--select` / `decision` 为审批差异点
+- [x] 重写 `skill/next-hunk`：list → review → navigate → comment 工作流
+- [x] 保留 `--select` / `decision` 为审批差异点
 
 ### 0.7 — 打磨
 
@@ -89,10 +89,10 @@
 
 **Agent：**
 
-- [ ] 人先开 TUI/serve
-- [ ] agent：`list` → `review --json` → `navigate` → `comment` → 可选 `reload` / `decision`
-- [ ] skill 与 hunk-review 步骤同构（命令名可不同）
-- [ ] `--select` 仍可用
+- [x] 人先开 TUI/serve
+- [x] agent：`list` → `review --json` → `navigate` → `comment` → 可选 `reload` / `decision`
+- [x] skill 与 hunk-review 步骤同构（命令名可不同）
+- [x] `--select` 仍可用
 
 **工程：**
 
