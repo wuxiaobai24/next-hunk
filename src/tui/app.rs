@@ -1012,6 +1012,14 @@ impl App {
             }
         };
 
+        // Build path→index maps for the new review so we can re-map indices.
+        let new_file_idx: std::collections::HashMap<&str, usize> = new_review
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.display_path.as_str(), i))
+            .collect();
+
         // Preserve selected_file by display path.
         let old_path = self.current_path().to_string();
         self.selected_file = new_review
@@ -1019,6 +1027,42 @@ impl App {
             .iter()
             .position(|f| f.display_path == old_path)
             .unwrap_or(0);
+
+        // Preserve decisions by re-mapping (file_path, hunk_idx) pairs.
+        let old_decisions = std::mem::take(&mut self.decisions);
+        self.decisions = old_decisions
+            .into_iter()
+            .filter_map(|(id, decision)| {
+                let file = self.review.files.get(id.file_idx)?;
+                let new_fi = *new_file_idx.get(file.display_path.as_str())?;
+                let new_file = new_review.files.get(new_fi)?;
+                if id.hunk_idx < new_file.hunks.len() {
+                    Some((
+                        HunkId {
+                            file_idx: new_fi,
+                            hunk_idx: id.hunk_idx,
+                        },
+                        decision,
+                    ))
+                } else {
+                    None // hunk no longer exists
+                }
+            })
+            .collect();
+
+        // Preserve folded by re-mapping file indices.
+        let old_folded: Vec<usize> = self.folded.iter().copied().collect();
+        self.folded.clear();
+        for fi in &old_folded {
+            if let Some(file) = self.review.files.get(*fi) {
+                if let Some(&new_fi) = new_file_idx.get(file.display_path.as_str()) {
+                    self.folded.insert(new_fi);
+                }
+            }
+        }
+
+        // Preserve focus_target if set (re-apply after review swap).
+        let had_focus = self.focus_target.is_some();
 
         // New base; re-apply the ignore-ws view if it's active so the toggled
         // state survives a hot-reload.
@@ -1029,6 +1073,11 @@ impl App {
             self.base_review.clone()
         };
         self.cache.invalidate();
+
+        // Re-apply focus target to the new review.
+        if had_focus {
+            self.apply_focus();
+        }
 
         // Clamp scroll into the new bounds.
         self.scroll_y = self.scroll_y.min(self.max_scroll());
@@ -2072,6 +2121,182 @@ diff --git a/a.rs b/a.rs
         assert_eq!(app.review.file_count(), 1);
         assert_eq!(app.selected_file, 0, "clamped to 0 when old path is gone");
         assert_eq!(app.current_path(), "a.rs");
+    }
+
+    #[test]
+    fn reload_preserves_decisions_by_path() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // Set a decision on a.rs hunk0 (file_idx=0, hunk_idx=0).
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        // Set a decision on b.rs hunk0 (file_idx=1, hunk_idx=0).
+        app.decisions.insert(
+            HunkId {
+                file_idx: 1,
+                hunk_idx: 0,
+            },
+            Decision::Reject,
+        );
+        assert_eq!(app.decisions.len(), 2);
+
+        app.reload_review(&after);
+        // Both files still exist with the same hunk count, so both decisions
+        // should be preserved (re-mapped by path).
+        assert_eq!(
+            app.decisions.len(),
+            2,
+            "both decisions should survive reload"
+        );
+        // Verify by path in selections output.
+        let s = app.selections();
+        assert!(s.accepted.contains(&"a.rs:h1".to_string()));
+        assert!(s.rejected.contains(&"b.rs:h1".to_string()));
+    }
+
+    #[test]
+    fn reload_drops_decisions_for_removed_hunks() {
+        let (before, _after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // Set a decision on a hunk index that won't exist after reload.
+        // before has 1 hunk per file; after also has 1 per file, so this test
+        // uses a different pair where b.rs shrinks.
+        let before2 = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+- old1
++ new1
+@@ -5,2 +5,2 @@
+- old2
++ new2
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+- foo
++ bar
+@@ -3,1 +3,1 @@
+- baz
++ qux
+";
+        let after2 = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+- old1
++ new1
+@@ -5,2 +5,2 @@
+- old2
++ new2
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1,1 +1,1 @@
+- foo
++ bar
+";
+        let review2 = parse_unified_diff(before2).unwrap();
+        let mut app2 = App::with_highlighter(review2, highlighter());
+        app2.viewport_height = 1;
+        // a.rs hunk0 → accept, a.rs hunk1 → reject, b.rs hunk1 (index 1) → accept
+        app2.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        app2.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 1,
+            },
+            Decision::Reject,
+        );
+        app2.decisions.insert(
+            HunkId {
+                file_idx: 1,
+                hunk_idx: 1,
+            },
+            Decision::Accept,
+        );
+
+        app2.reload_review(after2);
+        // b.rs hunk1 (index 1) is gone in after2 → that decision should be dropped.
+        // a.rs still has 2 hunks → both decisions survive.
+        let s = app2.selections();
+        assert!(s.accepted.contains(&"a.rs:h1".to_string()));
+        assert!(s.rejected.contains(&"a.rs:h2".to_string()));
+        // b.rs:h2 was removed → should not appear in any bucket
+        assert!(!s.accepted.contains(&"b.rs:h2".to_string()));
+        assert!(!s.undecided.contains(&"b.rs:h2".to_string()));
+    }
+
+    #[test]
+    fn reload_preserves_folded_by_path() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        // Fold b.rs (file_idx=1).
+        app.folded.insert(1);
+        assert!(app.folded.contains(&1));
+
+        app.reload_review(&after);
+        // b.rs still exists at file_idx=1, so fold should be preserved.
+        assert!(
+            app.folded.contains(&1),
+            "fold for b.rs should survive reload"
+        );
+    }
+
+    #[test]
+    fn reload_preserves_notes() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "check this line".into(),
+        });
+        assert_eq!(app.notes.len(), 1);
+
+        app.reload_review(&after);
+        assert_eq!(app.notes.len(), 1, "notes should survive reload unchanged");
+    }
+
+    #[test]
+    fn reload_preserves_focus_target() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 4;
+        // Set focus_target but don't consume it yet.
+        app.focus_target = Some(FocusTarget::File("b.rs".into()));
+
+        app.reload_review(&after);
+        // Focus should still be set (re-applied to new review).
+        // apply_focus should scroll to b.rs start.
+        // after: a.rs rows 0-3, b.rs rows 4-8. viewport_height=4 → max_scroll=4.
+        let b_start = ViewportQuery::file_start_row(&app.review, 1);
+        assert_eq!(b_start, 4, "b.rs should start at row 4");
+        assert_eq!(app.scroll_y, 4, "focus should be re-applied after reload");
     }
 
     // ---- --focus: apply_focus ----
