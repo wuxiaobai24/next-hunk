@@ -11,6 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.next-hunk/config.toml` (or the user-level config) hides the line-number
   gutter at startup. Previously the field was parsed but silently ignored; the
   gutter was always on. `#` still toggles it at runtime.
+- **`include_untracked` config & `--include-untracked` CLI flag** — untracked
+  files now appear in the worktree diff review when enabled. Off by default
+  (safe). Config key: `include_untracked = true` in `.next-hunk/config.toml`.
+  CLI flag: `next-hunk diff --include-untracked`. The `serve` subcommand also
+  accepts the flag. Untracked files are rendered as new-file additions from
+  `/dev/null`.
 
 ## [0.3.0] - 2026-07-14
 

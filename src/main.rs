@@ -36,6 +36,9 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
+        /// Include untracked files in worktree diff (default: off).
+        #[arg(long)]
+        include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal). Agent-bridge: point the human
         /// at what matters.
@@ -98,6 +101,9 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
+        /// Include untracked files in worktree diff (default: off).
+        #[arg(long)]
+        include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal).
         #[arg(long)]
@@ -149,6 +155,7 @@ fn run() -> Result<()> {
         staged: false,
         watch: false,
         no_highlight: false,
+        include_untracked: false,
         focus: None,
         note: Vec::new(),
         select: false,
@@ -158,6 +165,7 @@ fn run() -> Result<()> {
             staged,
             watch,
             no_highlight,
+            include_untracked,
             focus,
             note,
             select,
@@ -193,6 +201,7 @@ fn run() -> Result<()> {
                     staged: if staged { Some(true) } else { None },
                     watch: if watch { Some(true) } else { None },
                     highlight: if no_highlight { Some(false) } else { None },
+                    include_untracked: if include_untracked { Some(true) } else { None },
                 },
             );
 
@@ -202,9 +211,14 @@ fn run() -> Result<()> {
                 );
             }
 
-            let text = git_diff(&repo, resolved.staged, &extra)?;
+            let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
             let reloader = if resolved.watch {
-                Some(make_diff_reloader(repo.clone(), resolved.staged, extra))
+                Some(make_diff_reloader(
+                    repo.clone(),
+                    resolved.staged,
+                    extra,
+                    resolved.include_untracked,
+                ))
             } else {
                 None
             };
@@ -259,7 +273,7 @@ fn run() -> Result<()> {
                 read_patch_input(&path)?
             } else {
                 let repo = find_repo(&std::env::current_dir()?)?;
-                git_diff(&repo, staged, &[])?
+                git_diff(&repo, staged, &[], false)?
             };
             if text.trim().is_empty() {
                 println!("files=0 stream_rows=0 arena_bytes=0");
@@ -301,19 +315,35 @@ fn run() -> Result<()> {
             staged,
             watch,
             no_highlight,
+            include_untracked,
             focus,
             note,
             extra,
-        } => run_serve(staged, watch, no_highlight, focus, note, extra),
+        } => run_serve(
+            staged,
+            watch,
+            no_highlight,
+            include_untracked,
+            focus,
+            note,
+            extra,
+        ),
         Commands::Push { focus, note } => run_push(focus, note),
         Commands::Decision => run_decision(),
     }
 }
 
 /// Build the live-reload closure for `--watch`: re-runs the same git diff.
-/// Captures the repo path, staged flag, and pathspecs by value.
-fn make_diff_reloader(repo: PathBuf, staged: bool, extra: Vec<String>) -> next_hunk::tui::Reloader {
-    Box::new(move || git_diff(&repo, staged, &extra).context("re-run git diff for --watch"))
+/// Captures the repo path, staged flag, pathspecs, and untracked flag by value.
+fn make_diff_reloader(
+    repo: PathBuf,
+    staged: bool,
+    extra: Vec<String>,
+    include_untracked: bool,
+) -> next_hunk::tui::Reloader {
+    Box::new(move || {
+        git_diff(&repo, staged, &extra, include_untracked).context("re-run git diff for --watch")
+    })
 }
 
 /// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
@@ -326,6 +356,7 @@ fn run_serve(
     staged: bool,
     watch: bool,
     no_highlight: bool,
+    include_untracked: bool,
     focus: Option<String>,
     note: Vec<String>,
     extra: Vec<String>,
@@ -353,6 +384,7 @@ fn run_serve(
             staged: if staged { Some(true) } else { None },
             watch: if watch { Some(true) } else { None },
             highlight: if no_highlight { Some(false) } else { None },
+            include_untracked: if include_untracked { Some(true) } else { None },
         },
     );
 
@@ -365,9 +397,14 @@ fn run_serve(
     // (e.g. another serve running) is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&repo)?;
 
-    let text = git_diff(&repo, resolved.staged, &extra)?;
+    let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
     let reloader = if resolved.watch {
-        Some(make_diff_reloader(repo.clone(), resolved.staged, extra))
+        Some(make_diff_reloader(
+            repo.clone(),
+            resolved.staged,
+            extra,
+            resolved.include_untracked,
+        ))
     } else {
         None
     };
@@ -481,6 +518,7 @@ fn run_serve(
     _staged: bool,
     _watch: bool,
     _no_highlight: bool,
+    _include_untracked: bool,
     _focus: Option<String>,
     _note: Vec<String>,
     _extra: Vec<String>,

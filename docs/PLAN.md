@@ -1,0 +1,134 @@
+# next-hunk 路线图
+
+> 定位：**实用的 diff 查看器 + agent↔human 审查桥**。  
+> 对标：[modem-dev/hunk](https://github.com/modem-dev/hunk)（体验与 agent 主路径，不是 monorepo 克隆）。  
+> 差异化保留：紧凑 IR + 视口物化性能、`--select` 审批闸门、纯 Rust 静态分发。
+
+当前版本：**0.3.0**。本文件是产品路线源；实现细节见 `ARCHITECTURE.md` / `PERF.md`。
+
+---
+
+## 0.8 对齐定义
+
+**目标：** 日常审查 + agent 桥达到 hunk **主路径约 80% 可用性**。
+
+| 算对齐 | 不算 0.8 范围 |
+|--------|----------------|
+| 大 diff 丝滑 review（已有基础，继续守门） | 复刻 OpenTUI / React 栈 |
+| 两文件 diff、untracked worktree（可关） | jj / Sapling 一等支持 |
+| 文件折叠 | 完整 HTTP/WS session-broker monorepo |
+| 至少一种 split **或** stack 布局（auto 可选） | STML 富文本 note、可嵌入组件库 |
+| 配置真接线（`line_numbers` 等，消灭 silent no-op） | Homebrew / 社区运营对标 |
+| 轻量 live session CLI：list / review / navigate / comment / reload | MCP 全套运维面 |
+| skill 与 hunk-review **工作流同构** | 像素级 UI 抄袭 |
+| 保留并强化 `--select` + `decision` | Windows 完整 serve（可推 0.9） |
+
+**明确不做（至少到 0.8）：** 完整 git 客户端、以二进制体积为 KPI、为抄布局破坏 IR 不变量。
+
+---
+
+## 里程碑
+
+### 已交付（0.3 摘要）
+
+- IR + viewport 二分、虚拟化多文件 TUI、gix worktree/staged/show、patch/pager
+- 高亮（同步 viewport）、word-diff、搜索/过滤、hunk 导航、watch、主题 chrome、行号 gutter（运行时 `#`）
+- Agent：`--focus` / `--note` / `--select`；`serve` + `push` / `decision`；skill
+- Bench：parse + viewport；install.sh / musl dist
+
+已知欠账（0.4 前要处理）：
+
+- `config.line_numbers` 可解析但 **未进 `ResolvedConfig`**（silent no-op）
+- 文档 phase 勾选过期（ARCHITECTURE 与现状漂移）
+- 无两文件 diff / untracked / 折叠 / 真 split|stack
+- Agent live 面远薄于 hunk（无 review 结构 inspect、comment CRUD、reload）
+
+### 0.4 — 诚实补齐（先做）
+
+- [ ] `line_numbers` 配置接线，或从 config/README 删除
+- [x] worktree diff 支持 untracked（可配置/可关）
+- [ ] `next-hunk diff a b` 两文件直比
+- [ ] 文件折叠（`zc`/`zo` 或等价）
+- [ ] README Status / 本文件与代码一致（ARCHITECTURE 勾选可另 PR）
+
+### 0.5 — 布局与观感
+
+- [ ] 落地 **一种** 布局：优先 **split** 或 **stack**（先一种 + 窄终端可退化）
+- [ ] 布局变更不破坏 viewport-only 物化；过 PERF 门禁再考虑默认
+- [ ] light/dark 与 syntect 语法主题一致（至少 light 不再固定 dark 语法）
+- [ ] wrap / 长行策略可预期（截断或 wrap，配置生效）
+
+### 0.6 — Agent session v2（轻量 live control）
+
+在现有 `serve` + socket 上加厚 **CLI 语义**（不必上 HTTP broker monorepo）：
+
+- [ ] `list` / `get`：发现活会话
+- [ ] `review --json`：文件/hunk 结构（默认不含全文 patch）
+- [ ] `navigate`：file / hunk / line
+- [ ] `comment add|apply|list|rm`（可先无 markup）
+- [ ] `reload`：换 diff/show 内容且尽量保 focus/notes/decisions
+- [ ] 重写 `skill/next-hunk`：list → review → navigate → comment 工作流
+- [ ] 保留 `--select` / `decision` 为审批差异点
+
+### 0.7 — 打磨
+
+- [ ] watch + session 语义不丢
+- [ ] 搜索/导航/状态提示与主路径一致
+- [ ] 公开一份 vs delta（或 vs hunk）的延迟/RSS 说明（可粗）
+- [ ] 异步高亮（gen-id 取消）按需
+
+### 0.8 — 对齐验收（DoD）
+
+**人用：**
+
+- [ ] untracked 可审可关
+- [ ] 两文件 diff
+- [ ] 文件折叠
+- [ ] 至少一种 split 或 stack，窄终端不炸
+- [ ] 配置字段无 silent no-op；主题与语法高亮不打架
+
+**Agent：**
+
+- [ ] 人先开 TUI/serve
+- [ ] agent：`list` → `review --json` → `navigate` → `comment` → 可选 `reload` / `decision`
+- [ ] skill 与 hunk-review 步骤同构（命令名可不同）
+- [ ] `--select` 仍可用
+
+**工程：**
+
+- [ ] huge fixture 打开/滚动仍过内部 gate
+- [ ] CHANGELOG 用户可见项齐全
+
+---
+
+## 工作量粗估（单人全职，范围克制）
+
+| 段 | 约 |
+|----|----|
+| 0.4 | 1–2 周 |
+| 0.5 | 3–6 周（布局风险最高） |
+| 0.6 | 3–5 周 |
+| 0.7–0.8 | 2–4 周 |
+| **合计** | **约 2.5–4 个月** |
+
+若强上 jj/sl + 完整 broker + 双布局 auto 全开 → 明显超出 0.8。
+
+---
+
+## 风险
+
+1. **为抄 split 破坏 IR** — 布局单独一层，继续只物化视口。  
+2. **为抄 broker 上大 daemon** — 0.6 只加厚 CLI 语义。  
+3. **jj/sl 挤进 0.8 关键路径** — 推后。  
+4. **文档再漂移** — 以本文件为准，发版时同步勾选。
+
+---
+
+## 暂缓（0.8 后）
+
+- jj / Sapling 适配  
+- 完整 session-broker / MCP  
+- STML / 富文本 note  
+- OpenTUI 式可嵌入组件  
+- parse fuzz、增量 IR 编辑（非全量 reload）  
+- CLI「有 socket 就转发」无感切换（可评估，非必须）
