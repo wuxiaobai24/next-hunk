@@ -17,30 +17,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI flag: `next-hunk diff --include-untracked`. The `serve` subcommand also
   accepts the flag. Untracked files are rendered as new-file additions from
   `/dev/null`.
-- **`next-hunk filediff <old> <new>`** — diff two arbitrary files on disk using
-  gix's diff engine and review them in the TUI. Works both inside and outside
-  git repositories (requires a containing repo for the object store). Relative
-  paths are resolved against the repo worktree root.
-- **`zc`/`zo` fold/unfold current file** — `zc` (close fold) collapses the
-  current file's body so only its header is visible; `zo` (open fold) expands
-  it. Follows the vim-style two-key prefix pattern (`z` waits for `c`/`o`),
-  same as `]h`/`[h` for hunk jumps. Fold state is preserved across scroll and
-  file switches.
-- **Stack layout mode (`layout = "stack"`)** — alternative diff presentation
-  that shows old content (context + deletes) then new content (context + adds)
-  in two stacked blocks per file, separated by `▌ old` / `▌ new` labels. Set
-  `layout = "stack"` in `.next-hunk/config.toml` (default is `"unified"`).
-  Falls back to unified when the terminal is narrower than 40 columns.
-- **Syntax highlight follows the UI theme** — light mode now uses the
-  `base16-ocean.light` syntect theme instead of being stuck on a dark syntax
-  palette. Dark mode keeps `base16-ocean.dark`. Auto mode selects the matching
-  theme via `$COLORFGBG`. Config-driven theme switching (`t` key or `theme`
-  config) also swaps the syntax theme.
 - **`wrap` config for long-line behavior** — set `wrap = true` in
   `.next-hunk/config.toml` to wrap long lines in the diff stream pane
   (default `false`, truncates). Ratatui's `Paragraph::wrap` is used so no
   viewport or IR changes were needed — wrapping is a presentation-layer
   property applied during rendering.
+- **Stack layout mode (`layout = "stack"`)** — alternative diff presentation
+  that shows old content (context + deletes) then new content (context + adds)
+  in two stacked blocks per file, separated by `▌ old` / `▌ new` labels. Set
+  `layout = "stack"` in `.next-hunk/config.toml` (default is `"unified"`).
+  Falls back to unified when the terminal is narrower than 40 columns.
+
+### Added — TUI
+- **`zc`/`zo` fold/unfold current file** — `zc` (close fold) collapses the
+  current file's body so only its header is visible; `zo` (open fold) expands
+  it. Follows the vim-style two-key prefix pattern (`z` waits for `c`/`o`),
+  same as `]h`/`[h` for hunk jumps. Fold state is preserved across scroll and
+  file switches.
+- **Syntax highlight follows the UI theme** — light mode now uses the
+  `base16-ocean.light` syntect theme instead of being stuck on a dark syntax
+  palette. Dark mode keeps `base16-ocean.dark`. Auto mode selects the matching
+  theme via `$COLORFGBG`. Config-driven theme switching (`t` key or `theme`
+  config) also swaps the syntax theme.
+- **`next-hunk filediff <old> <new>`** — diff two arbitrary files on disk using
+  gix's diff engine and review them in the TUI. Works both inside and outside
+  git repositories (requires a containing repo for the object store). Relative
+  paths are resolved against the repo worktree root.
+
+### Added — Agent session (serve protocol v2)
 - **`next-hunk list` / `next-hunk get [hash]`** — discover and inspect live
   server sessions. `list` scans `$XDG_RUNTIME_DIR` and `/tmp` for next-hunk
   sockets, probes each for liveness, and prints session info (hash, path,
@@ -66,6 +70,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   best-effort via the existing `App::reload_review` path. Requires the serve to
   have been started with `--watch` (or a reloader). Requires the `serve` feature
   on Unix.
+- **`next-hunk push` / `next-hunk decision`** (existing, extended) — push
+  focus/notes and poll decisions. `decision` returns the same JSON shape as
+  `--select` quit output, non-blocking.
+- **Agent skill updated** (`skill/next-hunk/SKILL.md`) — the agent skill now
+  documents the complete session workflow: serve → list → review → navigate →
+  comment → apply → decision → reload, matching the shipped CLI commands.
+
+### Added — Documentation
+- **PERF.md vs-delta comparison** — a design-level comparison table documenting
+  next-hunk's parse latency (~1.4 ms for 1.1 MB), viewport materialization
+  (~200 ns single, ~340 µs for 1000 random starts), and architecture differences
+  vs `delta`. Real bench numbers from `cargo bench` on AMD Ryzen 7 5700X.
+- **README synced** — Status section, config table, keybindings, and usage
+  examples updated to cover all 0.4–0.5 features.
+
+### Fixed
 - **Reload now preserves decisions, folds, notes, and focus** — `App::reload_review`
   (used by `--watch` and `next-hunk reload`) now re-maps per-hunk decisions and
   file-folds by display path so they survive content refresh. Notes and focus
@@ -73,6 +93,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the refreshed diff are silently dropped.
 - **Status/hints updated for fold keys** — the startup status line, help
   overlay, and bottom help bar now mention `zc`/`zo` fold/unfold keys.
+
+### Internal
 - **Generation-id highlight cache** — `HighlightCache` now tags each entry
   with a generation id. `invalidate()` bumps the gen and clears the map.
   New `try_get()`/`try_insert()` methods allow safe coexistence with
