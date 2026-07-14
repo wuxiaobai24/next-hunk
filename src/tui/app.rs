@@ -159,6 +159,8 @@ pub struct App {
     pub folded: HashSet<usize>,
     /// Layout mode for the diff stream pane.
     pub layout_mode: LayoutMode,
+    /// Agent comments (separate from --note annotations).
+    pub comments: Vec<CommentEntry>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -201,6 +203,17 @@ pub enum NoteTarget {
 pub struct Note {
     pub target: NoteTarget,
     pub text: String,
+}
+
+/// A comment entry in the session. Defined here (not in server.rs) so it's
+/// available without the `serve` feature gate.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CommentEntry {
+    pub id: String,
+    pub file: String,
+    pub text: String,
+    pub line: Option<u32>,
+    pub hunk: Option<usize>,
 }
 
 /// Stable identity of a hunk: file index + hunk index within that file. Used as
@@ -287,6 +300,7 @@ impl App {
             notes: Vec::new(),
             select_mode: false,
             decisions: std::collections::HashMap::new(),
+            comments: Vec::new(),
             folded: HashSet::new(),
             layout_mode: LayoutMode::Unified,
         }

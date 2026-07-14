@@ -55,6 +55,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TUI to a file, hunk, or line. Target syntax: `<path>`, `<path>:<line>`, or
   `<path>:h<n>` (1-based hunk ordinal), matching the `--focus` convention.
   Uses the same `FocusTarget` → `apply_focus` path as `--focus` and `push`.
+- **`next-hunk comment <add|list|rm|apply>`** — manage comments on a running
+  serve session. `comment add --file PATH [--line N] [--hunk N] <text>` adds a
+  comment (returns an id). `comment list` lists all comments. `comment rm <id>`
+  removes one. `comment apply` pushes comments into the TUI as note annotations.
+  Uses the existing note-rendering infrastructure. Requires the `serve` feature
+  on Unix.
 
 ## [0.3.0] - 2026-07-14
 
