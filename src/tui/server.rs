@@ -48,6 +48,8 @@ pub enum ServerCommand {
     },
     /// `next-hunk decision`: request the human's accumulated decisions.
     Decision,
+    /// `next-hunk get` / `next-hunk list`: request session metadata.
+    Info,
 }
 
 /// Server → client reply. Same wire format.
@@ -58,6 +60,13 @@ pub enum ServerReply {
     Ok,
     /// Response to `Decision`: the current per-hunk decisions.
     Decisions(Selections),
+    /// Response to `Info`: session metadata.
+    Info {
+        /// Repo root path (as reported by the server).
+        repo_path: String,
+        /// Number of files in the current review.
+        file_count: usize,
+    },
     /// Server-side error (e.g. malformed command).
     Error(String),
 }
@@ -371,5 +380,37 @@ mod tests {
             !path.exists(),
             "socket should be unlinked after drop, but still exists"
         );
+    }
+
+    #[test]
+    fn info_returns_metadata() {
+        let sock = TempSocket::new("info");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let drainer = std::thread::spawn(move || {
+            let mut got = listener.drain();
+            while got.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                got = listener.drain();
+            }
+            for r in got {
+                let _ = r.reply.send(ServerReply::Info {
+                    repo_path: "/tmp/repo".into(),
+                    file_count: 3,
+                });
+            }
+        });
+
+        let reply = send_command(&sock.path, &ServerCommand::Info).unwrap();
+        match reply {
+            ServerReply::Info {
+                repo_path,
+                file_count,
+            } => {
+                assert_eq!(repo_path, "/tmp/repo");
+                assert_eq!(file_count, 3);
+            }
+            other => panic!("expected Info, got {other:?}"),
+        }
+        drainer.join().unwrap();
     }
 }

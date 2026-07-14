@@ -335,6 +335,19 @@ fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server
             // --select). Real-time: returns immediately, doesn't block on quit.
             ServerReply::Decisions(app.selections())
         }
+        ServerCommand::Info => {
+            // Return basic session metadata.
+            ServerReply::Info {
+                repo_path: app
+                    .review
+                    .files
+                    .first()
+                    .and_then(|f| f.new_path.clone())
+                    .or_else(|| app.review.files.first().and_then(|f| f.old_path.clone()))
+                    .unwrap_or_default(),
+                file_count: app.review.file_count(),
+            }
+        }
     }
 }
 

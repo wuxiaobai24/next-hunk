@@ -144,6 +144,19 @@ enum Commands {
     /// immediately — does not wait for the human to quit. Requires a running
     /// `next-hunk serve` in this repo.
     Decision,
+    /// List live next-hunk server sessions.
+    ///
+    /// Scans well-known socket directories for live servers. Prints one line
+    /// per live session: `<repo-hash>  <socket-path>`.
+    List,
+    /// Show info about a running server session.
+    ///
+    /// Without an argument, checks the current repo's socket. With a hash
+    /// argument, looks up a specific session by its repo hash.
+    Get {
+        /// Optional repo hash to look up (defaults to current repo).
+        hash: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -366,6 +379,8 @@ fn run() -> Result<()> {
         ),
         Commands::Push { focus, note } => run_push(focus, note),
         Commands::Decision => run_decision(),
+        Commands::List => run_list(),
+        Commands::Get { hash } => run_get(hash),
     }
 }
 
@@ -519,6 +534,76 @@ fn run_decision() -> Result<()> {
     }
 }
 
+/// `next-hunk list`: discover live server sessions.
+#[cfg(all(feature = "serve", unix))]
+fn run_list() -> Result<()> {
+    let sessions = next_hunk::cli_parse::discover_live_sockets();
+    if sessions.is_empty() {
+        println!("no live sessions found");
+        return Ok(());
+    }
+    for (path, hash) in &sessions {
+        // Try to get session info for richer output.
+        let info = next_hunk::tui::server::send_command(
+            path,
+            &next_hunk::tui::server::ServerCommand::Info,
+        );
+        match info {
+            Ok(next_hunk::tui::server::ServerReply::Info {
+                repo_path,
+                file_count,
+            }) => {
+                println!(
+                    "{}  {}  files={file_count}  repo={repo_path}",
+                    hash,
+                    path.display()
+                );
+            }
+            _ => {
+                println!("{}  {}", hash, path.display());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `next-hunk get [hash]`: show info for a specific session.
+#[cfg(all(feature = "serve", unix))]
+fn run_get(hash: Option<String>) -> Result<()> {
+    let socket = if let Some(h) = &hash {
+        // Look up by hash: scan for the matching socket.
+        let sessions = next_hunk::cli_parse::discover_live_sockets();
+        let found = sessions.iter().find(|(_, hh)| hh == h);
+        match found {
+            Some((path, _)) => path.clone(),
+            None => bail!("no live session with hash {h}"),
+        }
+    } else {
+        // Default to current repo.
+        let cwd = std::env::current_dir()?;
+        let repo = find_repo(&cwd)?;
+        next_hunk::cli_parse::runtime_socket_path(&repo)
+    };
+
+    match next_hunk::tui::server::send_command(
+        &socket,
+        &next_hunk::tui::server::ServerCommand::Info,
+    ) {
+        Ok(next_hunk::tui::server::ServerReply::Info {
+            repo_path,
+            file_count,
+        }) => {
+            println!("socket: {}", socket.display());
+            println!("repo:   {repo_path}");
+            println!("files:  {file_count}");
+            Ok(())
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
 /// Turn a socket-connect failure into an actionable "no server" message,
 /// while letting unrelated errors (e.g. malformed reply) pass through. Takes
 /// the error by value so the unrelated-error path can return it as-is.
@@ -572,6 +657,16 @@ fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_decision() -> Result<()> {
     bail!("`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_list() -> Result<()> {
+    bail!("`list` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_get(_hash: Option<String>) -> Result<()> {
+    bail!("`get` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[allow(clippy::too_many_arguments)]
