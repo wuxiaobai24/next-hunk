@@ -10,7 +10,7 @@ use gix::bstr::{BStr, BString, ByteSlice};
 use gix::diff::blob::platform::prepare_diff::Operation;
 use gix::diff::blob::unified_diff::{ConsumeBinaryHunk, ContextSize};
 use gix::diff::blob::{ResourceKind, UnifiedDiff};
-use gix::objs::tree::EntryKind;
+use gix::objs::{self, tree::EntryKind, Write as _};
 use gix::status::{index_worktree::Item as IwItem, UntrackedFiles};
 use gix::{ObjectId, Repository};
 
@@ -29,6 +29,91 @@ pub fn find_repo(start: &Path) -> Result<PathBuf> {
 pub fn open_repo(start: &Path) -> Result<Repository> {
     gix::discover(start)
         .with_context(|| format!("not a git repository (or any parent): {}", start.display()))
+}
+
+/// Diff two arbitrary files on disk, producing a unified-diff string.
+///
+/// Uses gix's diff engine (same as git diff) but does not require the files
+/// to be tracked by git. The `repo` is used for its object store.
+pub fn git_file_diff(repo: &Repository, old_path: &Path, new_path: &Path) -> Result<String> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("bare repository has no worktree"))?;
+
+    let old_abs = if old_path.is_absolute() {
+        old_path.to_owned()
+    } else {
+        workdir.join(old_path)
+    };
+    let new_abs = if new_path.is_absolute() {
+        new_path.to_owned()
+    } else {
+        workdir.join(new_path)
+    };
+
+    let old_content =
+        std::fs::read(&old_abs).with_context(|| format!("read old file {}", old_abs.display()))?;
+    let new_content =
+        std::fs::read(&new_abs).with_context(|| format!("read new file {}", new_abs.display()))?;
+
+    // Write blobs to the object store so the diff engine can look them up.
+    let old_id = repo
+        .write_buf(objs::Kind::Blob, &old_content)
+        .map_err(|e| anyhow!("write old file blob: {e}"))?;
+    let new_id = repo
+        .write_buf(objs::Kind::Blob, &new_content)
+        .map_err(|e| anyhow!("write new file blob: {e}"))?;
+
+    let mut cache = repo
+        .diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGit,
+            gix::diff::blob::pipeline::WorktreeRoots {
+                old_root: None,
+                new_root: Some(workdir.to_owned()),
+            },
+        )
+        .context("diff resource cache (file diff)")?;
+
+    // Use the file name for the diff header (cross-platform safe).
+    // Strip workdir prefix for a clean relative path when possible.
+    let old_label = old_abs
+        .strip_prefix(workdir)
+        .unwrap_or(&old_abs)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let new_label = new_abs
+        .strip_prefix(workdir)
+        .unwrap_or(&new_abs)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let old_rela = BString::from(old_label.as_str());
+    let new_rela = BString::from(new_label.as_str());
+
+    let mut out = String::new();
+    cache
+        .set_resource(
+            old_id,
+            EntryKind::Blob,
+            old_rela.as_ref(),
+            ResourceKind::OldOrSource,
+            &repo.objects,
+        )
+        .context("set old resource")?;
+    cache
+        .set_resource(
+            new_id,
+            EntryKind::Blob,
+            new_rela.as_ref(),
+            ResourceKind::NewOrDestination,
+            &repo.objects,
+        )
+        .context("set new resource")?;
+
+    let old_display = path_display(old_rela.as_ref());
+    let new_display = path_display(new_rela.as_ref());
+    render_file_patch(&mut out, Some(&old_display), Some(&new_display), &mut cache)?;
+
+    Ok(out)
 }
 
 /// Working-tree or staged diff as a unified-diff string.

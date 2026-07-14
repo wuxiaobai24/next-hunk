@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
-use next_hunk::source::{find_repo, git_diff, git_show};
+use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
 
 /// Skip the test if `git` is unavailable.
 fn require_git() -> Option<()> {
@@ -333,4 +333,69 @@ fn worktree_diff_untracked_included_when_enabled() {
         .flat_map(|h| h.lines.iter())
         .any(|l| l.kind == DiffLineKind::Add);
     assert!(has_add, "untracked file should have added lines");
+}
+
+#[test]
+fn filediff_two_files_produces_unified_diff() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    let repo_handle = open_repo(&repo.workdir()).unwrap();
+
+    // Create two files to diff
+    let old_path = repo.path().join("old_file.txt");
+    let new_path = repo.path().join("new_file.txt");
+    write(&old_path, "line1\nline2\nline3\n");
+    write(&new_path, "line1\nmodified\nline3\n");
+
+    let text = git_file_diff(&repo_handle, &old_path, &new_path).unwrap();
+    assert!(!text.trim().is_empty(), "file diff should not be empty");
+
+    let review = parse_unified_diff(&text).unwrap();
+    assert_eq!(review.file_count(), 1, "should have exactly one file");
+
+    let file = &review.files[0];
+    // Should contain a diff header with both paths
+    assert!(
+        file.display_path.contains("old_file.txt") || file.display_path.contains("new_file.txt"),
+        "file path should appear in display: {}",
+        file.display_path
+    );
+
+    // Should contain modified lines (add + delete for the changed line)
+    let has_add = file
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .any(|l| l.kind == DiffLineKind::Add);
+    let has_del = file
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .any(|l| l.kind == DiffLineKind::Delete);
+    assert!(has_add, "should have added lines");
+    assert!(has_del, "should have deleted lines");
+
+    // Identical files produce no hunk content
+    let same_text = git_file_diff(&repo_handle, &old_path, &old_path).unwrap();
+    // May have a diff header but no @@ hunk lines
+    assert!(
+        !same_text.contains("@@"),
+        "identical files should produce no hunk lines, got: {same_text}"
+    );
+}
+
+#[test]
+fn filediff_with_relative_paths() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    let repo_handle = open_repo(&repo.workdir()).unwrap();
+
+    // Create files inside the repo, use relative paths
+    write(&repo.path().join("a.txt"), "hello\n");
+    write(&repo.path().join("b.txt"), "hello\nworld\n");
+
+    let text = git_file_diff(&repo_handle, Path::new("a.txt"), Path::new("b.txt")).unwrap();
+    assert!(!text.trim().is_empty());
+    let review = parse_unified_diff(&text).unwrap();
+    assert_eq!(review.file_count(), 1);
 }

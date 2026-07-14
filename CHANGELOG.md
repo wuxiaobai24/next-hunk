@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI flag: `next-hunk diff --include-untracked`. The `serve` subcommand also
   accepts the flag. Untracked files are rendered as new-file additions from
   `/dev/null`.
+- **`next-hunk filediff <old> <new>`** — diff two arbitrary files on disk using
+  gix's diff engine and review them in the TUI. Works both inside and outside
+  git repositories (requires a containing repo for the object store). Relative
+  paths are resolved against the repo worktree root.
 
 ## [0.3.0] - 2026-07-14
 

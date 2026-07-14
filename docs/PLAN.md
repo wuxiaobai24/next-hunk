@@ -45,9 +45,9 @@
 
 ### 0.4 — 诚实补齐（先做）
 
-- [ ] `line_numbers` 配置接线，或从 config/README 删除
+- [x] `line_numbers` 配置接线，或从 config/README 删除
 - [x] worktree diff 支持 untracked（可配置/可关）
-- [ ] `next-hunk diff a b` 两文件直比
+- [x] `next-hunk diff a b` 两文件直比
 - [ ] 文件折叠（`zc`/`zo` 或等价）
 - [ ] README Status / 本文件与代码一致（ARCHITECTURE 勾选可另 PR）
 
@@ -81,8 +81,8 @@
 
 **人用：**
 
-- [ ] untracked 可审可关
-- [ ] 两文件 diff
+- [x] untracked 可审可关
+- [x] 两文件 diff
 - [ ] 文件折叠
 - [ ] 至少一种 split 或 stack，窄终端不炸
 - [ ] 配置字段无 silent no-op；主题与语法高亮不打架
