@@ -166,6 +166,17 @@ enum Commands {
         /// Optional repo hash to look up (defaults to current repo).
         hash: Option<String>,
     },
+    /// Navigate a running serve session to a file, hunk, or line.
+    ///
+    /// Uses the same `--focus` syntax: `<path>`, `<path>:<line>`, or
+    /// `<path>:h<n>` (1-based hunk ordinal).
+    Navigate {
+        /// Navigation target: `<path>` / `<path>:<line>` / `<path>:h<n>`.
+        target: String,
+        /// Optional repo hash to look up (defaults to current repo).
+        #[arg(long)]
+        hash: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -391,6 +402,7 @@ fn run() -> Result<()> {
         Commands::List => run_list(),
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
+        Commands::Navigate { target, hash } => run_navigate(target, hash),
     }
 }
 
@@ -635,6 +647,27 @@ fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
     }
 }
 
+/// `next-hunk navigate <target> [--hash <hash>]`: navigate a serve TUI.
+#[cfg(all(feature = "serve", unix))]
+fn run_navigate(target: String, hash: Option<String>) -> Result<()> {
+    let focus_target = next_hunk::cli_parse::parse_focus(&target)?;
+    let socket = resolve_socket(hash)?;
+    match next_hunk::tui::server::send_command(
+        &socket,
+        &next_hunk::tui::server::ServerCommand::Navigate {
+            target: focus_target,
+        },
+    ) {
+        Ok(next_hunk::tui::server::ServerReply::Ok) => {
+            println!("ok: navigated to {}", target);
+            Ok(())
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
 /// Turn a socket-connect failure into an actionable "no server" message,
 /// while letting unrelated errors (e.g. malformed reply) pass through. Takes
 /// the error by value so the unrelated-error path can return it as-is.
@@ -703,6 +736,11 @@ fn run_get(_hash: Option<String>) -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_review(_hash: Option<String>) -> Result<()> {
     bail!("`review` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_navigate(_target: String, _hash: Option<String>) -> Result<()> {
+    bail!("`navigate` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[allow(clippy::too_many_arguments)]
