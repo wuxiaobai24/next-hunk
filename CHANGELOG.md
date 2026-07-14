@@ -6,6 +6,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-14
+
 ### Changed — Search & filter
 - **Inline search-match highlighting** — the active search match now shows
   *where* in the line the hit is, instead of painting the whole line one
@@ -202,5 +204,9 @@ Parsing a megabyte-scale diff in single-digit milliseconds and rendering a
 viewport in sub-microsecond to sub-millisecond range is what makes the tool
 stay responsive on changesets that stall other viewers.
 
-[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.1.0...HEAD
+
+[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.3.0
+[0.2.1]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.2.1
+[0.2.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.2.0
 [0.1.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.1.0
