@@ -105,10 +105,12 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 /// `--select` mode) on clean quit. Errors only on fatal terminal I/O. If the
 /// process's stdout is not a tty, crossterm will typically still enter raw
 /// mode and the caller may choose to fall back to a non-interactive summary.
+#[allow(clippy::too_many_arguments)]
 pub fn run_review_tui(
     review: Review,
     reloader: Option<Reloader>,
     start_highlight: bool,
+    start_line_numbers: bool,
     theme: Option<String>,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
@@ -137,6 +139,7 @@ pub fn run_review_tui(
         .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
+    app.line_numbers_on = start_line_numbers;
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
     app.focus_target = options.focus;
@@ -374,6 +377,7 @@ diff --git a/b.rs b/b.rs
         assert!(run_review_tui(
             empty,
             None,
+            true,
             true,
             None,
             None,

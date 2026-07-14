@@ -19,7 +19,7 @@ pub struct Config {
     pub staged: Option<bool>,
     pub highlight: Option<bool>,
     pub watch: Option<bool>,
-    /// P1: show a line-number column (accepted, not yet rendered).
+    /// Show a line-number gutter column.
     pub line_numbers: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
@@ -75,6 +75,8 @@ pub struct ResolvedConfig {
     pub staged: bool,
     pub highlight: bool,
     pub watch: bool,
+    /// Show a line-number gutter column. ON by default.
+    pub line_numbers: bool,
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
     pub theme: Option<String>,
@@ -87,6 +89,7 @@ impl Default for ResolvedConfig {
             staged: false,
             highlight: true,
             watch: false,
+            line_numbers: true,
             theme: None,
         }
     }
@@ -116,6 +119,7 @@ impl ResolvedConfig {
             staged: cli.staged.or(cfg.staged).unwrap_or(d.staged),
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
+            line_numbers: cfg.line_numbers.unwrap_or(d.line_numbers),
             theme: cfg.theme.clone(),
         }
     }
@@ -275,6 +279,7 @@ mod tests {
         assert!(!r.staged);
         assert!(r.highlight); // default on
         assert!(!r.watch);
+        assert!(r.line_numbers); // default on
     }
 
     #[test]
@@ -290,6 +295,33 @@ mod tests {
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
+    }
+
+    #[test]
+    fn resolve_line_numbers_from_config() {
+        let cfg = Config {
+            line_numbers: Some(false),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.line_numbers); // config false wins
+    }
+
+    #[test]
+    fn resolve_line_numbers_defaults_to_true() {
+        let cfg = Config::default(); // line_numbers = None
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(r.line_numbers); // default on
     }
 
     #[test]
