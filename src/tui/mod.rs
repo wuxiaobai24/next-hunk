@@ -136,7 +136,7 @@ pub fn run_review_tui(
         .as_deref()
         .map(theme::ThemeMode::parse)
         .unwrap_or_default();
-    let highlighter = crate::highlight::Highlighter::load()
+    let highlighter = crate::highlight::Highlighter::load(theme_mode.syntect_theme_name())
         .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;

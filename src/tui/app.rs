@@ -234,7 +234,7 @@ impl App {
     pub fn new(review: Review) -> Self {
         Self::with_highlighter(
             review,
-            Highlighter::load().unwrap_or_else(|_| Highlighter::load_noop()),
+            Highlighter::load("base16-ocean.dark").unwrap_or_else(|_| Highlighter::load_noop()),
         )
     }
 

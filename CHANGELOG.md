@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in two stacked blocks per file, separated by `▌ old` / `▌ new` labels. Set
   `layout = "stack"` in `.next-hunk/config.toml` (default is `"unified"`).
   Falls back to unified when the terminal is narrower than 40 columns.
+- **Syntax highlight follows the UI theme** — light mode now uses the
+  `base16-ocean.light` syntect theme instead of being stuck on a dark syntax
+  palette. Dark mode keeps `base16-ocean.dark`. Auto mode selects the matching
+  theme via `$COLORFGBG`. Config-driven theme switching (`t` key or `theme`
+  config) also swaps the syntax theme.
 
 ## [0.3.0] - 2026-07-14
 

@@ -36,10 +36,18 @@ mod imp {
 
     impl Highlighter {
         /// Load the bundled defaults. ~tens of ms once at startup.
-        pub fn load() -> anyhow::Result<Self> {
+        /// `theme_name` is a syntect theme key like `"base16-ocean.dark"`.
+        pub fn load(theme_name: &str) -> anyhow::Result<Self> {
             let syntaxes = SyntaxSet::load_defaults_newlines();
             let theme_set = ThemeSet::load_defaults();
-            let theme = theme_set.themes["base16-ocean.dark"].clone();
+            let theme = theme_set
+                .themes
+                .get(theme_name)
+                .cloned()
+                .unwrap_or_else(|| {
+                    // Fallback to dark if the requested theme is missing.
+                    theme_set.themes["base16-ocean.dark"].clone()
+                });
             Ok(Self { syntaxes, theme })
         }
 
@@ -50,7 +58,7 @@ mod imp {
 
         /// Construct a highlighter with no theme/syntaxes (degraded).
         pub fn load_noop() -> Self {
-            Self::load().unwrap_or(Self {
+            Self::load("base16-ocean.dark").unwrap_or(Self {
                 syntaxes: SyntaxSet::new(),
                 theme: Theme::default(),
             })
@@ -124,7 +132,7 @@ mod imp {
     pub struct Highlighter;
 
     impl Highlighter {
-        pub fn load() -> anyhow::Result<Self> {
+        pub fn load(_theme_name: &str) -> anyhow::Result<Self> {
             Ok(Self)
         }
 
@@ -240,7 +248,7 @@ mod tests {
     #[cfg(feature = "highlight")]
     #[test]
     fn syntect_highlights_rust_line() {
-        let h = Highlighter::load().expect("syntect bundled defaults load");
+        let h = Highlighter::load("base16-ocean.dark").expect("syntect bundled defaults load");
         let mut state = None;
         let runs = h.highlight("a.rs", "fn main() {}", &mut state);
         // At least one styled run; keyword `fn` should get a non-default fg.
@@ -252,10 +260,32 @@ mod tests {
     #[cfg(feature = "highlight")]
     #[test]
     fn syntect_unknown_ext_falls_back_to_plain() {
-        let h = Highlighter::load().unwrap();
+        let h = Highlighter::load("base16-ocean.dark").unwrap();
         let mut state = None;
         // Unknown extension should not panic; falls back to plain text syntax.
         let runs = h.highlight("file.unknownext", "anything", &mut state);
         assert!(!runs.is_empty());
+    }
+
+    #[cfg(feature = "highlight")]
+    #[test]
+    fn syntect_light_theme_loads_and_highlights() {
+        // Light theme should load without error and produce colored runs.
+        let h = Highlighter::load("base16-ocean.light").expect("light syntect theme should load");
+        let mut state = None;
+        let runs = h.highlight("a.rs", "fn main() {}", &mut state);
+        assert!(!runs.is_empty(), "light highlight should produce runs");
+        let has_color = runs.iter().any(|(s, _)| s.fg.is_some());
+        assert!(has_color, "light theme should carry foreground colors");
+    }
+
+    #[cfg(feature = "highlight")]
+    #[test]
+    fn syntect_unknown_theme_falls_back_to_dark() {
+        // Unknown theme name should fall back to dark, not crash.
+        let h = Highlighter::load("nonexistent-theme").unwrap();
+        let mut state = None;
+        let runs = h.highlight("a.rs", "fn main() {}", &mut state);
+        assert!(!runs.is_empty(), "fallback highlight should produce runs");
     }
 }
