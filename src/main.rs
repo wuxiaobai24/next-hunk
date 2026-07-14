@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use next_hunk::config::{CliFlags, Config, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
-use next_hunk::source::{find_repo, git_diff, git_show};
+use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
 use next_hunk::tui::{run_review_tui, ReviewOptions};
 
 #[derive(Debug, Parser)]
@@ -62,6 +62,13 @@ enum Commands {
     Show {
         /// Revision or range (e.g. HEAD, main..HEAD).
         rev: String,
+    },
+    /// Diff two arbitrary files on disk.
+    Filediff {
+        /// First file (old).
+        old: PathBuf,
+        /// Second file (new).
+        new: PathBuf,
     },
     /// Review a unified patch from a file or stdin (`-`).
     Patch {
@@ -264,6 +271,25 @@ fn run() -> Result<()> {
                 true,
                 None,
                 None,
+                ReviewOptions::default(),
+                None,
+            )
+        }
+        Commands::Filediff { old, new } => {
+            let cwd = std::env::current_dir()?;
+            let repo = open_repo(&cwd)?;
+            let text = git_file_diff(&repo, &old, &new)?;
+            if text.trim().is_empty() {
+                eprintln!("(files are identical)");
+                return Ok(());
+            }
+            open_review_from_text(
+                &text,
+                None,
+                true,
+                true,
+                None,
+                repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
             )

@@ -5,4 +5,4 @@
 
 mod git;
 
-pub use git::{find_repo, git_diff, git_show, open_repo};
+pub use git::{find_repo, git_diff, git_file_diff, git_show, open_repo};
