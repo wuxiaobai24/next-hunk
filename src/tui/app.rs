@@ -109,6 +109,8 @@ pub struct App {
 
     /// Show a line-number gutter column. ON by default.
     pub line_numbers_on: bool,
+    /// Wrap long lines in the stream pane. OFF by default (truncate).
+    pub wrap_on: bool,
     /// Highlight changed words within a line (word-diff). ON by default.
     pub word_diff_on: bool,
 
@@ -268,6 +270,7 @@ impl App {
             cache: HighlightCache::new(),
             highlighter,
             line_numbers_on: true,
+            wrap_on: false,
             word_diff_on: true,
             show_rail: true,
             rail_rect: None,

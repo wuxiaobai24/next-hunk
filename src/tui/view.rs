@@ -17,7 +17,7 @@
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use ratatui::Frame;
 
 use crate::ir::{
@@ -188,11 +188,14 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         }
     }
 
-    let para = Paragraph::new(lines).block(
+    let mut para = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::NONE)
             .title(format!(" {} ", title)),
     );
+    if app.wrap_on {
+        para = para.wrap(Wrap { trim: false });
+    }
     frame.render_widget(para, area);
 }
 
@@ -349,11 +352,14 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
         }
     }
 
-    let para = Paragraph::new(lines).block(
+    let mut para = Paragraph::new(lines).block(
         Block::default()
             .borders(Borders::NONE)
             .title(format!(" {} ", app.current_path())),
     );
+    if app.wrap_on {
+        para = para.wrap(Wrap { trim: false });
+    }
     frame.render_widget(para, area);
 }
 

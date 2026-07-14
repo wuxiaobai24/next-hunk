@@ -44,6 +44,7 @@
 - [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
+- [x] 折行配置：`wrap = true` 折行显示（默认截断）
 - [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
 
@@ -166,6 +167,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
 | `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）或 `"stack"`（每文件分旧/新两块） |
+| `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
 示例 `~/.config/next-hunk/config.toml`:
