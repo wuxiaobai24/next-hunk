@@ -7,6 +7,8 @@
 //! headlessly by feeding scripted `KeyEvent`s and asserting on `App` fields or
 //! a rendered `TestBackend` buffer.
 
+use std::collections::HashSet;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::highlight::{HighlightCache, Highlighter};
@@ -150,6 +152,8 @@ pub struct App {
     pub select_mode: bool,
     /// `--select`: per-hunk decisions keyed by [`HunkId`].
     pub decisions: std::collections::HashMap<HunkId, Decision>,
+    /// Set of file indices whose bodies are folded (collapsed).
+    pub folded: HashSet<usize>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -277,6 +281,7 @@ impl App {
             notes: Vec::new(),
             select_mode: false,
             decisions: std::collections::HashMap::new(),
+            folded: HashSet::new(),
         }
     }
 
@@ -352,7 +357,7 @@ impl App {
             start: self.scroll_y,
             height: self.viewport_height.max(1),
         };
-        ViewportQuery::rows(&self.review, viewport)
+        ViewportQuery::rows(&self.review, viewport, &self.folded)
             .into_iter()
             .find_map(|row| match row {
                 crate::ir::StreamRow::HunkHeader {
@@ -548,7 +553,8 @@ impl App {
             }
         }
 
-        // Two-key sequence handling for `]h` / `[h` (next/prev hunk).
+        // Two-key sequence handling for `]h` / `[h` (next/prev hunk)
+        // and `zc` / `zo` (fold/unfold current file).
         // If a prefix is pending, consume it now.
         if let Some(prefix) = self.pending_prefix.take() {
             match (prefix, key.code) {
@@ -560,9 +566,17 @@ impl App {
                     self.jump_hunk(false);
                     return;
                 }
+                ('z', KeyCode::Char('c')) => {
+                    self.fold_current();
+                    return;
+                }
+                ('z', KeyCode::Char('o')) => {
+                    self.unfold_current();
+                    return;
+                }
                 _ => {
                     // Unrecognized second key: fall through to normal dispatch.
-                    // (A lone `]`/`[` that isn't followed by `h` is discarded.)
+                    // (A lone `]`/`[`/`z` that isn't followed by a valid second key is discarded.)
                 }
             }
         }
@@ -646,6 +660,11 @@ impl App {
             KeyCode::Char('[') => {
                 self.pending_prefix = Some('[');
                 self.status = "[".into();
+            }
+            // fold/unfold prefixes: `z` awaits `c` (close) or `o` (open).
+            KeyCode::Char('z') => {
+                self.pending_prefix = Some('z');
+                self.status = "z".into();
             }
             // space: jump to the next hunk (wraps across files). A fast
             // single-key alternative to the `]h` two-key sequence.
@@ -1044,6 +1063,27 @@ impl App {
             None => {
                 self.status = "no hunks to jump to".into();
             }
+        }
+    }
+
+    /// Fold (collapse) the currently selected file so only its header is visible.
+    fn fold_current(&mut self) {
+        if self.folded.insert(self.selected_file) {
+            self.status = format!("▼ {} (folded)", self.current_path());
+            // Clamp scroll in case the fold leaves the viewport past the end.
+            self.scroll_y = self.scroll_y.min(self.max_scroll());
+            self.sync_selected_file();
+        } else {
+            self.status = format!("already folded: {}", self.current_path());
+        }
+    }
+
+    /// Unfold (expand) the currently selected file, revealing its body.
+    fn unfold_current(&mut self) {
+        if self.folded.remove(&self.selected_file) {
+            self.status = format!("▶ {} (unfolded)", self.current_path());
+        } else {
+            self.status = format!("not folded: {}", self.current_path());
         }
     }
 
@@ -1929,6 +1969,7 @@ diff --git a/b.rs b/b.rs
                 start: 0,
                 height: 2,
             },
+            &app.folded,
         );
         app.cache
             .get_or_highlight(0, 1, "a.rs", "old", &app.highlighter);
@@ -2374,5 +2415,93 @@ diff --git a/c.rs b/c.rs
         // Now pressing `n` should surface the "no matches" reason, not be silent.
         app.handle_key(char_key('n'));
         assert!(app.status.contains("no matches"), "got: {}", app.status);
+    }
+
+    // ---- fold (zc / zo) ----
+
+    #[test]
+    fn zc_folds_current_file() {
+        let mut app = multi_hunk_app();
+        assert!(app.folded.is_empty());
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('c'));
+        assert!(app.folded.contains(&0), "file 0 should be folded");
+        assert!(app.status.contains("folded"));
+    }
+
+    #[test]
+    fn zo_unfolds_current_file() {
+        let mut app = multi_hunk_app();
+        app.folded.insert(0);
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('o'));
+        assert!(!app.folded.contains(&0), "file 0 should be unfolded");
+        assert!(app.status.contains("unfolded"));
+    }
+
+    #[test]
+    fn fold_reduces_visible_rows() {
+        let mut app = multi_hunk_app();
+        app.viewport_height = 20;
+        // file0 has 1 header + 2 hunks × (1 header + 2 lines) = 1 + 2 + 4 = 7 rows
+        // file1 has 1 header + 2 hunks × (1 header + 2 lines) = 1 + 2 + 4 = 7 rows
+        // total stream_len = 14
+        let total = app.review.stream_len;
+        let full_rows = ViewportQuery::rows(
+            &app.review,
+            Viewport {
+                start: 0,
+                height: total,
+            },
+            &HashSet::new(),
+        );
+        assert_eq!(full_rows.len(), total);
+
+        app.folded.insert(0);
+        let folded_rows = ViewportQuery::rows(
+            &app.review,
+            Viewport {
+                start: 0,
+                height: total,
+            },
+            &app.folded,
+        );
+        // file0 folded: 7 → 1 row (just header). Total: 1 + 7 = 8.
+        assert_eq!(folded_rows.len(), 1 + 7);
+    }
+
+    #[test]
+    fn zc_then_zo_restores_full_view() {
+        let mut app = multi_hunk_app();
+        app.viewport_height = 20;
+        // fold file0
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('c'));
+        // unfold file0
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('o'));
+        let total = app.review.stream_len;
+        let rows = ViewportQuery::rows(
+            &app.review,
+            Viewport {
+                start: 0,
+                height: total,
+            },
+            &app.folded,
+        );
+        assert_eq!(rows.len(), total, "unfolded should restore full view");
+    }
+
+    #[test]
+    fn fold_then_unfold_toggle() {
+        let mut app = multi_hunk_app();
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('c'));
+        assert!(app.folded.contains(&0));
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('c'));
+        // zc on already-folded file is a no-op (status says already folded)
+        assert!(app.folded.contains(&0));
+        assert!(app.status.contains("already folded"));
     }
 }

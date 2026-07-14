@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   gix's diff engine and review them in the TUI. Works both inside and outside
   git repositories (requires a containing repo for the object store). Relative
   paths are resolved against the repo worktree root.
+- **`zc`/`zo` fold/unfold current file** — `zc` (close fold) collapses the
+  current file's body so only its header is visible; `zo` (open fold) expands
+  it. Follows the vim-style two-key prefix pattern (`z` waits for `c`/`o`),
+  same as `]h`/`[h` for hunk jumps. Fold state is preserved across scroll and
+  file switches.
 
 ## [0.3.0] - 2026-07-14
 

@@ -276,6 +276,7 @@ fn viewport_materializes_live_diff() {
             start: 0,
             height: review.stream_len,
         },
+        &std::collections::HashSet::new(),
     );
     assert_eq!(rows.len(), review.stream_len);
     assert!(matches!(
