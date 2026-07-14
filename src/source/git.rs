@@ -37,12 +37,18 @@ pub fn open_repo(start: &Path) -> Result<Repository> {
 /// * `staged = true`  → HEAD tree vs index (`git diff --cached`)
 ///
 /// `pathspecs` filters by path prefix (best-effort); empty means all.
-pub fn git_diff(repo_path: &Path, staged: bool, pathspecs: &[String]) -> Result<String> {
+/// `include_untracked` includes untracked files in the worktree diff.
+pub fn git_diff(
+    repo_path: &Path,
+    staged: bool,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<String> {
     let repo = open_repo(repo_path)?;
     if staged {
         diff_staged(&repo, pathspecs)
     } else {
-        diff_worktree(&repo, pathspecs)
+        diff_worktree(&repo, pathspecs, include_untracked)
     }
 }
 
@@ -120,7 +126,11 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
     Ok(out)
 }
 
-fn diff_worktree(repo: &Repository, pathspecs: &[String]) -> Result<String> {
+fn diff_worktree(
+    repo: &Repository,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<String> {
     let workdir = repo
         .workdir()
         .ok_or_else(|| anyhow!("bare repository has no worktree to diff"))?
@@ -137,10 +147,16 @@ fn diff_worktree(repo: &Repository, pathspecs: &[String]) -> Result<String> {
         )
         .context("diff resource cache (worktree)")?;
 
+    let untracked = if include_untracked {
+        UntrackedFiles::Files
+    } else {
+        UntrackedFiles::None
+    };
+
     let platform = repo
         .status(gix::progress::Discard)
         .context("status platform")?
-        .untracked_files(UntrackedFiles::None)
+        .untracked_files(untracked)
         .index_worktree_rewrites(None);
 
     let iter = platform
@@ -220,7 +236,53 @@ fn append_worktree_item(
                 | EntryStatus::NeedsUpdate(_) => {}
             }
         }
-        IwItem::DirectoryContents { .. } | IwItem::Rewrite { .. } => {}
+        IwItem::DirectoryContents {
+            collapsed_directory_status,
+            ..
+        } => {
+            // Skip collapsed directories — they don't represent individual files.
+            if collapsed_directory_status.is_some() {
+                return Ok(());
+            }
+            let rela_path = item.rela_path();
+            if !pathspec_match(rela_path, pathspecs) {
+                return Ok(());
+            }
+            let path = path_display(rela_path);
+            let null = repo.object_hash().null();
+            // Untracked file: diff from /dev/null to the file on disk.
+            // Use the worktree root + rela_path to construct the on-disk path,
+            // and set up the resource cache to diff from empty to file content.
+            let worktree_path = repo
+                .workdir()
+                .ok_or_else(|| anyhow!("bare repo has no workdir"))?
+                .join(path.as_str());
+            let disk_content = std::fs::read(&worktree_path)
+                .with_context(|| format!("read untracked file {}", worktree_path.display()))?;
+            let id =
+                gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &disk_content)
+                    .with_context(|| format!("hash untracked file {}", worktree_path.display()))?;
+            cache
+                .set_resource(
+                    null,
+                    EntryKind::Blob,
+                    rela_path,
+                    ResourceKind::OldOrSource,
+                    &repo.objects,
+                )
+                .context("set old (null) resource for untracked")?;
+            cache
+                .set_resource(
+                    id,
+                    EntryKind::Blob,
+                    rela_path,
+                    ResourceKind::NewOrDestination,
+                    &repo.objects,
+                )
+                .context("set new resource for untracked")?;
+            render_file_patch(out, None, Some(&path), cache)?;
+        }
+        IwItem::Rewrite { .. } => {}
     }
     Ok(())
 }

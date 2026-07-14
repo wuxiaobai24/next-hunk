@@ -21,6 +21,8 @@ pub struct Config {
     pub watch: Option<bool>,
     /// Show a line-number gutter column.
     pub line_numbers: Option<bool>,
+    /// Include untracked files in worktree diff.
+    pub include_untracked: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
 }
@@ -40,6 +42,9 @@ impl Config {
         }
         if other.line_numbers.is_some() {
             self.line_numbers = other.line_numbers;
+        }
+        if other.include_untracked.is_some() {
+            self.include_untracked = other.include_untracked;
         }
         if other.theme.is_some() {
             self.theme = other.theme;
@@ -77,6 +82,8 @@ pub struct ResolvedConfig {
     pub watch: bool,
     /// Show a line-number gutter column. ON by default.
     pub line_numbers: bool,
+    /// Include untracked files in worktree diff. OFF by default (safe).
+    pub include_untracked: bool,
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
     pub theme: Option<String>,
@@ -90,6 +97,7 @@ impl Default for ResolvedConfig {
             highlight: true,
             watch: false,
             line_numbers: true,
+            include_untracked: false,
             theme: None,
         }
     }
@@ -107,6 +115,8 @@ pub struct CliFlags {
     pub watch: Option<bool>,
     /// `--no-highlight` → `Some(false)`; absent → `None`.
     pub highlight: Option<bool>,
+    /// `--include-untracked` → `Some(true)`; absent → `None`.
+    pub include_untracked: Option<bool>,
 }
 
 impl ResolvedConfig {
@@ -120,6 +130,10 @@ impl ResolvedConfig {
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
             line_numbers: cfg.line_numbers.unwrap_or(d.line_numbers),
+            include_untracked: cli
+                .include_untracked
+                .or(cfg.include_untracked)
+                .unwrap_or(d.include_untracked),
             theme: cfg.theme.clone(),
         }
     }
@@ -260,6 +274,7 @@ mod tests {
             staged: Some(false), // CLI overrides
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged); // CLI wins
@@ -274,6 +289,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged);
@@ -292,6 +308,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: Some(false), // --no-highlight
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -307,6 +324,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
@@ -319,6 +337,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
@@ -334,6 +353,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
@@ -346,6 +366,7 @@ mod tests {
             staged: None,
             watch: None,
             highlight: None,
+            include_untracked: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());

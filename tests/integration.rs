@@ -133,7 +133,7 @@ fn setup_repo() -> RepoGuard {
 fn worktree_diff_round_trips() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), false, &[]).unwrap();
+    let text = git_diff(&repo.workdir(), false, &[], false).unwrap();
     assert!(!text.trim().is_empty(), "worktree diff should not be empty");
 
     let review = parse_unified_diff(&text).unwrap();
@@ -168,7 +168,7 @@ fn worktree_diff_round_trips() {
 fn staged_diff_round_trips() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), true, &[]).unwrap();
+    let text = git_diff(&repo.workdir(), true, &[], false).unwrap();
     assert!(!text.trim().is_empty(), "staged diff should not be empty");
 
     let review = parse_unified_diff(&text).unwrap();
@@ -219,7 +219,7 @@ fn show_head_matches_commit() {
 fn patch_stdin_round_trips_identically_to_live_diff() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let live = git_diff(&repo.workdir(), false, &[]).unwrap();
+    let live = git_diff(&repo.workdir(), false, &[], false).unwrap();
 
     // Simulate the `patch -` CLI path: take the live diff text, parse it back.
     let review_live = parse_unified_diff(&live).unwrap();
@@ -244,7 +244,7 @@ fn pathspec_filters_files() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
     // Only ask for src/ — should exclude README.md from worktree diff
-    let text = git_diff(&repo.workdir(), false, &["src/".to_string()]).unwrap();
+    let text = git_diff(&repo.workdir(), false, &["src/".to_string()], false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
 
     let paths: Vec<&str> = review
@@ -266,7 +266,7 @@ fn pathspec_filters_files() {
 fn viewport_materializes_live_diff() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), false, &[]).unwrap();
+    let text = git_diff(&repo.workdir(), false, &[], false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
 
     // materialize the whole stream and verify row types are sane
@@ -289,4 +289,48 @@ fn viewport_materializes_live_diff() {
         let file_idx = ViewportQuery::file_at_row(&review, mid);
         assert!(file_idx.is_some());
     }
+}
+
+#[test]
+fn worktree_diff_untracked_included_when_enabled() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    // Create an untracked file
+    write(&repo.path().join("untracked.txt"), "untracked content\n");
+    // Without --include-untracked, untracked file should NOT appear
+    let text_without = git_diff(&repo.workdir(), false, &[], false).unwrap();
+    let review_without = parse_unified_diff(&text_without).unwrap();
+    let paths_without: Vec<&str> = review_without
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        !paths_without.iter().any(|p| p.ends_with("untracked.txt")),
+        "untracked file should NOT appear without include_untracked: {paths_without:?}"
+    );
+    // With --include-untracked, untracked file SHOULD appear
+    let text_with = git_diff(&repo.workdir(), false, &[], true).unwrap();
+    let review_with = parse_unified_diff(&text_with).unwrap();
+    let paths_with: Vec<&str> = review_with
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        paths_with.iter().any(|p| p.ends_with("untracked.txt")),
+        "untracked file should appear with include_untracked=true: {paths_with:?}"
+    );
+    // Verify it's rendered as a new file addition
+    let untracked = review_with
+        .files
+        .iter()
+        .find(|f| f.display_path.ends_with("untracked.txt"))
+        .unwrap();
+    let has_add = untracked
+        .hunks
+        .iter()
+        .flat_map(|h| h.lines.iter())
+        .any(|l| l.kind == DiffLineKind::Add);
+    assert!(has_add, "untracked file should have added lines");
 }
