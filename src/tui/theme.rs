@@ -155,6 +155,23 @@ impl ThemeMode {
         }
     }
 
+    /// Return the syntect theme name that matches this mode:
+    /// `"base16-ocean.dark"` for dark backgrounds,
+    /// `"base16-ocean.light"` for light backgrounds.
+    pub fn syntect_theme_name(self) -> &'static str {
+        match self {
+            ThemeMode::Dark => "base16-ocean.dark",
+            ThemeMode::Light => "base16-ocean.light",
+            ThemeMode::Auto => {
+                if background_is_light() {
+                    "base16-ocean.light"
+                } else {
+                    "base16-ocean.dark"
+                }
+            }
+        }
+    }
+
     /// Parse a config string (`"dark"` / `"light"` / `"auto"`) into a mode.
     /// Unknown / empty values fall back to [`ThemeMode::Light`] (the default),
     /// so a typo never breaks the TUI.
@@ -322,6 +339,26 @@ mod tests {
         });
         with_colorfgbg(None, || {
             assert_eq!(resolve_auto().add, Theme::dark().add);
+        });
+    }
+
+    #[test]
+    fn syntect_theme_name_dark() {
+        assert_eq!(ThemeMode::Dark.syntect_theme_name(), "base16-ocean.dark");
+    }
+
+    #[test]
+    fn syntect_theme_name_light() {
+        assert_eq!(ThemeMode::Light.syntect_theme_name(), "base16-ocean.light");
+    }
+
+    #[test]
+    fn syntect_theme_name_auto_follows_bg() {
+        with_colorfgbg(Some("0;15"), || {
+            assert_eq!(ThemeMode::Auto.syntect_theme_name(), "base16-ocean.light");
+        });
+        with_colorfgbg(Some("0;0"), || {
+            assert_eq!(ThemeMode::Auto.syntect_theme_name(), "base16-ocean.dark");
         });
     }
 }
