@@ -213,7 +213,7 @@ fn run_loop(
         #[cfg(all(feature = "serve", unix))]
         if let Some(srv) = server {
             for req in srv.drain() {
-                let reply = apply_server_command(app, req.command);
+                let reply = apply_server_command(app, req.command, reloader.as_mut());
                 // Best-effort reply: a dropped sender means the CLI client
                 // hung up (fine — the apply already took effect on the App).
                 let _ = req.reply.send(reply);
@@ -316,8 +316,13 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
 /// to the CLI client. Lives here (not on `App`) because it bridges the
 /// `server::ServerCommand` wire type with the App state — `App` stays free of
 /// server-protocol knowledge. Pure w.r.t. I/O; safe to unit-test headlessly.
+/// `reloader` is optional — when present, `Reload` commands re-fetch the diff.
 #[cfg(all(feature = "serve", unix))]
-fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server::ServerReply {
+fn apply_server_command(
+    app: &mut App,
+    command: server::ServerCommand,
+    reloader: Option<&mut Reloader>,
+) -> server::ServerReply {
     use crate::tui::app::{Note, NoteTarget};
     use server::{ServerCommand, ServerReply};
     match command {
@@ -419,6 +424,19 @@ fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server
             app.status = "comments applied".into();
             ServerReply::Ok
         }
+        ServerCommand::Reload => match reloader {
+            Some(r) => match (*r)() {
+                Ok(text) => {
+                    app.reload_review(&text);
+                    app.status = "reloaded by agent".into();
+                    ServerReply::Ok
+                }
+                Err(e) => ServerReply::Error(format!("reload failed: {e}")),
+            },
+            None => ServerReply::Error(
+                "no reloader available (serve was started without --watch)".into(),
+            ),
+        },
     }
 }
 

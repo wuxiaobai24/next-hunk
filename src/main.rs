@@ -182,6 +182,16 @@ enum Commands {
         #[command(subcommand)]
         action: CommentAction,
     },
+    /// Reload the running serve session's diff content.
+    ///
+    /// Re-fetches the diff from the same source the serve was started with
+    /// and refreshes the review, preserving focus/notes/decisions best-effort.
+    /// Requires the serve to have been started with `--watch` (or a reloader).
+    Reload {
+        /// Optional repo hash to look up (defaults to current repo).
+        #[arg(long)]
+        hash: Option<String>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -450,6 +460,7 @@ fn run() -> Result<()> {
         Commands::Review { hash } => run_review(hash),
         Commands::Navigate { target, hash } => run_navigate(target, hash),
         Commands::Comment { action } => run_comment(action),
+        Commands::Reload { hash } => run_reload(hash),
     }
 }
 
@@ -804,6 +815,24 @@ fn run_navigate(target: String, hash: Option<String>) -> Result<()> {
     }
 }
 
+/// `next-hunk reload [--hash <hash>]`: reload the serve session's diff.
+#[cfg(all(feature = "serve", unix))]
+fn run_reload(hash: Option<String>) -> Result<()> {
+    let socket = resolve_socket(hash)?;
+    match next_hunk::tui::server::send_command(
+        &socket,
+        &next_hunk::tui::server::ServerCommand::Reload,
+    ) {
+        Ok(next_hunk::tui::server::ServerReply::Ok) => {
+            println!("ok: session reloaded");
+            Ok(())
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
 /// Turn a socket-connect failure into an actionable "no server" message,
 /// while letting unrelated errors (e.g. malformed reply) pass through. Takes
 /// the error by value so the unrelated-error path can return it as-is.
@@ -882,6 +911,11 @@ fn run_navigate(_target: String, _hash: Option<String>) -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_comment(_action: CommentAction) -> Result<()> {
     bail!("`comment` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_reload(_hash: Option<String>) -> Result<()> {
+    bail!("`reload` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[allow(clippy::too_many_arguments)]

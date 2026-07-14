@@ -70,6 +70,8 @@ pub enum ServerCommand {
     CommentRm { id: String },
     /// `next-hunk comment apply`: push comments into TUI notes.
     CommentApply,
+    /// `next-hunk reload`: re-fetch the diff content and refresh the review.
+    Reload,
 }
 
 /// A serializable summary of one file in the review, suitable for agent
@@ -694,5 +696,25 @@ mod tests {
         assert!(matches!(reply, ServerReply::Ok));
 
         drainer.join().unwrap_or(());
+    }
+
+    #[test]
+    fn reload_returns_ok() {
+        let sock = TempSocket::new("reload");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let drainer = std::thread::spawn(move || {
+            let mut got = listener.drain();
+            while got.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                got = listener.drain();
+            }
+            for r in got {
+                let _ = r.reply.send(ServerReply::Ok);
+            }
+        });
+
+        let reply = send_command(&sock.path, &ServerCommand::Reload).unwrap();
+        assert!(matches!(reply, ServerReply::Ok));
+        drainer.join().unwrap();
     }
 }
