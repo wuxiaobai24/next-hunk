@@ -66,6 +66,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   best-effort via the existing `App::reload_review` path. Requires the serve to
   have been started with `--watch` (or a reloader). Requires the `serve` feature
   on Unix.
+- **Reload now preserves decisions, folds, notes, and focus** — `App::reload_review`
+  (used by `--watch` and `next-hunk reload`) now re-maps per-hunk decisions and
+  file-folds by display path so they survive content refresh. Notes and focus
+  targets are preserved unchanged. Decisions for hunks that no longer exist in
+  the refreshed diff are silently dropped.
 
 ## [0.3.0] - 2026-07-14
 
