@@ -793,7 +793,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
+            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
                 .to_string()
         }
     };
@@ -865,6 +865,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("w", "toggle word-level inline diff"),
             ("W", "toggle ignore-whitespace"),
             ("t", "cycle theme (light → auto → dark)"),
+            ("zc / zo", "fold / unfold current file"),
         ],
         head,
         key,
