@@ -13,6 +13,33 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Layout mode for the diff stream pane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutMode {
+    /// Unified diff: interleaved context/add/delete per hunk (traditional).
+    #[default]
+    Unified,
+    /// Stacked diff: old content (context + deletes) then new content
+    /// (context + adds) per file, vertically.
+    Stack,
+}
+
+impl LayoutMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            LayoutMode::Unified => "unified",
+            LayoutMode::Stack => "stack",
+        }
+    }
+
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "stack" => LayoutMode::Stack,
+            _ => LayoutMode::Unified,
+        }
+    }
+}
+
 /// Raw user-configurable options. Every field optional: `None` = "not set".
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -25,6 +52,8 @@ pub struct Config {
     pub include_untracked: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
+    /// Layout mode: "unified" (default) or "stack".
+    pub layout: Option<String>,
 }
 
 impl Config {
@@ -48,6 +77,9 @@ impl Config {
         }
         if other.theme.is_some() {
             self.theme = other.theme;
+        }
+        if other.layout.is_some() {
+            self.layout = other.layout;
         }
         self
     }
@@ -87,6 +119,8 @@ pub struct ResolvedConfig {
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
     pub theme: Option<String>,
+    /// Layout mode for the diff stream: "unified" (default) or "stack".
+    pub layout: LayoutMode,
 }
 
 impl Default for ResolvedConfig {
@@ -99,6 +133,7 @@ impl Default for ResolvedConfig {
             line_numbers: true,
             include_untracked: false,
             theme: None,
+            layout: LayoutMode::Unified,
         }
     }
 }
@@ -135,6 +170,11 @@ impl ResolvedConfig {
                 .or(cfg.include_untracked)
                 .unwrap_or(d.include_untracked),
             theme: cfg.theme.clone(),
+            layout: cfg
+                .layout
+                .as_deref()
+                .map(LayoutMode::parse_str)
+                .unwrap_or(d.layout),
         }
     }
 }
@@ -463,5 +503,47 @@ theme = \"dark\"
         if let Some(x) = prev_xdg {
             std::env::set_var("XDG_CONFIG_HOME", x);
         }
+    }
+
+    #[test]
+    fn layout_mode_defaults_to_unified() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.layout, LayoutMode::Unified);
+    }
+
+    #[test]
+    fn layout_mode_from_config() {
+        let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.layout.as_deref(), Some("stack"));
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.layout, LayoutMode::Stack);
+    }
+
+    #[test]
+    fn layout_mode_from_str() {
+        assert_eq!(LayoutMode::parse_str("unified"), LayoutMode::Unified);
+        assert_eq!(LayoutMode::parse_str("stack"), LayoutMode::Stack);
+        assert_eq!(LayoutMode::parse_str("unknown"), LayoutMode::Unified);
+        assert_eq!(LayoutMode::parse_str(""), LayoutMode::Unified);
+    }
+
+    #[test]
+    fn layout_mode_as_str() {
+        assert_eq!(LayoutMode::Unified.as_str(), "unified");
+        assert_eq!(LayoutMode::Stack.as_str(), "stack");
     }
 }

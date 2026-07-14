@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
+use crate::config::LayoutMode;
 use crate::highlight::{HighlightCache, Highlighter};
 use crate::ir::{Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
@@ -154,6 +155,8 @@ pub struct App {
     pub decisions: std::collections::HashMap<HunkId, Decision>,
     /// Set of file indices whose bodies are folded (collapsed).
     pub folded: HashSet<usize>,
+    /// Layout mode for the diff stream pane.
+    pub layout_mode: LayoutMode,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -282,6 +285,7 @@ impl App {
             select_mode: false,
             decisions: std::collections::HashMap::new(),
             folded: HashSet::new(),
+            layout_mode: LayoutMode::Unified,
         }
     }
 

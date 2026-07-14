@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. Follows the vim-style two-key prefix pattern (`z` waits for `c`/`o`),
   same as `]h`/`[h` for hunk jumps. Fold state is preserved across scroll and
   file switches.
+- **Stack layout mode (`layout = "stack"`)** — alternative diff presentation
+  that shows old content (context + deletes) then new content (context + adds)
+  in two stacked blocks per file, separated by `▌ old` / `▌ new` labels. Set
+  `layout = "stack"` in `.next-hunk/config.toml` (default is `"unified"`).
+  Falls back to unified when the terminal is narrower than 40 columns.
 
 ## [0.3.0] - 2026-07-14
 

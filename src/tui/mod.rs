@@ -112,6 +112,7 @@ pub fn run_review_tui(
     start_highlight: bool,
     start_line_numbers: bool,
     theme: Option<String>,
+    layout: crate::config::LayoutMode,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
@@ -140,6 +141,7 @@ pub fn run_review_tui(
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
     app.line_numbers_on = start_line_numbers;
+    app.layout_mode = layout;
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
     app.focus_target = options.focus;
@@ -380,6 +382,7 @@ diff --git a/b.rs b/b.rs
             true,
             true,
             None,
+            crate::config::LayoutMode::Unified,
             None,
             ReviewOptions::default(),
             None
