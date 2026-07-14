@@ -177,6 +177,52 @@ enum Commands {
         #[arg(long)]
         hash: Option<String>,
     },
+    /// Manage comments on a running serve session.
+    Comment {
+        #[command(subcommand)]
+        action: CommentAction,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum CommentAction {
+    /// Add a comment to a file.
+    Add {
+        /// Target file path.
+        #[arg(long)]
+        file: String,
+        /// Optional new-side source line number.
+        #[arg(long)]
+        line: Option<u32>,
+        /// Optional hunk ordinal (1-based).
+        #[arg(long)]
+        hunk: Option<usize>,
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+        /// Comment text.
+        text: String,
+    },
+    /// List all comments.
+    List {
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Remove a comment by id.
+    Rm {
+        /// Comment id to remove.
+        id: String,
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Apply comments as TUI notes.
+    Apply {
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -403,6 +449,7 @@ fn run() -> Result<()> {
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
         Commands::Navigate { target, hash } => run_navigate(target, hash),
+        Commands::Comment { action } => run_comment(action),
     }
 }
 
@@ -630,6 +677,95 @@ fn run_review(hash: Option<String>) -> Result<()> {
     }
 }
 
+/// `next-hunk comment <action>`: manage session comments.
+#[cfg(all(feature = "serve", unix))]
+fn run_comment(action: CommentAction) -> Result<()> {
+    use next_hunk::tui::server::ServerCommand;
+    match action {
+        CommentAction::Add {
+            file,
+            line,
+            hunk,
+            hash,
+            text,
+        } => {
+            let socket = resolve_socket(hash)?;
+            match next_hunk::tui::server::send_command(
+                &socket,
+                &ServerCommand::CommentAdd {
+                    file,
+                    text,
+                    line,
+                    hunk,
+                },
+            ) {
+                Ok(next_hunk::tui::server::ServerReply::CommentAdded { id }) => {
+                    println!("ok: comment added with id {id}");
+                    Ok(())
+                }
+                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+        CommentAction::List { hash } => {
+            let socket = resolve_socket(hash)?;
+            match next_hunk::tui::server::send_command(&socket, &ServerCommand::CommentList) {
+                Ok(next_hunk::tui::server::ServerReply::CommentList { comments }) => {
+                    if comments.is_empty() {
+                        println!("no comments");
+                    } else {
+                        for c in &comments {
+                            let loc = match (c.hunk, c.line) {
+                                (Some(h), _) => format!(" hunk={h}"),
+                                (_, Some(l)) => format!(" line={l}"),
+                                _ => String::new(),
+                            };
+                            println!("{}  {}{}  {}", c.id, c.file, loc, c.text);
+                        }
+                    }
+                    Ok(())
+                }
+                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+        CommentAction::Rm { id, hash } => {
+            let socket = resolve_socket(hash)?;
+            match next_hunk::tui::server::send_command(&socket, &ServerCommand::CommentRm { id }) {
+                Ok(next_hunk::tui::server::ServerReply::Ok) => {
+                    println!("ok: comment removed");
+                    Ok(())
+                }
+                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+        CommentAction::Apply { hash } => {
+            let socket = resolve_socket(hash)?;
+            match next_hunk::tui::server::send_command(&socket, &ServerCommand::CommentApply) {
+                Ok(next_hunk::tui::server::ServerReply::Ok) => {
+                    println!("ok: comments applied to TUI");
+                    Ok(())
+                }
+                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+    }
+}
+
 /// Resolve a socket path from an optional hash or the current repo.
 #[cfg(all(feature = "serve", unix))]
 fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
@@ -741,6 +877,11 @@ fn run_review(_hash: Option<String>) -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_navigate(_target: String, _hash: Option<String>) -> Result<()> {
     bail!("`navigate` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_comment(_action: CommentAction) -> Result<()> {
+    bail!("`comment` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[allow(clippy::too_many_arguments)]

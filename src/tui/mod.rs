@@ -318,6 +318,7 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
 /// server-protocol knowledge. Pure w.r.t. I/O; safe to unit-test headlessly.
 #[cfg(all(feature = "serve", unix))]
 fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server::ServerReply {
+    use crate::tui::app::{Note, NoteTarget};
     use server::{ServerCommand, ServerReply};
     match command {
         ServerCommand::Push { focus, notes } => {
@@ -356,6 +357,66 @@ fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server
             // Set focus target and apply it (same path as --focus).
             app.focus_target = Some(target);
             app.apply_focus();
+            ServerReply::Ok
+        }
+        ServerCommand::CommentAdd {
+            file,
+            text,
+            line,
+            hunk,
+        } => {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = format!("c{}", COUNTER.fetch_add(1, Ordering::SeqCst));
+            app.comments.push(crate::tui::app::CommentEntry {
+                id: id.clone(),
+                file,
+                text,
+                line,
+                hunk,
+            });
+            ServerReply::CommentAdded { id }
+        }
+        ServerCommand::CommentList => ServerReply::CommentList {
+            comments: app.comments.clone(),
+        },
+        ServerCommand::CommentRm { id } => {
+            let before = app.comments.len();
+            app.comments.retain(|c| c.id != id);
+            if app.comments.len() < before {
+                ServerReply::Ok
+            } else {
+                ServerReply::Error(format!("comment {id} not found"))
+            }
+        }
+        ServerCommand::CommentApply => {
+            // Merge comments into notes for TUI rendering. Each comment
+            // becomes a Note attached to the appropriate target.
+            let new_notes: Vec<Note> = app
+                .comments
+                .iter()
+                .map(|c| {
+                    let target = if let Some(hunk) = c.hunk {
+                        NoteTarget::Hunk {
+                            path: c.file.clone(),
+                            hunk,
+                        }
+                    } else if let Some(line) = c.line {
+                        NoteTarget::Line {
+                            path: c.file.clone(),
+                            line,
+                        }
+                    } else {
+                        NoteTarget::Banner
+                    };
+                    Note {
+                        target,
+                        text: format!("💬 {}: {}", c.id, c.text),
+                    }
+                })
+                .collect();
+            app.notes.extend(new_notes);
+            app.status = "comments applied".into();
             ServerReply::Ok
         }
     }

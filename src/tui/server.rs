@@ -27,7 +27,7 @@ use std::thread;
 use anyhow::{Context, Result};
 
 use crate::ir::Review;
-use crate::tui::app::{FocusTarget, Note, Selections};
+use crate::tui::app::{CommentEntry, FocusTarget, Note, Selections};
 
 /// A request from a CLI client (`push` / `decision`), paired with the channel
 /// the main loop uses to send back the [`ServerReply`].
@@ -55,6 +55,21 @@ pub enum ServerCommand {
     Review,
     /// `next-hunk navigate`: scroll the TUI to a file, hunk, or line.
     Navigate { target: FocusTarget },
+    /// `next-hunk comment add`: add a comment/note.
+    CommentAdd {
+        file: String,
+        text: String,
+        /// Optional line number (new-side source line).
+        line: Option<u32>,
+        /// Optional hunk ordinal (1-based).
+        hunk: Option<usize>,
+    },
+    /// `next-hunk comment list`: list all comments.
+    CommentList,
+    /// `next-hunk comment rm <id>`: remove a comment by id.
+    CommentRm { id: String },
+    /// `next-hunk comment apply`: push comments into TUI notes.
+    CommentApply,
 }
 
 /// A serializable summary of one file in the review, suitable for agent
@@ -142,6 +157,10 @@ pub enum ServerReply {
     },
     /// Response to `Review`: file/hunk structure summary.
     Review(ReviewSummary),
+    /// Response to `CommentAdd`: the assigned comment id.
+    CommentAdded { id: String },
+    /// Response to `CommentList`: all session comments.
+    CommentList { comments: Vec<CommentEntry> },
     /// Server-side error (e.g. malformed command).
     Error(String),
 }
@@ -565,5 +584,115 @@ mod tests {
         .unwrap();
         assert!(matches!(reply, ServerReply::Ok));
         drainer.join().unwrap();
+    }
+
+    #[test]
+    fn comment_serde_round_trip() {
+        // Verify that CommentAdded serializes and deserializes correctly.
+        let reply = ServerReply::CommentAdded { id: "c1".into() };
+        let json = serde_json::to_string(&reply).expect("serialize CommentAdded");
+        let back: ServerReply = serde_json::from_str(&json).expect("deserialize CommentAdded");
+        match back {
+            ServerReply::CommentAdded { id } => assert_eq!(id, "c1"),
+            other => panic!("expected CommentAdded, got {other:?}"),
+        }
+
+        // CommentList
+        let list = ServerReply::CommentList {
+            comments: vec![CommentEntry {
+                id: "c1".into(),
+                file: "a.rs".into(),
+                text: "text".into(),
+                line: None,
+                hunk: None,
+            }],
+        };
+        let json = serde_json::to_string(&list).expect("serialize CommentList");
+        let back: ServerReply = serde_json::from_str(&json).expect("deserialize CommentList");
+        match back {
+            ServerReply::CommentList { comments: entries } => assert_eq!(entries.len(), 1),
+            other => panic!("expected CommentList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn comment_add_list_rm_round_trip() {
+        let sock = TempSocket::new("comment");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let drainer = std::thread::spawn(move || {
+            // Process requests one at a time: Add, List, Rm
+            let mut all = Vec::new();
+            for _ in 0..3 {
+                let mut got = listener.drain();
+                while got.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    got = listener.drain();
+                }
+                for r in got {
+                    match &r.command {
+                        ServerCommand::CommentAdd { .. } => {
+                            all.push(CommentEntry {
+                                id: "c1".into(),
+                                file: "a.rs".into(),
+                                text: "review this".into(),
+                                line: None,
+                                hunk: None,
+                            });
+                            let _ = r.reply.send(ServerReply::CommentAdded { id: "c1".into() });
+                        }
+                        ServerCommand::CommentList => {
+                            let _ = r.reply.send(ServerReply::CommentList {
+                                comments: all.clone(),
+                            });
+                        }
+                        ServerCommand::CommentRm { id } => {
+                            let before = all.len();
+                            all.retain(|c| c.id != *id);
+                            if all.len() < before {
+                                let _ = r.reply.send(ServerReply::Ok);
+                            } else {
+                                let _ = r.reply.send(ServerReply::Error("not found".into()));
+                            }
+                        }
+                        _ => {
+                            let _ = r.reply.send(ServerReply::Ok);
+                        }
+                    }
+                }
+            }
+        });
+
+        // Add
+        let reply = send_command(
+            &sock.path,
+            &ServerCommand::CommentAdd {
+                file: "a.rs".into(),
+                text: "review this".into(),
+                line: None,
+                hunk: None,
+            },
+        )
+        .unwrap();
+        match reply {
+            ServerReply::CommentAdded { id } => assert_eq!(id, "c1"),
+            other => panic!("expected CommentAdded, got {other:?}"),
+        }
+
+        // List
+        let reply = send_command(&sock.path, &ServerCommand::CommentList).unwrap();
+        match reply {
+            ServerReply::CommentList { comments } => {
+                assert_eq!(comments.len(), 1);
+                assert_eq!(comments[0].file, "a.rs");
+            }
+            other => panic!("expected CommentList, got {other:?}"),
+        }
+
+        // Rm
+        let reply =
+            send_command(&sock.path, &ServerCommand::CommentRm { id: "c1".into() }).unwrap();
+        assert!(matches!(reply, ServerReply::Ok));
+
+        drainer.join().unwrap_or(());
     }
 }
