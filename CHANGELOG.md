@@ -61,6 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removes one. `comment apply` pushes comments into the TUI as note annotations.
   Uses the existing note-rendering infrastructure. Requires the `serve` feature
   on Unix.
+- **`next-hunk reload [--hash <hash>]`** — re-fetch the diff content of a
+  running serve session and refresh the review, preserving focus/notes/decisions
+  best-effort via the existing `App::reload_review` path. Requires the serve to
+  have been started with `--watch` (or a reloader). Requires the `serve` feature
+  on Unix.
 
 ## [0.3.0] - 2026-07-14
 
