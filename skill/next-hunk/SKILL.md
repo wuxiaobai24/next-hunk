@@ -31,9 +31,7 @@ Use this skill **after** you finish a change and **before** you commit, when:
   something — `next-hunk diff` will still print an inspect summary, but the
   interactive review won't run.
 
-## How to invoke
-
-### 1. Just show the changes (no feedback needed)
+## Quick start: one-shot review (no approval needed)
 
 When you want the human informed but don't need a decision:
 
@@ -52,7 +50,7 @@ next-hunk diff --focus <path>:<line> --note <path>:<line>="<your explanation>"
 
 The human opens the TUI, reviews, and quits. You don't receive any signal back.
 
-### 2. Get approval per hunk (collect decisions)
+## Approval: one-shot `--select`
 
 When you need the human to accept/reject your changes hunk-by-hunk:
 
@@ -70,59 +68,190 @@ Hunk keys are `"<path>:h<n>"` (1-based ordinal within each file). **Parse stdout
 and apply only the `accepted` hunks.** Treat `undecided` as "not approved" — do
 not apply them unless the human asked you to.
 
-## Decision guide
+## Session workflow (persistent TUI + live agent control)
 
-| Situation | What to do |
-|-----------|------------|
-| Need approval to proceed | `--select` (you block, get JSON) |
-| Just want them informed, you continue | no `--select` (they review, you move on) |
-| Change is small / obvious | describe in chat, don't call next-hunk |
-| `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
+For **ongoing** reviews where you expect to iterate (adjust focus, inspect
+structure, add notes, poll decisions) without re-launching a process per
+interaction, use server mode:
 
-If unsure, prefer **no `--select`** first. The human can always ask you to roll
-back; but a blocking `--select` that no one answers will hang.
-
-## Server mode (persistent TUI + live push)
-
-`next-hunk serve` opens a **persistent** review TUI that stays open while you
-push updates into it and poll decisions, instead of re-launching a process per
-interaction. Use it when the review is **ongoing** — you expect to iterate
-(adjust focus, add notes) or poll the human's decisions multiple times.
+### 1. Human opens the persistent TUI
 
 ```bash
-# Human opens the persistent TUI (runs with a/r/u enabled):
 next-hunk serve
-
-# Agent: push a new focus/note into the live TUI (returns immediately):
-next-hunk push --focus src/auth.rs:88 --note banner="re-check token expiry"
-
-# Agent: read the human's accumulated decisions (returns immediately):
-next-hunk decision
-# {"accepted":["src/auth.rs:h1"],"rejected":["src/util.rs:h1"],"undecided":[]}
 ```
 
-`push`/`decision` find the server automatically (socket derived from the repo
-root) — run them from anywhere in the same repo. `decision` returns the **same
-JSON shape** as `--select` quit output, so you parse it identically; it does
-**not** wait for the human to quit.
+The TUI runs with selection mode on (`a`/`r`/`u` per hunk). It binds a Unix
+socket derived from the repo root, so all subsequent commands find it
+automatically — no `--socket` flag needed.
 
-### One-shot `--select` vs server mode
+### 2. Agent: discover the session
+
+```bash
+next-hunk list
+# c0ffee...  /tmp/next-hunk-c0ffee....sock  files=3  repo=src/main.rs
+```
+
+`list` scans `$XDG_RUNTIME_DIR` and `/tmp` for live next-hunk sockets, probes
+each, and prints hash/path/files/repo. `get` shows details for a specific hash
+or the current repo.
+
+```bash
+next-hunk get
+# socket: /tmp/next-hunk-abc123....sock
+# repo:   src/main.rs
+# files:  3
+```
+
+### 3. Agent: inspect the review structure
+
+```bash
+next-hunk review
+# {
+#   "file_count": 2,
+#   "stream_len": 24,
+#   "inserts": 12,
+#   "deletes": 3,
+#   "files": [
+#     {
+#       "display_path": "src/auth.rs",
+#       "inserts": 8,
+#       "deletes": 1,
+#       "hunks": [ { "header": "@@ -10,5 +10,8 @@", ... } ]
+#     }
+#   ]
+# }
+```
+
+`review` returns the file/hunk structure as JSON — file paths, insert/delete
+counts, and hunk ranges. No full patch text by default (agents request it
+separately if needed). Use this to understand what's in the review before
+deciding where to navigate.
+
+### 4. Agent: navigate to what matters
+
+```bash
+next-hunk navigate src/auth.rs:42
+# ok: navigated to src/auth.rs:42
+```
+
+Target syntax: `<path>` (file start), `<path>:<line>` (new-side line number),
+or `<path>:h<n>` (1-based hunk ordinal). The TUI scrolls to the target and
+syncs the file rail selection.
+
+### 5. Agent: add comments
+
+```bash
+next-hunk comment add --file src/auth.rs --line 42 "Extracted token validation — fixes the OOM"
+# ok: comment added with id c0
+
+next-hunk comment add --file src/auth.rs --hunk 1 "Key change is the boundary shift"
+# ok: comment added with id c1
+```
+
+Comments are stored on the session. `--line` targets a specific new-side source
+line; `--hunk` targets a 1-based hunk ordinal. If neither is given, the comment
+becomes a banner note.
+
+```bash
+next-hunk comment list
+# c0  src/auth.rs line=42  Extracted token validation — fixes the OOM
+# c1  src/auth.rs hunk=1   Key change is the boundary shift
+
+next-hunk comment rm c0
+# ok: comment removed
+```
+
+To show comments in the TUI as note annotations, run:
+
+```bash
+next-hunk comment apply
+# ok: comments applied to TUI
+```
+
+This merges all session comments into the TUI's note renderer, so the human
+sees them as `💬 c1: ...` rows below the target line/hunk.
+
+### 6. Agent: poll decisions
+
+```bash
+next-hunk decision
+# {"accepted":["src/auth.rs:h1"],"rejected":[],"undecided":["src/util.rs:h1"]}
+```
+
+Returns immediately — does **not** wait for the human to quit. The JSON shape
+matches `--select` quit output exactly, so your parser handles both identically.
+`undecided` means "not yet reviewed" — do not apply.
+
+### 7. Agent: reload the diff (optional)
+
+If the diff content changes (e.g. you made more edits), refresh the session:
+
+```bash
+next-hunk reload
+# ok: session reloaded
+```
+
+Re-fetches the diff from the same source the `serve` was started with and
+re-parses the review, preserving focus/notes/decisions best-effort (by path
+matching). Requires `serve` to have been started with `--watch` (or a reloader).
+
+### 8. Agent: push additional focus/notes
+
+```bash
+next-hunk push --focus src/util.rs:15 --note banner="Also fixed the batch size"
+# ok: pushed to running server
+```
+
+`push` replaces the focus target and appends notes to the TUI. Useful for
+iterating after the initial setup.
+
+## Complete session workflow summary
+
+```
+Human:  next-hunk serve
+Agent:  next-hunk list                          # discover session
+        next-hunk review                        # inspect structure
+        next-hunk navigate src/auth.rs:h1       # scroll to key hunk
+        next-hunk comment add --file src/auth.rs --hunk 1 "explanation"
+        next-hunk comment apply                 # show in TUI
+        next-hunk decision                      # poll human's decisions
+        # ... iterate: navigate → comment → apply → decision ...
+        next-hunk push --focus ...              # adjust focus
+        next-hunk reload                        # refresh if content changed
+```
+
+## One-shot `--select` vs server mode
 
 | Situation | What to do |
 |-----------|------------|
 | Single review, you can block once for the answer | `diff --select` (simpler, no server to manage) |
-| Review is ongoing; you'll push updates or poll decisions repeatedly | `serve` + `push` / `decision` |
+| Review is ongoing; you'll navigate, comment, or poll repeatedly | `serve` + session commands |
 | Human isn't at a terminal / you can't run `serve` first | `decision` errors: "no server running" — fall back to `--select` |
 
-`serve` requires a Unix OS and the `serve` feature (on by default).
+`serve` and all session commands (`list`, `get`, `review`, `navigate`,
+`comment`, `reload`, `push`, `decision`) require a Unix OS and the `serve`
+feature (on by default).
 
-## Writing good `--note` text
+## Decision guide
+
+| Situation | What to do |
+|-----------|------------|
+| Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
+| Just want them informed, you continue | no `--select` (they review, you move on) |
+| Change is small / obvious | describe in chat, don't call next-hunk |
+| `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
+| Iterating with the human | `serve` + session workflow (list → review → navigate → comment → decision) |
+
+If unsure, prefer **no `--select`** first. The human can always ask you to roll
+back; but a blocking `--select` that no one answers will hang.
+
+## Writing good annotation text
 
 - **Explain why, not what.** The diff already shows what changed. Say *why* you
   made the call ("this fixes the OOM by capping the batch size", "renamed to
   match the new domain language").
-- **Point `--focus` at the highest-leverage line.** Don't make them scroll to
-  find the crux — the focus line is where their eye should land first.
+- **Point `--focus` / `navigate` at the highest-leverage line.** Don't make them
+  scroll to find the crux — the focus line is where their eye should land first.
 - **One banner note** per invocation works well as a 1-sentence summary; use
   line/hunk notes for the specifics.
 
@@ -133,13 +262,19 @@ Once the TUI is open, the human navigates with:
 - `j` / `k` — scroll down / up
 - `]h` / `[h` — next / previous hunk (wraps across files)
 - `Tab` / `h` / `l` — next / previous file
-- `a` / `r` / `u` — (**`--select` only**) accept / reject / mark undecided on the current hunk
+- `zc` / `zo` — fold / unfold current file
+- `a` / `r` / `u` — (**`--select` / `serve` only**) accept / reject / mark undecided on the current hunk
 - `o` — open the focused line in `$EDITOR`
-- `q` — quit (in `--select` mode, this emits the JSON)
+- `#` — toggle line-number gutter
+- `w` — toggle word-level inline diff
+- `W` — toggle ignore-whitespace
+- `t` — cycle theme (light → auto → dark)
+- `/` — search; `n`/`N` next/prev match
+- `q` — quit (in `--select`/`serve` mode, emits decisions JSON on quit)
 
 ## Examples
 
-### Refactor across two files, explain the crux
+### One-shot refactor with explanation
 
 ```bash
 next-hunk diff \
@@ -149,7 +284,26 @@ next-hunk diff \
   --note banner="Auth refactor — 2 files, core change is extracting token validation"
 ```
 
-### Ask for approval on a risky change
+### Session: inspect, navigate, comment, poll
+
+```bash
+# Discover the session the human opened:
+next-hunk list
+
+# Inspect the review structure:
+next-hunk review
+
+# Navigate to the critical hunk and add a comment:
+next-hunk navigate src/db/migrate.rs:140
+next-hunk comment add --file src/db/migrate.rs --line 140 \
+  "This drops the legacy user_email column — irreversible"
+next-hunk comment apply
+
+# Later, poll the human's decision:
+next-hunk decision
+```
+
+### Ask for approval on a risky change (one-shot)
 
 ```bash
 next-hunk diff --select \
