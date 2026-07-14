@@ -582,6 +582,7 @@ diff --git a/c.rs b/c.rs
                 start: 0,
                 height: review.stream_len,
             },
+            &std::collections::HashSet::new(),
         );
         for &hs in &review.hunk_starts {
             assert!(

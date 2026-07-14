@@ -75,6 +75,7 @@ fn viewport_over_golden_fixture() {
             start: 0,
             height: review.stream_len,
         },
+        &std::collections::HashSet::new(),
     );
     assert_eq!(rows.len(), review.stream_len);
     // first row is a file header, last row is a diff line

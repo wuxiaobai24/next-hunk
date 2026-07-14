@@ -142,7 +142,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     // Collect owned row data so we can release the &app.review borrow before
     // mutating app.cache below for highlighting. Line numbers are resolved here
     // (they need the review) and carried on each OwnedRow.
-    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport)
+    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport, &app.folded)
         .into_iter()
         .enumerate()
         .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))

@@ -5,6 +5,8 @@
 //! is mean `< 0.5 ms` for height=40 over 1000 random starts.
 //! Run: `cargo bench --bench viewport`.
 
+use std::collections::HashSet;
+
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use next_hunk::ir::{parse_unified_diff, Viewport, ViewportQuery};
 
@@ -51,7 +53,11 @@ fn bench_viewport(c: &mut Criterion) {
         b.iter(|| {
             let mut acc = 0usize;
             for &start in black_box(&starts) {
-                let rows = ViewportQuery::rows(black_box(&review), Viewport { start, height });
+                let rows = ViewportQuery::rows(
+                    black_box(&review),
+                    Viewport { start, height },
+                    &HashSet::new(),
+                );
                 acc += rows.len();
             }
             black_box(acc);
@@ -62,7 +68,11 @@ fn bench_viewport(c: &mut Criterion) {
     c.bench_function("viewport_single_h40", |b| {
         let start = stream_len / 2;
         b.iter(|| {
-            let rows = ViewportQuery::rows(black_box(&review), Viewport { start, height });
+            let rows = ViewportQuery::rows(
+                black_box(&review),
+                Viewport { start, height },
+                &HashSet::new(),
+            );
             black_box(rows.len());
         })
     });

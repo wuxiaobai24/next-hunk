@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::model::{DiffLineKind, Review};
 
 /// A single virtual row in the flattened multi-file stream.
@@ -39,7 +41,14 @@ pub struct ViewportQuery;
 impl ViewportQuery {
     /// Materialize stream rows in `[start, start+height)` without scanning the
     /// whole review when possible (binary search on file spans).
-    pub fn rows<'a>(review: &'a Review, viewport: Viewport) -> Vec<StreamRow<'a>> {
+    ///
+    /// `folded` is a set of file indices whose bodies (hunks + lines) are
+    /// collapsed — only the file header row is emitted.
+    pub fn rows<'a>(
+        review: &'a Review,
+        viewport: Viewport,
+        folded: &HashSet<usize>,
+    ) -> Vec<StreamRow<'a>> {
         if review.stream_len == 0 || viewport.height == 0 {
             return Vec::new();
         }
@@ -74,6 +83,12 @@ impl ViewportQuery {
                 });
             }
             row += 1;
+
+            // When the file is folded, skip its body (hunk headers + lines).
+            if folded.contains(&file_idx) {
+                file_idx += 1;
+                continue;
+            }
 
             for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
                 if row >= end {
@@ -389,6 +404,7 @@ diff --git a/b.rs b/b.rs
                 start: 0,
                 height: 2,
             },
+            &HashSet::new(),
         );
         assert_eq!(rows.len(), 2);
         assert!(matches!(rows[0], StreamRow::FileHeader { .. }));
@@ -405,6 +421,7 @@ diff --git a/b.rs b/b.rs
                 start: total + 10,
                 height: 5,
             },
+            &HashSet::new(),
         );
         assert_eq!(rows.len(), 1);
     }
@@ -415,7 +432,7 @@ diff --git a/b.rs b/b.rs
         let f0_end = review.files[0].stream_start + review.files[0].stream_len;
         // start a couple rows before the boundary, take enough to cross into file 1
         let start = f0_end.saturating_sub(1);
-        let rows = ViewportQuery::rows(&review, Viewport { start, height: 4 });
+        let rows = ViewportQuery::rows(&review, Viewport { start, height: 4 }, &HashSet::new());
         // should contain a FileHeader for file 1 somewhere
         assert!(rows
             .iter()
@@ -453,6 +470,7 @@ diff --git a/b.rs b/b.rs
                 start: 0,
                 height: 0,
             },
+            &HashSet::new(),
         );
         assert!(rows.is_empty());
     }
@@ -736,5 +754,71 @@ diff --git a/a.rs b/a.rs
     fn row_for_new_line_unknown_file() {
         let review = two_file_review();
         assert_eq!(ViewportQuery::row_for_new_line(&review, 99, 1), None);
+    }
+
+    // ---- fold ----
+
+    #[test]
+    fn rows_skips_body_of_folded_file() {
+        let review = two_file_review();
+        // file0: stream_start=0, stream_len=4 (header + hunk header + -old + +new)
+        // file1: stream_start=4, stream_len=4
+        let mut folded = HashSet::new();
+        folded.insert(0);
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: 0,
+                height: 10,
+            },
+            &folded,
+        );
+        // file0 should only emit its header (1 row), file1 should emit all 4 rows
+        assert_eq!(rows.len(), 5, "folded file0: 1 header + file1: 4 rows = 5");
+        assert!(matches!(rows[0], StreamRow::FileHeader { file_idx: 0, .. }));
+        assert!(matches!(rows[1], StreamRow::FileHeader { file_idx: 1, .. }));
+        // file1's hunk header and lines should follow
+        assert!(matches!(rows[2], StreamRow::HunkHeader { file_idx: 1, .. }));
+        assert!(matches!(rows[3], StreamRow::Line { file_idx: 1, .. }));
+        assert!(matches!(rows[4], StreamRow::Line { file_idx: 1, .. }));
+    }
+
+    #[test]
+    fn rows_skips_body_of_all_folded_files() {
+        let review = two_file_review();
+        let mut folded = HashSet::new();
+        folded.insert(0);
+        folded.insert(1);
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: 0,
+                height: 10,
+            },
+            &folded,
+        );
+        // Both files folded: only 2 file header rows
+        assert_eq!(rows.len(), 2);
+        assert!(matches!(rows[0], StreamRow::FileHeader { file_idx: 0, .. }));
+        assert!(matches!(rows[1], StreamRow::FileHeader { file_idx: 1, .. }));
+    }
+
+    #[test]
+    fn rows_folded_file_at_viewport_boundary() {
+        let review = two_file_review();
+        // Viewport starts at file1's header (row 4), file0 is folded.
+        // Even though file0 is folded, it's outside the viewport so only file1 appears.
+        let mut folded = HashSet::new();
+        folded.insert(0);
+        let rows = ViewportQuery::rows(
+            &review,
+            Viewport {
+                start: 4,
+                height: 4,
+            },
+            &folded,
+        );
+        assert_eq!(rows.len(), 4);
+        assert!(matches!(rows[0], StreamRow::FileHeader { file_idx: 1, .. }));
     }
 }
