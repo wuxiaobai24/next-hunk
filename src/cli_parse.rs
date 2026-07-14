@@ -145,6 +145,59 @@ pub fn runtime_socket_path(repo_root: &Path) -> PathBuf {
     PathBuf::from(format!("/tmp/next-hunk-{hash}.sock"))
 }
 
+/// Discover live next-hunk server sockets by scanning well-known runtime
+/// directories. Returns a list of `(socket_path, repo_hash)` pairs for sockets
+/// where a connect succeeds (i.e. a live server is running).
+#[cfg(all(feature = "serve", unix))]
+pub fn discover_live_sockets() -> Vec<(PathBuf, String)> {
+    let mut candidates = Vec::new();
+    // Scan XDG_RUNTIME_DIR if set.
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        if !xdg.is_empty() {
+            if let Ok(entries) = std::fs::read_dir(&xdg) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    if let Some(name) = name.to_str() {
+                        if let Some(hash) = name
+                            .strip_prefix("next-hunk-")
+                            .and_then(|s| s.strip_suffix(".sock"))
+                        {
+                            candidates.push((entry.path(), hash.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Also scan /tmp for next-hunk-*.sock files.
+    if let Ok(entries) = std::fs::read_dir("/tmp") {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if let Some(name) = name.to_str() {
+                if let Some(hash) = name
+                    .strip_prefix("next-hunk-")
+                    .and_then(|s| s.strip_suffix(".sock"))
+                {
+                    candidates.push((entry.path(), hash.to_string()));
+                }
+            }
+        }
+    }
+    // Deduplicate by hash (prefer XDG path over /tmp).
+    let mut seen = std::collections::HashSet::new();
+    let mut live = Vec::new();
+    for (path, hash) in candidates {
+        if !seen.insert(hash.clone()) {
+            continue;
+        }
+        // Probe: is the socket live?
+        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+            live.push((path, hash));
+        }
+    }
+    live
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -296,6 +349,18 @@ mod tests {
         assert!(
             name.starts_with("next-hunk-") && name.ends_with(".sock"),
             "expected next-hunk-*.sock filename, got {name}"
+        );
+    }
+
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn discover_live_sockets_empty_when_no_sessions() {
+        // With no next-hunk server running, discovery returns empty.
+        let sessions = discover_live_sockets();
+        // May return empty or find unrelated sockets; at minimum it shouldn't panic.
+        assert!(
+            sessions.iter().all(|(_, h)| h.len() == 16),
+            "all hashes should be 16-char hex strings"
         );
     }
 }

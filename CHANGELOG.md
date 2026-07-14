@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (default `false`, truncates). Ratatui's `Paragraph::wrap` is used so no
   viewport or IR changes were needed — wrapping is a presentation-layer
   property applied during rendering.
+- **`next-hunk list` / `next-hunk get [hash]`** — discover and inspect live
+  server sessions. `list` scans `$XDG_RUNTIME_DIR` and `/tmp` for next-hunk
+  sockets, probes each for liveness, and prints session info (hash, path,
+  file count, repo). `get` shows details for a specific session by hash or
+  defaults to the current repo's socket. Requires the `serve` feature on Unix.
 
 ## [0.3.0] - 2026-07-14
 
