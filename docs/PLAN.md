@@ -96,7 +96,7 @@
 
 **工程：**
 
-- [ ] huge fixture 打开/滚动仍过内部 gate
+- [x] huge fixture 打开/滚动仍过内部 gate
 - [ ] CHANGELOG 用户可见项齐全
 
 ---
