@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, ResolvedConfig};
+use next_hunk::config::{CliFlags, Config, LayoutMode, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
 use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
 use next_hunk::tui::{run_review_tui, ReviewOptions};
@@ -235,6 +235,7 @@ fn run() -> Result<()> {
                 resolved.highlight,
                 resolved.line_numbers,
                 resolved.theme,
+                resolved.layout,
                 Some(repo),
                 ReviewOptions {
                     focus: focus_target,
@@ -257,6 +258,7 @@ fn run() -> Result<()> {
                 true,
                 cfg.line_numbers.unwrap_or(true),
                 cfg.theme,
+                LayoutMode::Unified,
                 Some(repo),
                 ReviewOptions::default(),
                 None,
@@ -270,6 +272,7 @@ fn run() -> Result<()> {
                 true,
                 true,
                 None,
+                LayoutMode::Unified,
                 None,
                 ReviewOptions::default(),
                 None,
@@ -289,6 +292,7 @@ fn run() -> Result<()> {
                 true,
                 true,
                 None,
+                LayoutMode::Unified,
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
@@ -332,6 +336,7 @@ fn run() -> Result<()> {
                 true,
                 cfg.line_numbers.unwrap_or(true),
                 cfg.theme,
+                LayoutMode::Unified,
                 workdir,
                 ReviewOptions::default(),
                 None,
@@ -440,6 +445,7 @@ fn run_serve(
         resolved.highlight,
         resolved.line_numbers,
         resolved.theme,
+        resolved.layout,
         Some(repo),
         ReviewOptions {
             focus: focus_target,
@@ -569,6 +575,7 @@ fn open_review_from_text(
     highlight_on: bool,
     line_numbers_on: bool,
     theme: Option<String>,
+    layout: next_hunk::config::LayoutMode,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<next_hunk::tui::ServerArg>,
@@ -599,6 +606,7 @@ fn open_review_from_text(
         highlight_on,
         line_numbers_on,
         theme,
+        layout,
         workdir,
         options,
         server,

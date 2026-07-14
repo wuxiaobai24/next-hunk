@@ -128,7 +128,12 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
-    draw_stream_unified(app, frame, area);
+    // Narrow terminal: stack mode falls back to unified (no crash).
+    if app.layout_mode == crate::config::LayoutMode::Stack && area.width >= 40 {
+        draw_stream_stack(app, frame, area);
+    } else {
+        draw_stream_unified(app, frame, area);
+    }
 }
 
 fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -187,6 +192,167 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         Block::default()
             .borders(Borders::NONE)
             .title(format!(" {} ", title)),
+    );
+    frame.render_widget(para, area);
+}
+
+/// Stack layout: for each file, render old content (context + deletes) then
+/// new content (context + adds) as two stacked blocks separated by a visual
+/// divider. Preserves viewport-only materialization — works on the same
+/// [`ViewportQuery::rows`] output without touching the IR.
+fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
+    let height = area.height as usize;
+    let scroll_y = app.scroll_y;
+    let viewport = Viewport {
+        start: scroll_y,
+        height,
+    };
+
+    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport, &app.folded)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))
+        .collect();
+
+    let current_match_row = if app.search.active && !app.search.matches.is_empty() {
+        Some(app.search.matches[app.search.current])
+    } else {
+        None
+    };
+    let match_rows: std::collections::HashSet<usize> = if app.search.active {
+        app.search.matches.iter().copied().collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+
+    let mut lines: Vec<Line> = Vec::new();
+    // Group rows by file to produce old/new blocks per file.
+    let mut file_rows: Vec<(usize, Vec<OwnedRow>)> = Vec::new();
+    for r in owned_rows {
+        let file_idx = match &r {
+            OwnedRow::FileHeader { .. } => continue, // handled below
+            OwnedRow::HunkHeader { file_idx, .. } => *file_idx,
+            OwnedRow::Line { file_idx, .. } => *file_idx,
+        };
+        if file_rows.last().map(|(f, _)| *f) != Some(file_idx) {
+            file_rows.push((file_idx, Vec::new()));
+        }
+        file_rows.last_mut().unwrap().1.push(r);
+    }
+
+    for (file_idx, rows) in &file_rows {
+        let path = app.review.display_path(*file_idx);
+        // File header
+        lines.push(Line::from(Span::styled(
+            format!("─── {} ───", path),
+            Style::default()
+                .fg(app.theme.file_header)
+                .add_modifier(Modifier::BOLD),
+        )));
+        // Old block: context + delete lines
+        lines.push(Line::from(Span::styled(
+            "▌ old",
+            Style::default()
+                .fg(app.theme.dim)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for r in rows.iter() {
+            if let OwnedRow::Line {
+                kind,
+                text,
+                file_idx,
+                abs_row,
+                old_no,
+                new_no,
+                counterpart,
+            } = &r
+            {
+                if *kind == DiffLineKind::Add {
+                    continue;
+                }
+                let line = stream_row_to_line(
+                    app,
+                    OwnedRow::Line {
+                        kind: *kind,
+                        text: text.clone(),
+                        file_idx: *file_idx,
+                        abs_row: *abs_row,
+                        old_no: *old_no,
+                        new_no: *new_no,
+                        counterpart: counterpart.clone(),
+                    },
+                    current_match_row,
+                    &match_rows,
+                );
+                if let Some(notes) = notes_by_row.get(abs_row) {
+                    for text in notes {
+                        lines.push(Line::from(Span::styled(
+                            format!("  💬 {}", text),
+                            Style::default()
+                                .fg(app.theme.note)
+                                .add_modifier(Modifier::ITALIC),
+                        )));
+                    }
+                }
+                lines.push(line);
+            }
+        }
+        // New block
+        lines.push(Line::from(Span::styled(
+            "▌ new",
+            Style::default()
+                .fg(app.theme.dim)
+                .add_modifier(Modifier::BOLD),
+        )));
+        for r in rows.iter() {
+            if let OwnedRow::Line {
+                kind,
+                text,
+                file_idx,
+                abs_row,
+                old_no,
+                new_no,
+                counterpart,
+            } = &r
+            {
+                if *kind == DiffLineKind::Delete {
+                    continue;
+                }
+                let line = stream_row_to_line(
+                    app,
+                    OwnedRow::Line {
+                        kind: *kind,
+                        text: text.clone(),
+                        file_idx: *file_idx,
+                        abs_row: *abs_row,
+                        old_no: *old_no,
+                        new_no: *new_no,
+                        counterpart: counterpart.clone(),
+                    },
+                    current_match_row,
+                    &match_rows,
+                );
+                if let Some(notes) = notes_by_row.get(abs_row) {
+                    for text in notes {
+                        lines.push(Line::from(Span::styled(
+                            format!("  💬 {}", text),
+                            Style::default()
+                                .fg(app.theme.note)
+                                .add_modifier(Modifier::ITALIC),
+                        )));
+                    }
+                }
+                lines.push(line);
+            }
+        }
+    }
+
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::NONE)
+            .title(format!(" {} ", app.current_path())),
     );
     frame.render_widget(para, area);
 }

@@ -43,6 +43,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
+- [x] Stack layout: `layout = "stack"` config (unified default)
 - [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
 
@@ -200,6 +201,7 @@ Fields:
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
 | `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
+| `layout` | string | `"unified"` | `"unified"` (default, interleaved) or `"stack"` (old/new blocks per file) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
