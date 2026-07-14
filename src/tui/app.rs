@@ -267,7 +267,7 @@ impl App {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
-            format!("{} file(s) — j/k scroll, ]h/[h next/prev hunk, / search, f filter, H highlight, q quit", review.file_count())
+            format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count())
         };
         let theme = theme_mode.to_theme();
         Self {
@@ -2749,5 +2749,15 @@ diff --git a/c.rs b/c.rs
         // zc on already-folded file is a no-op (status says already folded)
         assert!(app.folded.contains(&0));
         assert!(app.status.contains("already folded"));
+    }
+
+    #[test]
+    fn initial_status_mentions_fold_keys() {
+        let app = two_file_app();
+        assert!(
+            app.status.contains("zc/zo"),
+            "initial status should mention fold keys: {}",
+            app.status
+        );
     }
 }
