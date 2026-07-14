@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sockets, probes each for liveness, and prints session info (hash, path,
   file count, repo). `get` shows details for a specific session by hash or
   defaults to the current repo's socket. Requires the `serve` feature on Unix.
+- **`next-hunk review [hash]`** — print the current review's file/hunk structure
+  as JSON (no full patch text by default). Connects to a running serve session
+  and dumps file paths, insert/delete counts, and hunk ranges. Useful for
+  agents to understand the review structure before deciding what to focus on.
+  Requires the `serve` feature on Unix.
 
 ## [0.3.0] - 2026-07-14
 
