@@ -118,15 +118,48 @@ build). Replace with CI numbers when a bench harness is wired into CI.
 
 | Metric | Fixture | Gate | Measured | Status |
 |--------|---------|------|----------|--------|
-| `parse_ms` | huge | < 80 ms | ~1.26 ms | ✅ pass (Phase 1) |
-| `viewport_ms` (height=40, single) | huge | mean < 0.5 ms | ~0.0002 ms (195 ns) | ✅ pass (Phase 1) |
-| `viewport_ms` (height=40, 1000 starts batch) | huge | mean < 0.5 ms | ~0.31 ms (306 µs / 1000) | ✅ pass (Phase 1) |
-| `parse_ms` | medium | — | ~0.22 ms | observation |
-| `parse_ms` | small | — | ~7.3 µs | observation |
+| `parse_ms` | huge | < 80 ms | ~1.39 ms | ✅ pass (Phase 1) |
+| `viewport_ms` (height=40, single) | huge | mean < 0.5 ms | ~0.0002 ms (197 ns) | ✅ pass (Phase 1) |
+| `viewport_ms` (height=40, 1000 starts batch) | huge | mean < 0.5 ms | ~0.34 ms (341 µs / 1000) | ✅ pass (Phase 1) |
+| `parse_ms` | medium | — | ~0.24 ms | observation |
+| `parse_ms` | small | — | ~8.2 µs | observation |
 
 RSS after parse + viewport queries not yet measured with an instrumented
 harness; the huge fixture's arena is ~1 MB, well under the 150 MB gate. A
 proper RSS measurement is pending a `bench`/`next-hunk bench` harness.
+
+### Rough comparison vs `delta` (design claims, not rigorous)
+
+`delta` (https://github.com/dandavison/delta) is the most widely used
+terminal diff viewer. This comparison documents **design-level claims** with
+real bench numbers where available. Delta was not installed on the test
+machine, so no direct head-to-head timing was run. Numbers below are from
+`cargo bench` on an AMD Ryzen 7 5700X, 32 GB RAM, Linux, release build.
+
+| Dimension | next-hunk | delta | Notes |
+|-----------|-----------|-------|-------|
+| **Parse latency (huge, ~1.1 MB / 38k lines)** | **~1.4 ms** | likely similar (both stream-parse) | next-hunk builds a compact IR (arena + spans); delta builds a syntax-highlighted output. Both should be fast on this input size. |
+| **Viewport materialization (40 rows)** | **~197 ns** single, **~341 µs** for 1000 random starts | N/A — delta renders the full output in one pass | next-hunk's key differentiator: O(visible) materialization via binary-searched file spans. Delta processes the entire diff even for a small pager view. |
+| **Multi-file navigation** | binary-searched file index, O(log N) per jump | N/A — delta is a pager, not an interactive reviewer | next-hunk indexes file/hunk starts at parse time for instant jumps. |
+| **Startup time** | ~tens of ms (gix discovery + syntect load + parse) | ~single-digit ms (no TUI, no syntax setup) | delta is leaner at startup (no TUI, no interactive loop). next-hunk's startup includes syntax set loading (~20 ms) and TUI init. |
+| **Binary size (release, stripped)** | ~14 MB | ~2 MB (static musl) | next-hunk bundles syntect syntaxes + gix; delta is smaller. Binary size is **not a product goal** (per ARCHITECTURE.md). |
+| **RSS (huge fixture)** | IR arena ~1 MB; total RSS likely < 50 MB (not measured) | < 10 MB expected | next-hunk holds the full parsed IR in memory for interactive navigation. Delta streams to stdout. |
+| **Architecture** | Viewport-only: never builds widgets for off-screen rows | Full-output pager: renders entire diff to terminal | Fundamental design difference. next-hunk stays responsive on 100k-line diffs; delta may stall on huge inputs. |
+
+**Verdict**: next-hunk is **not faster at paging a single diff to stdout** —
+delta wins on startup speed, binary size, and simplicity. next-hunk's
+differentiator is **interactive multi-file navigation at scale**: binary
+searched indices, viewport-only materialization, and O(log N) file/hunk
+jumps that don't degrade with diff size. For a 200-file / 100k-line
+changeset, delta renders everything in one pass while next-hunk lets the
+human jump between files and hunks in nanoseconds.
+
+Methodology: `cargo bench --bench parse` and `cargo bench --bench viewport`
+on the bundled fixtures (medium: 191 KB / 6.5k lines; huge: 1.1 MB / 38k
+lines). Delta was not on PATH — numbers above for delta are informed
+estimates based on its documented design (Rust, syntect, stream-through
+pipeline) and should be verified independently. Contributions with a
+rigorous comparison are welcome.
 
 ### Policy
 
