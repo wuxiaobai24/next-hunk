@@ -21,7 +21,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 
 ## Status
 
-`v0.1.0-dev` — usable daily driver for reviewing diffs:
+`v0.4-dev` — daily driver for reviewing diffs:
 
 - [x] Project scaffold + compact unified-diff IR (runtime model)
 - [x] Viewport query with binary search on file spans
@@ -39,6 +39,10 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
 - [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
+- [x] `line_numbers` config (no silent no-op)
+- [x] `include_untracked` config + `--include-untracked` flag (off by default)
+- [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
+- [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
 - [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
 
@@ -132,6 +136,8 @@ git config --global core.pager "next-hunk pager"
 next-hunk                  # working tree diff
 next-hunk diff --staged
 next-hunk diff --watch     # live-reload on file changes
+next-hunk diff --include-untracked  # include untracked files
+next-hunk filediff old.rs new.rs    # diff two arbitrary files
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
@@ -157,6 +163,8 @@ git show HEAD   # → launches the review TUI
 | `]h` | next hunk (wraps across files) |
 | `[h` | previous hunk (wraps across files) |
 | `Space` | next hunk (quick `]h` alias) |
+| `zc` | fold (collapse) current file |
+| `zo` | unfold (expand) current file |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
 | `1`–`9` | jump to the Nth file |
@@ -191,6 +199,7 @@ Fields:
 | `highlight` | bool | `true` | syntax highlighting |
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
+| `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -200,7 +209,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`.
+CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`.
 
 ## Agent integration
 

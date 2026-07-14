@@ -49,7 +49,7 @@
 - [x] worktree diff 支持 untracked（可配置/可关）
 - [x] `next-hunk diff a b` 两文件直比
 - [x] 文件折叠（`zc`/`zo` 或等价）
-- [ ] README Status / 本文件与代码一致（ARCHITECTURE 勾选可另 PR）
+- [x] README Status / 本文件与代码一致（ARCHITECTURE 勾选可另 PR）
 
 ### 0.5 — 布局与观感
 

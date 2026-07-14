@@ -21,7 +21,7 @@
 
 ## 状态
 
-`v0.1.0` — 日常 review diff 可用：
+`v0.4-dev` — 日常 review diff 可用：
 
 - [x] 项目骨架 + 紧凑 unified-diff IR（运行时模型）
 - [x] 视口查询（基于文件 span 的二分查找）
@@ -39,6 +39,10 @@
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
 - [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
+- [x] `line_numbers` 配置生效（非 silent no-op）
+- [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
+- [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
+- [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
 - [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
 
@@ -97,6 +101,8 @@ git config --global core.pager "next-hunk pager"
 next-hunk                  # 工作区 diff
 next-hunk diff --staged
 next-hunk diff --watch     # 文件变化时实时重载
+next-hunk diff --include-untracked  # 包含未跟踪文件
+next-hunk filediff old.rs new.rs    # 对比磁盘上两个文件
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
@@ -122,6 +128,8 @@ git show HEAD   # → 启动 review TUI
 | `]h` | 下一个 hunk（跨文件回绕） |
 | `[h` | 上一个 hunk（跨文件回绕） |
 | `Space` | 下一个 hunk（`]h` 的快捷单键） |
+| `zc` | 折叠（收起）当前文件 |
+| `zo` | 展开当前文件 |
 | `Tab` / `l` / `→` | 下一个文件 |
 | `Shift+Tab` / `h` / `←` | 上一个文件 |
 | `1`–`9` | 跳到第 N 个文件 |
@@ -155,6 +163,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `highlight` | bool | `true` | 语法高亮 |
 | `watch` | bool | `false` | 文件变化时实时重载 |
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
+| `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
 示例 `~/.config/next-hunk/config.toml`:
@@ -164,7 +173,7 @@ highlight = true
 watch = true
 ```
 
-CLI 覆盖:`--staged`、`--watch`、`--no-highlight`。
+CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`。
 
 ## Agent 集成
 
