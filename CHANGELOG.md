@@ -73,6 +73,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the refreshed diff are silently dropped.
 - **Status/hints updated for fold keys** — the startup status line, help
   overlay, and bottom help bar now mention `zc`/`zo` fold/unfold keys.
+- **Generation-id highlight cache** — `HighlightCache` now tags each entry
+  with a generation id. `invalidate()` bumps the gen and clears the map.
+  New `try_get()`/`try_insert()` methods allow safe coexistence with
+  background highlight work: a background fill that completes after
+  invalidation can check the gen and skip inserting stale results.
+  The sync `get_or_highlight` path is unchanged as the default.
 
 ## [0.3.0] - 2026-07-14
 
