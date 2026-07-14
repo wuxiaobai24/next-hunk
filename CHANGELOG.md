@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Configuration
+- **`line_numbers` config now actually works** — setting `line_numbers = false` in
+  `.next-hunk/config.toml` (or the user-level config) hides the line-number
+  gutter at startup. Previously the field was parsed but silently ignored; the
+  gutter was always on. `#` still toggles it at runtime.
+
 ## [0.3.0] - 2026-07-14
 
 ### Changed — Search & filter

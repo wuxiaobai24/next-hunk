@@ -212,6 +212,7 @@ fn run() -> Result<()> {
                 &text,
                 reloader,
                 resolved.highlight,
+                resolved.line_numbers,
                 resolved.theme,
                 Some(repo),
                 ReviewOptions {
@@ -233,6 +234,7 @@ fn run() -> Result<()> {
                 &text,
                 None,
                 true,
+                cfg.line_numbers.unwrap_or(true),
                 cfg.theme,
                 Some(repo),
                 ReviewOptions::default(),
@@ -244,6 +246,7 @@ fn run() -> Result<()> {
             open_review_from_text(
                 &text,
                 None,
+                true,
                 true,
                 None,
                 None,
@@ -287,6 +290,7 @@ fn run() -> Result<()> {
                 &buf,
                 None,
                 true,
+                cfg.line_numbers.unwrap_or(true),
                 cfg.theme,
                 workdir,
                 ReviewOptions::default(),
@@ -371,6 +375,7 @@ fn run_serve(
         &text,
         reloader,
         resolved.highlight,
+        resolved.line_numbers,
         resolved.theme,
         Some(repo),
         ReviewOptions {
@@ -493,10 +498,12 @@ fn run_decision() -> Result<()> {
     bail!("`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
+#[allow(clippy::too_many_arguments)]
 fn open_review_from_text(
     text: &str,
     reloader: Option<next_hunk::tui::Reloader>,
     highlight_on: bool,
+    line_numbers_on: bool,
     theme: Option<String>,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
@@ -526,6 +533,7 @@ fn open_review_from_text(
         review.clone(),
         reloader,
         highlight_on,
+        line_numbers_on,
         theme,
         workdir,
         options,
