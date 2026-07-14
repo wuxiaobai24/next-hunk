@@ -36,6 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   palette. Dark mode keeps `base16-ocean.dark`. Auto mode selects the matching
   theme via `$COLORFGBG`. Config-driven theme switching (`t` key or `theme`
   config) also swaps the syntax theme.
+- **`wrap` config for long-line behavior** — set `wrap = true` in
+  `.next-hunk/config.toml` to wrap long lines in the diff stream pane
+  (default `false`, truncates). Ratatui's `Paragraph::wrap` is used so no
+  viewport or IR changes were needed — wrapping is a presentation-layer
+  property applied during rendering.
 
 ## [0.3.0] - 2026-07-14
 

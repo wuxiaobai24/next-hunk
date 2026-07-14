@@ -54,6 +54,8 @@ pub struct Config {
     pub theme: Option<String>,
     /// Layout mode: "unified" (default) or "stack".
     pub layout: Option<String>,
+    /// Wrap long lines in the diff stream pane. `false` = truncate (default).
+    pub wrap: Option<bool>,
 }
 
 impl Config {
@@ -80,6 +82,9 @@ impl Config {
         }
         if other.layout.is_some() {
             self.layout = other.layout;
+        }
+        if other.wrap.is_some() {
+            self.wrap = other.wrap;
         }
         self
     }
@@ -121,6 +126,8 @@ pub struct ResolvedConfig {
     pub theme: Option<String>,
     /// Layout mode for the diff stream: "unified" (default) or "stack".
     pub layout: LayoutMode,
+    /// Wrap long lines in the diff stream pane. `false` = truncate (default).
+    pub wrap: bool,
 }
 
 impl Default for ResolvedConfig {
@@ -134,6 +141,7 @@ impl Default for ResolvedConfig {
             include_untracked: false,
             theme: None,
             layout: LayoutMode::Unified,
+            wrap: false,
         }
     }
 }
@@ -175,6 +183,7 @@ impl ResolvedConfig {
                 .as_deref()
                 .map(LayoutMode::parse_str)
                 .unwrap_or(d.layout),
+            wrap: cfg.wrap.unwrap_or(d.wrap),
         }
     }
 }
@@ -545,5 +554,48 @@ theme = \"dark\"
     fn layout_mode_as_str() {
         assert_eq!(LayoutMode::Unified.as_str(), "unified");
         assert_eq!(LayoutMode::Stack.as_str(), "stack");
+    }
+
+    #[test]
+    fn wrap_defaults_to_false() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.wrap, "wrap should default to false");
+    }
+
+    #[test]
+    fn wrap_from_config() {
+        let (dir, _path) = write_tmp_config("wrap = true\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.wrap, Some(true));
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(r.wrap);
+    }
+
+    #[test]
+    fn wrap_false_from_config() {
+        let (dir, _path) = write_tmp_config("wrap = false\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.wrap, Some(false));
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.wrap);
     }
 }
