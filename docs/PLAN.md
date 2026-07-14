@@ -64,7 +64,7 @@
 
 - [x] `list` / `get`：发现活会话
 - [x] `review --json`：文件/hunk 结构（默认不含全文 patch）
-- [ ] `navigate`：file / hunk / line
+- [x] `navigate`：file / hunk / line
 - [ ] `comment add|apply|list|rm`（可先无 markup）
 - [ ] `reload`：换 diff/show 内容且尽量保 focus/notes/decisions
 - [ ] 重写 `skill/next-hunk`：list → review → navigate → comment 工作流

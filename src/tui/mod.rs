@@ -352,6 +352,12 @@ fn apply_server_command(app: &mut App, command: server::ServerCommand) -> server
             // Return file/hunk structure (no full patch text).
             ServerReply::Review(server::ReviewSummary::from(&app.review))
         }
+        ServerCommand::Navigate { target } => {
+            // Set focus target and apply it (same path as --focus).
+            app.focus_target = Some(target);
+            app.apply_focus();
+            ServerReply::Ok
+        }
     }
 }
 

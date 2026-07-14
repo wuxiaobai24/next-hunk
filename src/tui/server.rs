@@ -53,6 +53,8 @@ pub enum ServerCommand {
     Info,
     /// `next-hunk review --json`: request file/hunk structure.
     Review,
+    /// `next-hunk navigate`: scroll the TUI to a file, hunk, or line.
+    Navigate { target: FocusTarget },
 }
 
 /// A serializable summary of one file in the review, suitable for agent
@@ -535,6 +537,33 @@ mod tests {
             }
             other => panic!("expected Review, got {other:?}"),
         }
+        drainer.join().unwrap();
+    }
+
+    #[test]
+    fn navigate_returns_ok() {
+        use crate::tui::app::FocusTarget;
+        let sock = TempSocket::new("navigate");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let drainer = std::thread::spawn(move || {
+            let mut got = listener.drain();
+            while got.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                got = listener.drain();
+            }
+            for r in got {
+                let _ = r.reply.send(ServerReply::Ok);
+            }
+        });
+
+        let reply = send_command(
+            &sock.path,
+            &ServerCommand::Navigate {
+                target: FocusTarget::File("a.rs".into()),
+            },
+        )
+        .unwrap();
+        assert!(matches!(reply, ServerReply::Ok));
         drainer.join().unwrap();
     }
 }
