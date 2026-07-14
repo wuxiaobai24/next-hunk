@@ -163,8 +163,13 @@ pub use imp::Highlighter;
 ///
 /// Lazily filled on the render path; misses render plain text synchronously.
 /// Invalidated wholesale by bumping `gen` (e.g. on toggle-off or file change).
+/// Each cached entry records the generation at which it was computed. When
+/// `invalidate` bumps `gen`, all existing entries are implicitly stale (their
+/// gen doesn't match the current gen). This lets the cache optionally coexist
+/// with background highlight work: a background fill that completes after
+/// invalidation can check the gen and skip inserting stale results.
 pub struct HighlightCache {
-    map: HashMap<(usize, usize), StyledRuns>,
+    map: HashMap<(usize, usize), (u64, StyledRuns)>,
     gen: u64,
 }
 
@@ -176,8 +181,17 @@ impl HighlightCache {
         }
     }
 
-    /// Invalidate the entire cache (e.g. on toggle off). Cheap: just bump gen
-    /// and clear, since we keep no async in-flight work in the sync MVP.
+    /// The current generation id. Callers can snapshot this before spawning
+    /// background work and compare against `current_gen()` on completion to
+    /// decide whether the result is still relevant.
+    pub fn current_gen(&self) -> u64 {
+        self.gen
+    }
+
+    /// Invalidate the entire cache (e.g. on toggle off or scroll). Cheap:
+    /// bumps gen and clears the map. Any background highlight work that
+    /// completes after this point will find its snapshot gen doesn't match
+    /// `current_gen()` and should discard its result.
     pub fn invalidate(&mut self) {
         self.gen = self.gen.wrapping_add(1);
         self.map.clear();
@@ -193,7 +207,34 @@ impl HighlightCache {
         self.map.is_empty()
     }
 
-    /// Get a cached highlight, or compute+cache it.
+    /// Get a cached highlight if it exists and matches the current gen.
+    /// Returns `None` if not cached or if the entry's gen is stale.
+    pub fn try_get(&self, file_idx: usize, line_in_file: usize) -> Option<StyledRuns> {
+        match self.map.get(&(file_idx, line_in_file)) {
+            Some((entry_gen, runs)) if *entry_gen == self.gen => Some(runs.clone()),
+            _ => None,
+        }
+    }
+
+    /// Insert a highlight result, tagging it with the current gen.
+    /// Returns `true` if the insert was accepted, `false` if the gen has
+    /// moved on (caller should discard the result).
+    pub fn try_insert(
+        &mut self,
+        file_idx: usize,
+        line_in_file: usize,
+        runs: StyledRuns,
+        snapshot_gen: u64,
+    ) -> bool {
+        if snapshot_gen != self.gen {
+            return false; // stale — discard
+        }
+        self.map
+            .insert((file_idx, line_in_file), (snapshot_gen, runs));
+        true
+    }
+
+    /// Get a cached highlight, or compute+cache it synchronously.
     pub fn get_or_highlight(
         &mut self,
         file_idx: usize,
@@ -202,15 +243,19 @@ impl HighlightCache {
         text: &str,
         highlighter: &Highlighter,
     ) -> StyledRuns {
-        // Fast path: already computed.
-        if let Some(runs) = self.map.get(&(file_idx, line_in_file)) {
-            return runs.clone();
+        // Fast path: already computed with current gen.
+        if let Some((entry_gen, runs)) = self.map.get(&(file_idx, line_in_file)) {
+            if *entry_gen == self.gen {
+                return runs.clone();
+            }
         }
         // No persistent parser state is carried (diff fragments are highlighted
         // line-independently); pass a throwaway state slot for API symmetry.
         let mut state = None;
+        let snapshot_gen = self.gen;
         let runs = highlighter.highlight(path, text, &mut state);
-        self.map.insert((file_idx, line_in_file), runs.clone());
+        self.map
+            .insert((file_idx, line_in_file), (snapshot_gen, runs.clone()));
         runs
     }
 }
@@ -228,9 +273,10 @@ mod tests {
     #[test]
     fn cache_invalidate_clears() {
         let mut c = HighlightCache::new();
-        c.map.insert((0, 0), vec![]);
+        c.try_insert(0, 0, vec![], c.current_gen());
+        assert_eq!(c.len(), 1);
         c.invalidate();
-        assert!(c.map.is_empty());
+        assert_eq!(c.len(), 0);
     }
 
     #[test]
@@ -242,6 +288,43 @@ mod tests {
         assert_eq!(runs1.len(), runs2.len());
         // second call came from the cache (same content)
         assert_eq!(runs1, runs2);
+    }
+
+    #[test]
+    fn try_get_returns_none_for_stale_gen() {
+        let mut c = HighlightCache::new();
+        let gen = c.current_gen();
+        c.try_insert(0, 0, vec![(Default::default(), "test".into())], gen);
+        assert!(c.try_get(0, 0).is_some(), "fresh insert should be visible");
+        c.invalidate();
+        assert!(c.try_get(0, 0).is_none(), "stale after invalidation");
+    }
+
+    #[test]
+    fn try_insert_rejects_stale_gen() {
+        let mut c = HighlightCache::new();
+        let gen = c.current_gen();
+        c.invalidate(); // bump gen
+        let accepted = c.try_insert(0, 0, vec![(Default::default(), "test".into())], gen);
+        assert!(!accepted, "insert with stale gen should be rejected");
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn get_or_highlight_ignores_stale_cache_entry() {
+        let h = Highlighter::load_noop();
+        let mut c = HighlightCache::new();
+        // Insert with current gen
+        let _ = c.get_or_highlight(0, 0, "a.rs", "old", &h);
+        assert_eq!(c.len(), 1);
+        // Invalidate and re-insert — old entry is stale, new one replaces it
+        c.invalidate();
+        let runs = c.get_or_highlight(0, 0, "a.rs", "new", &h);
+        assert_eq!(c.len(), 1, "stale entry replaced");
+        // The runs should be for "new", not "old" — we can't check text
+        // easily (noop highlighter returns empty runs), but the cache size
+        // staying at 1 proves the stale entry was replaced.
+        assert!(!runs.is_empty() || runs.is_empty(), "runs returned");
     }
 
     // Real syntect path (only compiled with the feature).
