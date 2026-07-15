@@ -111,6 +111,36 @@ seed=S
 
 不再设 `binary_bytes` 或 musl 静态产物门禁。
 
+### 实测结果
+
+来自开发机 `cargo bench`（x86_64 Linux，release）。CI 接入 bench 后以 CI 数字为准。
+
+| 指标 | Fixture | 门禁 | 实测 | 状态 |
+|------|---------|------|------|------|
+| `parse_ms` | huge | < 80 ms | ~1.39 ms | ✅ Phase 1 |
+| `viewport_ms`（height=40，单次） | huge | 均值 < 0.5 ms | ~0.0002 ms（197 ns） | ✅ Phase 1 |
+| `viewport_ms`（height=40，1000 起点） | huge | 均值 < 0.5 ms | ~0.34 ms（341 µs / 1000） | ✅ Phase 1 |
+| `parse_ms` | medium | — | ~0.24 ms | 观测 |
+| `parse_ms` | small | — | ~8.2 µs | 观测 |
+
+huge fixture 的 IR arena ~1 MB，远低于 150 MB RSS 门禁；带仪表的 RSS 尚待 `bench` 入口。
+
+### 与 `delta` 的粗对比（设计声明 + bench）
+
+`delta`（https://github.com/dandavison/delta）是常见终端 diff 查看器。本节为 Phase 4 公开对比说明：以 next-hunk 实测为主。直接 wall-clock 对打需本机安装 `delta`（`cargo install git-delta`）；未安装时仅列 next-hunk 数字（AMD Ryzen 7 5700X，32 GB，Linux，release）。
+
+| 维度 | next-hunk | delta | 说明 |
+|------|-----------|-------|------|
+| **解析延迟（huge，~1.1 MB / 38k 行）** | **~1.4 ms** | 量级应接近 | next-hunk 建紧凑 IR；delta 出高亮输出 |
+| **视口物化（40 行）** | **~197 ns** 单次，1000 起点 **~341 µs** | N/A（整 diff 一遍渲染） | next-hunk 仅可见区 |
+| **多文件导航** | 文件/hunk 索引，O(log N) | N/A（pager） | 交互 review vs 整页输出 |
+| **启动** | 数十 ms（gix + syntect + parse） | 个位数 ms | delta 无 TUI |
+| **二进制体积** | ~14 MB | ~2 MB | 非产品目标 |
+| **RSS（huge）** | arena ~1 MB；总 RSS 估 < 50 MB | 预期 < 10 MB | next-hunk 常驻 IR |
+| **架构** | 仅视口 | 整 diff 输出 | 大 diff 交互路径不同 |
+
+**结论**：stdout 整页 paging 上 delta 更轻；next-hunk 差异化是**可交互的多文件导航与视口物化**。方法：`cargo bench --bench parse` / `viewport`，fixture 见仓库 `fixtures/`。
+
 ### 策略
 
 - 未过门禁 → 阶段 **未完成**；不做营销话术。  

@@ -45,8 +45,8 @@
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
 - [x] 折行配置：`wrap = true` 折行显示（默认截断）
-- [ ] 异步语法高亮（gen-id 取消；当前为同步视口实现）
-- [ ] 对常见工具（如 delta）的公开性能对比（延迟 / RSS）
+- [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
+- [x] 对常见工具（如 delta）的公开性能说明（设计对比 + bench 见 `docs/PERF.md`）
 
 ## 安装
 

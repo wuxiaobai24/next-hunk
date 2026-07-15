@@ -97,10 +97,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 - **Generation-id highlight cache** — `HighlightCache` now tags each entry
   with a generation id. `invalidate()` bumps the gen and clears the map.
-  New `try_get()`/`try_insert()` methods allow safe coexistence with
-  background highlight work: a background fill that completes after
-  invalidation can check the gen and skip inserting stale results.
-  The sync `get_or_highlight` path is unchanged as the default.
+  New `try_get()`/`try_insert()`/`apply_result()` methods allow safe
+  coexistence with background highlight work: a background fill that
+  completes after invalidation can check the gen and skip inserting stale
+  results.
+- **Async syntax highlight worker** — live TUI spawns a dedicated
+  `HighlightWorker` thread. Viewport cache misses render plain text and
+  enqueue a job; the main loop drains results each frame and inserts only
+  when the snapshot gen still matches. Headless tests keep the sync
+  `get_or_highlight` path (no job channel). Theme toggle (`t`) reloads
+  the syntect palette into a fresh `Arc<Highlighter>` and invalidates
+  the cache so in-flight jobs stay gen-safe.
 
 ## [0.3.0] - 2026-07-14
 

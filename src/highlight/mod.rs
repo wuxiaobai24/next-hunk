@@ -12,13 +12,102 @@
 //!
 //! The highlighter is **viewport-only and cached** (architecture §2.1 / §7):
 //! only lines that get drawn are highlighted, results are cached by
-//! `(file_idx, line_in_file)`, and cache misses render plain text synchronously
-//! rather than blocking the scroll path.
+//! `(file_idx, line_in_file)`. Live TUI cache misses render plain text and
+//! enqueue background work via [`HighlightWorker`]; headless tests still use
+//! the synchronous [`HighlightCache::get_or_highlight`] path.
 
 use std::collections::HashMap;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 
 /// A styled run: a ratatui style and the text it applies to.
 pub type StyledRuns = Vec<(ratatui::style::Style, String)>;
+
+/// One line to highlight on a worker thread.
+#[derive(Clone)]
+pub struct HighlightJob {
+    pub gen: u64,
+    pub file_idx: usize,
+    pub line_in_file: usize,
+    pub path: String,
+    pub text: String,
+    pub highlighter: Arc<Highlighter>,
+}
+
+/// Completed highlight for a single line. Callers pass `gen` to
+/// [`HighlightCache::try_insert`] so stale work is discarded.
+#[derive(Clone, Debug)]
+pub struct HighlightResult {
+    pub gen: u64,
+    pub file_idx: usize,
+    pub line_in_file: usize,
+    pub runs: StyledRuns,
+}
+
+/// Background syntax-highlight worker. Owns a dedicated thread; the main
+/// loop enqueues [`HighlightJob`]s and drains [`HighlightResult`]s each frame.
+/// Dropping the worker closes the job channel and joins the thread.
+pub struct HighlightWorker {
+    job_tx: Sender<HighlightJob>,
+    result_rx: Receiver<HighlightResult>,
+    _handle: JoinHandle<()>,
+}
+
+impl HighlightWorker {
+    /// Spawn a worker thread. Returns a handle for enqueue + drain.
+    pub fn spawn() -> Self {
+        let (job_tx, job_rx) = mpsc::channel::<HighlightJob>();
+        let (result_tx, result_rx) = mpsc::channel::<HighlightResult>();
+        let handle = thread::Builder::new()
+            .name("next-hunk-highlight".into())
+            .spawn(move || worker_loop(job_rx, result_tx))
+            .expect("spawn highlight worker");
+        Self {
+            job_tx,
+            result_rx,
+            _handle: handle,
+        }
+    }
+
+    /// Clone of the job sender for ownership on `App` (cheap channel clone).
+    pub fn job_sender(&self) -> Sender<HighlightJob> {
+        self.job_tx.clone()
+    }
+
+    /// Enqueue a line. Best-effort: returns false if the worker is gone.
+    pub fn enqueue(&self, job: HighlightJob) -> bool {
+        self.job_tx.send(job).is_ok()
+    }
+
+    /// Non-blocking drain of finished results (empty when idle).
+    pub fn drain(&self) -> Vec<HighlightResult> {
+        let mut out = Vec::new();
+        while let Ok(r) = self.result_rx.try_recv() {
+            out.push(r);
+        }
+        out
+    }
+}
+
+fn worker_loop(job_rx: Receiver<HighlightJob>, result_tx: Sender<HighlightResult>) {
+    while let Ok(job) = job_rx.recv() {
+        let mut state = None;
+        let runs = job.highlighter.highlight(&job.path, &job.text, &mut state);
+        // If the UI has hung up, exit quietly.
+        if result_tx
+            .send(HighlightResult {
+                gen: job.gen,
+                file_idx: job.file_idx,
+                line_in_file: job.line_in_file,
+                runs,
+            })
+            .is_err()
+        {
+            break;
+        }
+    }
+}
 
 #[cfg(feature = "highlight")]
 mod imp {
@@ -235,6 +324,9 @@ impl HighlightCache {
     }
 
     /// Get a cached highlight, or compute+cache it synchronously.
+    ///
+    /// Prefer the async worker path in the live TUI; keep this for headless
+    /// tests and CLI paths that do not spawn a worker.
     pub fn get_or_highlight(
         &mut self,
         file_idx: usize,
@@ -257,6 +349,17 @@ impl HighlightCache {
         self.map
             .insert((file_idx, line_in_file), (snapshot_gen, runs.clone()));
         runs
+    }
+
+    /// Apply a worker result: insert if gen still matches. Returns whether
+    /// the cache accepted the runs (caller may request a redraw).
+    pub fn apply_result(&mut self, result: HighlightResult) -> bool {
+        self.try_insert(
+            result.file_idx,
+            result.line_in_file,
+            result.runs,
+            result.gen,
+        )
     }
 }
 
@@ -338,6 +441,46 @@ mod tests {
         assert!(!runs.is_empty(), "highlight should produce runs");
         let has_color = runs.iter().any(|(s, _)| s.fg.is_some());
         assert!(has_color, "some run should carry a foreground color");
+    }
+
+    #[test]
+    fn worker_fills_cache_and_rejects_stale_gen() {
+        let h = Arc::new(Highlighter::load_noop());
+        let mut c = HighlightCache::new();
+        let w = HighlightWorker::spawn();
+        let gen = c.current_gen();
+        assert!(w.enqueue(HighlightJob {
+            gen,
+            file_idx: 0,
+            line_in_file: 1,
+            path: "a.rs".into(),
+            text: "fn main() {}".into(),
+            highlighter: Arc::clone(&h),
+        }));
+        // Poll until the worker returns (bounded).
+        let mut got = None;
+        for _ in 0..200 {
+            let drained = w.drain();
+            if let Some(r) = drained.into_iter().next() {
+                got = Some(r);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let result = got.expect("worker should produce a result");
+        assert!(c.apply_result(result), "fresh gen accepted");
+        assert!(c.try_get(0, 1).is_some());
+
+        // Stale: bump gen, then apply a result stamped with the old gen.
+        let stale_gen = c.current_gen();
+        c.invalidate();
+        assert!(!c.apply_result(HighlightResult {
+            gen: stale_gen,
+            file_idx: 0,
+            line_in_file: 2,
+            runs: vec![(Default::default(), "x".into())],
+        }));
+        assert!(c.try_get(0, 2).is_none());
     }
 
     #[cfg(feature = "highlight")]

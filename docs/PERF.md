@@ -128,13 +128,14 @@ RSS after parse + viewport queries not yet measured with an instrumented
 harness; the huge fixture's arena is ~1 MB, well under the 150 MB gate. A
 proper RSS measurement is pending a `bench`/`next-hunk bench` harness.
 
-### Rough comparison vs `delta` (design claims, not rigorous)
+### Rough comparison vs `delta` (design claims + benches)
 
 `delta` (https://github.com/dandavison/delta) is the most widely used
-terminal diff viewer. This comparison documents **design-level claims** with
-real bench numbers where available. Delta was not installed on the test
-machine, so no direct head-to-head timing was run. Numbers below are from
-`cargo bench` on an AMD Ryzen 7 5700X, 32 GB RAM, Linux, release build.
+terminal diff viewer. This section is the public compare note for Phase 4:
+**design-level claims** with real next-hunk bench numbers. Direct wall-clock
+head-to-head needs a local `delta` install (`cargo install git-delta`); when
+absent, numbers below stay next-hunk-only from `cargo bench` on an AMD Ryzen 7
+5700X, 32 GB RAM, Linux, release build.
 
 | Dimension | next-hunk | delta | Notes |
 |-----------|-----------|-------|-------|

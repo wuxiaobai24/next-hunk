@@ -8,11 +8,13 @@
 //! a rendered `TestBackend` buffer.
 
 use std::collections::HashSet;
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::config::LayoutMode;
-use crate::highlight::{HighlightCache, Highlighter};
+use crate::highlight::{HighlightCache, HighlightJob, Highlighter};
 use crate::ir::{Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
 
@@ -102,10 +104,13 @@ pub struct App {
 
     /// Syntax highlight on/off. ON by default.
     pub highlight_on: bool,
-    /// Lazily-filled highlight cache.
+    /// Lazily-filled highlight cache (main-thread only).
     pub cache: HighlightCache,
-    /// Loaded highlighter (syntect or no-op, depending on feature).
-    pub highlighter: Highlighter,
+    /// Loaded highlighter (syntect or no-op). Shared with the highlight worker.
+    pub highlighter: Arc<Highlighter>,
+    /// Optional job channel into the background highlight worker. `None` in
+    /// headless tests — draw falls back to synchronous `get_or_highlight`.
+    pub hl_job_tx: Option<Sender<HighlightJob>>,
 
     /// Show a line-number gutter column. ON by default.
     pub line_numbers_on: bool,
@@ -258,12 +263,16 @@ impl App {
     /// (Flexoki paper) theme. Use [`App::with_theme`] to inject a config-driven
     /// theme.
     pub fn with_highlighter(review: Review, highlighter: Highlighter) -> Self {
-        Self::with_theme(review, highlighter, ThemeMode::default())
+        Self::with_theme(review, Arc::new(highlighter), ThemeMode::default())
     }
 
     /// Construct with an explicit highlighter and theme mode (used by
     /// `run_review_tui` to honor `config.toml`'s `theme`).
-    pub fn with_theme(review: Review, highlighter: Highlighter, theme_mode: ThemeMode) -> Self {
+    pub fn with_theme(
+        review: Review,
+        highlighter: Arc<Highlighter>,
+        theme_mode: ThemeMode,
+    ) -> Self {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
@@ -282,6 +291,7 @@ impl App {
             highlight_on: true,
             cache: HighlightCache::new(),
             highlighter,
+            hl_job_tx: None,
             line_numbers_on: true,
             wrap_on: false,
             word_diff_on: true,
@@ -739,10 +749,16 @@ impl App {
                     "rail hidden".into()
                 };
             }
-            // cycle theme: dark → light → auto → dark
+            // cycle theme: dark → light → auto → dark; reload syntect palette
             KeyCode::Char('t') => {
                 self.theme_mode = self.theme_mode.cycle();
                 self.theme = self.theme_mode.to_theme();
+                // New Arc so in-flight worker jobs keep the old theme gen-safe.
+                self.highlighter = Arc::new(
+                    Highlighter::load(self.theme_mode.syntect_theme_name())
+                        .unwrap_or_else(|_| Highlighter::load_noop()),
+                );
+                self.cache.invalidate();
                 self.status = format!("theme: {}", self.theme_mode.name());
             }
             // begin in-stream search

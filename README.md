@@ -45,8 +45,8 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [x] Stack layout: `layout = "stack"` config (unified default)
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
-- [ ] Async syntax highlight (gen-id cancellation; current impl is sync viewport-only)
-- [ ] Public perf benchmarks vs common tools (e.g. delta; latency / RSS)
+- [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
+- [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
 
 ## Performance
 
