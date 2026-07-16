@@ -274,6 +274,55 @@ Once the TUI is open, the human navigates with:
 - `/` — search; `n`/`N` next/prev match
 - `q` — quit (in `--select`/`serve` mode, emits decisions JSON on quit)
 
+## Export a full review report on quit
+
+When you need **comments + notes + decisions** in one shot (not just
+`accepted`/`rejected`/`undecided`), ask the human to enable quit-time export:
+
+```bash
+# JSON only (one line; superset of decision shape — extra fields are optional)
+next-hunk diff --export-on-quit json --note banner="please review"
+
+# Markdown for pasting into chat (no select required)
+next-hunk diff --export-on-quit markdown
+
+# Both: JSON line, then Markdown body
+next-hunk diff --select --export-on-quit both
+```
+
+Or persist in config:
+
+```toml
+# ~/.config/next-hunk/config.toml  or  .next-hunk/config.toml
+export_on_quit = "json"   # none | json | markdown | both
+```
+
+**JSON shape** (fields beyond the three decision buckets are omitted when empty):
+
+```json
+{
+  "accepted": ["src/auth.rs:h1"],
+  "rejected": [],
+  "undecided": ["src/util.rs:h1"],
+  "comments": [
+    {"id": "c0", "file": "src/auth.rs", "text": "…", "hunk": 1}
+  ],
+  "notes": [
+    {"file": "src/auth.rs", "text": "…", "line": 42}
+  ],
+  "banner": "Auth refactor summary"
+}
+```
+
+Notes:
+
+- Default is `none` so `git core.pager` use does not pollute stdout.
+- Without `--select`, decisions are all `undecided` unless the session used
+  `serve` (select always on) and the human pressed `a`/`r`.
+- Session comments (`next-hunk comment add`) appear under `comments` when the
+  human quits a `serve` TUI with export enabled.
+- `--select` alone (export `none`) still emits the legacy three-bucket JSON only.
+
 ## Examples
 
 ### One-shot refactor with explanation

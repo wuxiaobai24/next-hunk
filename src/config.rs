@@ -27,6 +27,44 @@ pub enum LayoutMode {
     Split,
 }
 
+/// What to print on TUI quit for agents (and humans pasting into chat).
+///
+/// Default is [`ExportOnQuit::None`] so everyday pager/`git diff` use does not
+/// pollute stdout. `--select` still emits decision JSON when export is `none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportOnQuit {
+    /// No export (except legacy `--select` decisions-only JSON).
+    #[default]
+    None,
+    /// One JSON line: decisions + comments + notes (superset of `decision`).
+    Json,
+    /// Human/agent-readable Markdown report.
+    Markdown,
+    /// JSON line, then Markdown body.
+    Both,
+}
+
+impl ExportOnQuit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExportOnQuit::None => "none",
+            ExportOnQuit::Json => "json",
+            ExportOnQuit::Markdown => "markdown",
+            ExportOnQuit::Both => "both",
+        }
+    }
+
+    /// Parse config/CLI values. Unknown → `None` (safe default).
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "json" => ExportOnQuit::Json,
+            "markdown" | "md" => ExportOnQuit::Markdown,
+            "both" => ExportOnQuit::Both,
+            _ => ExportOnQuit::None,
+        }
+    }
+}
+
 impl LayoutMode {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -61,6 +99,8 @@ pub struct Config {
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
+    /// On quit, emit an agent-readable report: "none" | "json" | "markdown" | "both".
+    pub export_on_quit: Option<String>,
 }
 
 impl Config {
@@ -90,6 +130,9 @@ impl Config {
         }
         if other.wrap.is_some() {
             self.wrap = other.wrap;
+        }
+        if other.export_on_quit.is_some() {
+            self.export_on_quit = other.export_on_quit;
         }
         self
     }
@@ -133,6 +176,8 @@ pub struct ResolvedConfig {
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
+    /// Emit a structured review report when the TUI quits.
+    pub export_on_quit: ExportOnQuit,
 }
 
 impl Default for ResolvedConfig {
@@ -147,6 +192,7 @@ impl Default for ResolvedConfig {
             theme: None,
             layout: LayoutMode::Unified,
             wrap: false,
+            export_on_quit: ExportOnQuit::None,
         }
     }
 }
@@ -156,6 +202,7 @@ impl Default for ResolvedConfig {
 /// Most options are "default unless overridden", so a simple `Option<bool>`
 /// (CLI sets `Some(false)` for `--no-flag`, `Some(true)` for `--flag`) composes
 /// cleanly with the config layer.
+#[derive(Debug, Clone, Default)]
 pub struct CliFlags {
     /// `--staged` / no flag.
     pub staged: Option<bool>,
@@ -167,6 +214,8 @@ pub struct CliFlags {
     pub include_untracked: Option<bool>,
     /// `--layout <mode>` → `Some(LayoutMode)`; absent → `None` (use config/default).
     pub layout: Option<LayoutMode>,
+    /// `--export-on-quit <mode>` → `Some(ExportOnQuit)`; absent → `None`.
+    pub export_on_quit: Option<ExportOnQuit>,
 }
 
 impl ResolvedConfig {
@@ -190,6 +239,10 @@ impl ResolvedConfig {
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(d.layout),
             wrap: cfg.wrap.unwrap_or(d.wrap),
+            export_on_quit: cli
+                .export_on_quit
+                .or_else(|| cfg.export_on_quit.as_deref().map(ExportOnQuit::parse_str))
+                .unwrap_or(d.export_on_quit),
         }
     }
 }
@@ -331,6 +384,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged); // CLI wins
@@ -347,6 +401,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged);
@@ -367,6 +422,7 @@ mod tests {
             highlight: Some(false), // --no-highlight
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -384,6 +440,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
@@ -398,6 +455,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
@@ -415,6 +473,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
@@ -429,6 +488,7 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());
@@ -536,6 +596,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Unified);
@@ -552,6 +613,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Stack);
@@ -585,6 +647,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
@@ -600,6 +663,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: Some(LayoutMode::Split),
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
@@ -614,6 +678,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap, "wrap should default to false");
@@ -630,6 +695,7 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.wrap);
@@ -646,8 +712,42 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap);
+    }
+
+    #[test]
+    fn export_on_quit_defaults_to_none() {
+        let cfg = Config::default();
+        let cli = CliFlags::default();
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.export_on_quit, ExportOnQuit::None);
+    }
+
+    #[test]
+    fn export_on_quit_from_config_and_cli() {
+        let cfg = Config {
+            export_on_quit: Some("json".into()),
+            ..Default::default()
+        };
+        let cli = CliFlags::default();
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.export_on_quit, ExportOnQuit::Json);
+
+        let cli = CliFlags {
+            export_on_quit: Some(ExportOnQuit::Both),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.export_on_quit, ExportOnQuit::Both); // CLI wins
+    }
+
+    #[test]
+    fn export_on_quit_parse_str() {
+        assert_eq!(ExportOnQuit::parse_str("markdown"), ExportOnQuit::Markdown);
+        assert_eq!(ExportOnQuit::parse_str("md"), ExportOnQuit::Markdown);
+        assert_eq!(ExportOnQuit::parse_str("weird"), ExportOnQuit::None);
     }
 }
