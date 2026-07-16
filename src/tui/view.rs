@@ -106,7 +106,12 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             // a pure delete `−3`). Colored so a glance at the rail shows
             // where the change mass sits.
             let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
-            let head = format!(" {}. ", i + 1);
+            // Working-set origin mark: `S` staged / `M` modified / `?` untracked.
+            // Omitted for patch/show/pager reviews (origin is None).
+            let head = match f.origin {
+                Some(origin) => format!(" {}.{} ", i + 1, origin.mark()),
+                None => format!(" {}. ", i + 1),
+            };
             // Pad the path so the tally right-aligns within the row. Count
             // widths before moving the strings into Spans below.
             let tail = format!("  {}{}", plus, minus);

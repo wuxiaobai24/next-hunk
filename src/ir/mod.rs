@@ -12,7 +12,7 @@ pub mod viewport;
 pub mod whitespace;
 pub mod worddiff;
 
-pub use model::{DiffLine, DiffLineKind, FileDiff, Hunk, Review};
+pub use model::{DiffLine, DiffLineKind, FileDiff, FileOrigin, Hunk, Review};
 pub use parse::{parse_unified_diff, ParseError};
 pub use viewport::{StreamRow, Viewport, ViewportQuery};
 pub use whitespace::strip_whitespace_changes;

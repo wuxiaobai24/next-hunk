@@ -1166,17 +1166,23 @@ impl App {
     ///
     /// On parse failure the old review is kept and an error status is set.
     pub fn reload_review(&mut self, text: &str) {
+        self.reload_review_with_origins(text, &[]);
+    }
+
+    /// Hot-reload with optional per-file origin marks (`S`/`M`/`?`).
+    pub fn reload_review_with_origins(&mut self, text: &str, origins: &[crate::ir::FileOrigin]) {
         if text.trim().is_empty() {
             self.status = "reloaded (empty diff)".into();
             return;
         }
-        let new_review = match crate::ir::parse_unified_diff(text) {
+        let mut new_review = match crate::ir::parse_unified_diff(text) {
             Ok(r) => r,
             Err(e) => {
                 self.status = format!("reload failed: {e}");
                 return;
             }
         };
+        new_review.apply_file_origins(origins);
 
         // Build path→index maps for the new review so we can re-map indices.
         let new_file_idx: std::collections::HashMap<&str, usize> = new_review

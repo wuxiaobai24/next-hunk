@@ -31,12 +31,40 @@ Use this skill **after** you finish a change and **before** you commit, when:
   something — `next-hunk diff` will still print an inspect summary, but the
   interactive review won't run.
 
+## Which command shows *all* local changes?
+
+After edits, agents often leave a mix of **staged**, **unstaged**, and
+**untracked** files. Plain `next-hunk diff` is worktree-only (like `git diff`)
+and **misses staged** files — a half review.
+
+| Goal | Command |
+|------|---------|
+| **See everything `git status` lists** (recommended after multi-step edits) | `next-hunk diff --all --include-untracked` |
+| Unstaged only (default) | `next-hunk diff` |
+| Staged only | `next-hunk diff --staged` |
+| Staged + unstaged, no untracked | `next-hunk diff --all` |
+
+Config equivalent of the recommended path:
+
+```toml
+# .next-hunk/config.toml  or  ~/.config/next-hunk/config.toml
+scope = "working-set"
+include_untracked = true
+```
+
+In the file rail, origins are marked **`S`** staged / **`M`** modified /
+**`?`** untracked. A path with both staged and unstaged hunks appears twice.
+
+Default remains worktree-only so everyday `git diff` muscle memory is unchanged.
+
 ## Quick start: one-shot review (no approval needed)
 
 When you want the human informed but don't need a decision:
 
 ```bash
-next-hunk diff --focus <path>:<line> --note <path>:<line>="<your explanation>"
+# Prefer --all when you may have staged some files already:
+next-hunk diff --all --include-untracked \
+  --focus <path>:<line> --note <path>:<line>="<your explanation>"
 ```
 
 - `--focus <where>`: scroll the TUI to this location on open.
@@ -55,7 +83,8 @@ The human opens the TUI, reviews, and quits. You don't receive any signal back.
 When you need the human to accept/reject your changes hunk-by-hunk:
 
 ```bash
-next-hunk diff --select --focus <path>:<line> --note <path>:<line>="<why this matters>"
+next-hunk diff --all --include-untracked --select \
+  --focus <path>:<line> --note <path>:<line>="<why this matters>"
 ```
 
 This **blocks** until the human quits. On quit, stdout gets one JSON line:
@@ -77,7 +106,8 @@ interaction, use server mode:
 ### 1. Human opens the persistent TUI
 
 ```bash
-next-hunk serve
+# Prefer --all so the session includes staged + unstaged (+ untracked if set):
+next-hunk serve --all --include-untracked
 ```
 
 The TUI runs with selection mode on (`a`/`r`/`u` per hunk). It binds a Unix
@@ -328,7 +358,7 @@ Notes:
 ### One-shot refactor with explanation
 
 ```bash
-next-hunk diff \
+next-hunk diff --all --include-untracked \
   --focus src/auth.rs:h1 \
   --note src/auth.rs:h1="Split token validation out of the request handler" \
   --note src/auth.rs:88="New boundary: tokens expire here, not in the middleware" \
@@ -357,7 +387,7 @@ next-hunk decision
 ### Ask for approval on a risky change (one-shot)
 
 ```bash
-next-hunk diff --select \
+next-hunk diff --all --include-untracked --select \
   --focus src/db/migrate.rs:140 \
   --note src/db/migrate.rs:140="This drops the legacy `user_email` column — irreversible" \
   --note banner="Migration: needs your OK before I run it"

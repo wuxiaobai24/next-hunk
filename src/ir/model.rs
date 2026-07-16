@@ -1,3 +1,37 @@
+/// Where a file entry came from in a local working-set review.
+///
+/// Only set for git worktree/index sources (`diff` / `serve` / `inspect` without
+/// a patch path). Commit ranges, patch files, and pager input leave this
+/// `None`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileOrigin {
+    /// HEAD tree vs index (`git diff --cached`).
+    Staged,
+    /// Index vs worktree tracked change (`git diff`).
+    Modified,
+    /// Untracked worktree file (`--include-untracked`).
+    Untracked,
+}
+
+impl FileOrigin {
+    /// Single-character mark for the file rail: `S` / `M` / `?`.
+    pub fn mark(self) -> char {
+        match self {
+            FileOrigin::Staged => 'S',
+            FileOrigin::Modified => 'M',
+            FileOrigin::Untracked => '?',
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FileOrigin::Staged => "staged",
+            FileOrigin::Modified => "modified",
+            FileOrigin::Untracked => "untracked",
+        }
+    }
+}
+
 /// One side of a changed line, or context.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffLineKind {
@@ -43,6 +77,8 @@ pub struct FileDiff {
     pub inserts: u64,
     /// Deleted lines in this file (computed once at parse time).
     pub deletes: u64,
+    /// Optional bucket origin for working-set reviews (rail `S`/`M`/`?`).
+    pub origin: Option<FileOrigin>,
 }
 
 /// Full review: shared text arena + files.
@@ -84,5 +120,16 @@ impl Review {
             .get(file_idx)
             .map(|f| f.display_path.as_str())
             .unwrap_or("<unknown>")
+    }
+
+    /// Attach per-file origins in parse order (best-effort zip).
+    ///
+    /// Length mismatch is tolerated: extra origins are ignored; missing ones
+    /// leave `origin` as `None`. Used after producing a working-set diff so the
+    /// file rail can show `S`/`M`/`?` without encoding tags into the patch text.
+    pub fn apply_file_origins(&mut self, origins: &[FileOrigin]) {
+        for (file, origin) in self.files.iter_mut().zip(origins.iter()) {
+            file.origin = Some(*origin);
+        }
     }
 }

@@ -289,6 +289,7 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
         stream_len,
         inserts,
         deletes,
+        origin: None,
     });
 }
 

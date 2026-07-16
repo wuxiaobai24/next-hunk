@@ -12,8 +12,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use next_hunk::config::DiffScope;
+use next_hunk::ir::FileOrigin;
 use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
-use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
+use next_hunk::source::{
+    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, open_repo,
+};
 
 /// Skip the test if `git` is unavailable.
 fn require_git() -> Option<()> {
@@ -133,7 +137,7 @@ fn setup_repo() -> RepoGuard {
 fn worktree_diff_round_trips() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), false, &[], false).unwrap();
+    let text = git_diff(&repo.workdir(), DiffScope::Worktree, &[], false).unwrap();
     assert!(!text.trim().is_empty(), "worktree diff should not be empty");
 
     let review = parse_unified_diff(&text).unwrap();
@@ -168,7 +172,7 @@ fn worktree_diff_round_trips() {
 fn staged_diff_round_trips() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), true, &[], false).unwrap();
+    let text = git_diff(&repo.workdir(), DiffScope::Staged, &[], false).unwrap();
     assert!(!text.trim().is_empty(), "staged diff should not be empty");
 
     let review = parse_unified_diff(&text).unwrap();
@@ -219,7 +223,7 @@ fn show_head_matches_commit() {
 fn patch_stdin_round_trips_identically_to_live_diff() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let live = git_diff(&repo.workdir(), false, &[], false).unwrap();
+    let live = git_diff(&repo.workdir(), DiffScope::Worktree, &[], false).unwrap();
 
     // Simulate the `patch -` CLI path: take the live diff text, parse it back.
     let review_live = parse_unified_diff(&live).unwrap();
@@ -244,7 +248,13 @@ fn pathspec_filters_files() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
     // Only ask for src/ — should exclude README.md from worktree diff
-    let text = git_diff(&repo.workdir(), false, &["src/".to_string()], false).unwrap();
+    let text = git_diff(
+        &repo.workdir(),
+        DiffScope::Worktree,
+        &["src/".to_string()],
+        false,
+    )
+    .unwrap();
     let review = parse_unified_diff(&text).unwrap();
 
     let paths: Vec<&str> = review
@@ -266,7 +276,7 @@ fn pathspec_filters_files() {
 fn viewport_materializes_live_diff() {
     let Some(_) = require_git() else { return };
     let repo = setup_repo();
-    let text = git_diff(&repo.workdir(), false, &[], false).unwrap();
+    let text = git_diff(&repo.workdir(), DiffScope::Worktree, &[], false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
 
     // materialize the whole stream and verify row types are sane
@@ -299,7 +309,7 @@ fn worktree_diff_untracked_included_when_enabled() {
     // Create an untracked file
     write(&repo.path().join("untracked.txt"), "untracked content\n");
     // Without --include-untracked, untracked file should NOT appear
-    let text_without = git_diff(&repo.workdir(), false, &[], false).unwrap();
+    let text_without = git_diff(&repo.workdir(), DiffScope::Worktree, &[], false).unwrap();
     let review_without = parse_unified_diff(&text_without).unwrap();
     let paths_without: Vec<&str> = review_without
         .files
@@ -311,7 +321,7 @@ fn worktree_diff_untracked_included_when_enabled() {
         "untracked file should NOT appear without include_untracked: {paths_without:?}"
     );
     // With --include-untracked, untracked file SHOULD appear
-    let text_with = git_diff(&repo.workdir(), false, &[], true).unwrap();
+    let text_with = git_diff(&repo.workdir(), DiffScope::Worktree, &[], true).unwrap();
     let review_with = parse_unified_diff(&text_with).unwrap();
     let paths_with: Vec<&str> = review_with
         .files
@@ -334,6 +344,94 @@ fn worktree_diff_untracked_included_when_enabled() {
         .flat_map(|h| h.lines.iter())
         .any(|l| l.kind == DiffLineKind::Add);
     assert!(has_add, "untracked file should have added lines");
+}
+
+/// Dogfood P0: staged + unstaged + untracked must appear together under
+/// `scope = working-set` (`--all --include-untracked`), with origin marks.
+#[test]
+fn working_set_shows_staged_unstaged_and_untracked() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    // setup_repo already has staged (lib.rs, new.rs) and unstaged (README, lib.rs).
+    // Add an untracked file for the third bucket.
+    write(&repo.path().join("dogfood_untracked.txt"), "untracked\n");
+
+    // Worktree-only must miss staged-only files like src/new.rs (fully staged).
+    let wt = git_diff(&repo.workdir(), DiffScope::Worktree, &[], false).unwrap();
+    let wt_review = parse_unified_diff(&wt).unwrap();
+    let wt_paths: Vec<&str> = wt_review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        !wt_paths.iter().any(|p| p.ends_with("src/new.rs")),
+        "worktree scope should not include fully-staged new.rs: {wt_paths:?}"
+    );
+
+    // Staged-only must miss unstaged-only README and untracked.
+    let staged = git_diff(&repo.workdir(), DiffScope::Staged, &[], false).unwrap();
+    let staged_review = parse_unified_diff(&staged).unwrap();
+    let staged_paths: Vec<&str> = staged_review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        !staged_paths.iter().any(|p| p.ends_with("README.md")),
+        "staged scope should not include unstaged README: {staged_paths:?}"
+    );
+
+    // Working-set with untracked: all three buckets in one command.
+    let produced = git_diff_produced(&repo.workdir(), DiffScope::WorkingSet, &[], true).unwrap();
+    assert!(!produced.is_empty());
+    let mut review = parse_unified_diff(&produced.text).unwrap();
+    review.apply_file_origins(&produced.origins);
+
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("src/new.rs")),
+        "working-set should include staged new.rs: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("README.md")),
+        "working-set should include unstaged README: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("dogfood_untracked.txt")),
+        "working-set should include untracked file: {paths:?}"
+    );
+
+    // Origins: at least one of each mark when all buckets present.
+    let origins: Vec<Option<FileOrigin>> = review.files.iter().map(|f| f.origin).collect();
+    assert!(
+        origins.iter().any(|o| *o == Some(FileOrigin::Staged)),
+        "expected a staged origin mark: {origins:?}"
+    );
+    assert!(
+        origins.iter().any(|o| *o == Some(FileOrigin::Modified)),
+        "expected a modified origin mark: {origins:?}"
+    );
+    assert!(
+        origins.iter().any(|o| *o == Some(FileOrigin::Untracked)),
+        "expected an untracked origin mark: {origins:?}"
+    );
+
+    // Large-diff path still goes through IR + viewport (no full-line materialization required).
+    let rows = ViewportQuery::rows(
+        &review,
+        Viewport {
+            start: 0,
+            height: review.stream_len.min(20),
+        },
+        &std::collections::HashSet::new(),
+    );
+    assert!(!rows.is_empty());
+    assert!(rows.len() <= 20);
 }
 
 #[test]
