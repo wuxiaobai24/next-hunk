@@ -152,7 +152,9 @@ pub enum ServerReply {
     Decisions(Selections),
     /// Response to `Info`: session metadata.
     Info {
-        /// Repo root path (as reported by the server).
+        /// Absolute repo / worktree root known at `serve` startup.
+        /// Never a review file path — agents use this to pick the right session
+        /// when multiple worktrees are live.
         repo_path: String,
         /// Number of files in the current review.
         file_count: usize,

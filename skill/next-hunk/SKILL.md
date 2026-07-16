@@ -88,17 +88,19 @@ automatically — no `--socket` flag needed.
 
 ```bash
 next-hunk list
-# c0ffee...  /tmp/next-hunk-c0ffee....sock  files=3  repo=src/main.rs
+# c0ffee...  /run/user/1000/next-hunk-c0ffee....sock  files=3  repo=/home/you/project
 ```
 
 `list` scans `$XDG_RUNTIME_DIR` and `/tmp` for live next-hunk sockets, probes
-each, and prints hash/path/files/repo. `get` shows details for a specific hash
-or the current repo.
+each, and prints hash/path/files/repo. `repo` is the **absolute worktree root**
+known at `serve` startup (not a file path from the diff) — use it to pick the
+right session when multiple worktrees are live. `get` shows details for a
+specific hash or the current repo.
 
 ```bash
 next-hunk get
-# socket: /tmp/next-hunk-abc123....sock
-# repo:   src/main.rs
+# socket: /run/user/1000/next-hunk-abc123....sock
+# repo:   /home/you/project
 # files:  3
 ```
 
