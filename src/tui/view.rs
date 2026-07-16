@@ -14,6 +14,8 @@
 //! (architecture §7 anti-pattern). Syntax highlighting is viewport-only and
 //! cached per (file, line) in `App.cache`.
 
+use std::sync::Arc;
+
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -549,12 +551,27 @@ fn stream_row_to_line(
             };
 
             // Compute highlight runs for the code text (viewport-only, cached).
+            // Live TUI: miss → plain + enqueue worker. Tests (no job_tx): sync fill.
             let line_in_file = ViewportQuery::file_and_line(&app.review, abs_row).map(|(_, li)| li);
             let hl_runs = if app.highlight_on {
                 if let Some(li) = line_in_file {
                     let path = app.review.display_path(file_idx);
-                    app.cache
-                        .get_or_highlight(file_idx, li, path, &text, &app.highlighter)
+                    if let Some(runs) = app.cache.try_get(file_idx, li) {
+                        runs
+                    } else if let Some(tx) = app.hl_job_tx.as_ref() {
+                        let _ = tx.send(crate::highlight::HighlightJob {
+                            gen: app.cache.current_gen(),
+                            file_idx,
+                            line_in_file: li,
+                            path: path.to_owned(),
+                            text: text.clone(),
+                            highlighter: Arc::clone(&app.highlighter),
+                        });
+                        vec![(Style::default(), text.clone())]
+                    } else {
+                        app.cache
+                            .get_or_highlight(file_idx, li, path, &text, &app.highlighter)
+                    }
                 } else {
                     vec![(Style::default(), text.clone())]
                 }

@@ -158,7 +158,7 @@ next-hunk/
     source/              # git, patch, files
     tui/                 # app, rail, stream, keys, watch
     config.rs            # layered config.toml (user + project)
-    highlight/           # later: async syntect
+    highlight/           # syntect + HighlightWorker (async fill)
   benches/
   fixtures/
   scripts/
@@ -175,9 +175,9 @@ Single package first (lib + bin); split crates only if boundaries hurt compile t
 | Language | **Rust** | No GC; controllable memory and latency |
 | TUI | **ratatui + crossterm** | Stable; revisit only if the framework is the bottleneck |
 | Line-level IR | **Custom unified-diff parser** | Full control of layout/perf |
-| Word-level diff | **similar** (later, viewport-only) | |
+| Word-level diff | **similar** (viewport-only) | |
 | Git | **gix (gitoxide)** | Sole backend; no CLI fallback |
-| Highlight | **syntect** or equivalent (Phase 4, async) | Off or idle by default; dependency size is not a gate |
+| Highlight | **syntect** (viewport + cache + worker) | On by default; miss = plain; dep size not a gate |
 | CLI | **clap** | |
 | Errors | **anyhow** / **thiserror** | |
 | Release | Normal release profile; size observational | See PERF.md |
@@ -240,30 +240,30 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 
 ### Phase 3 — Product completeness (~1–2 weeks)
 
-- [ ] `show` / `patch -` fully wired
-- [ ] staged + passthrough git args
-- [ ] Optional two-file diff
+- [x] `show` / `patch -` fully wired
+- [x] staged + passthrough git args
+- [x] Optional two-file diff (`filediff`)
 - [x] Light search (path filter and/or in-stream `/`)
-- [ ] Minimal config (colors, rail width)
+- [x] Minimal config (colors, theme, wrap, layout, line_numbers, …)
 
 **Exit:** replaces “delta + manual file hopping” for the main path.
 
 ### Phase 4 — Differentiation (~2–3 weeks)
 
-- [ ] Simple local notes (line/file)
+- [x] Simple local notes (line/file; `--note` + serve comments)
 - [x] Syntax highlight (syntect, viewport-only + cached, default on)
-- [ ] Async syntect (cancellable, default off or idle) — current highlight is sync viewport-only
-- [ ] Word-level diff **viewport-only**
-- [ ] Public compare notes (vs delta or similar: latency / RSS, not binary size)
+- [x] Async syntect (background worker + gen-id stale rejection; miss = plain)
+- [x] Word-level diff **viewport-only**
+- [x] Public compare notes (vs delta: `docs/PERF.md` design claims + benches)
 
 **Exit:** story upgrades from “fast” to “agent-era review engine”.
 
 ### Phase 5 — Hardening (ongoing)
 
 - [ ] Side-by-side (own perf design; never default hot path without gates)
-- [ ] Watch / incremental IR refresh
+- [x] Watch / incremental IR refresh (`--watch`, preserve state on reload)
 - [ ] jj adapter
-- [ ] Themes, help overlay
+- [x] Themes, help overlay
 - [ ] Fuzz parse; more real-repo regressions
 
 ---

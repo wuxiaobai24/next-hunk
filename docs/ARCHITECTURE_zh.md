@@ -177,7 +177,7 @@ next-hunk/
 | 行级 IR | **自研 unified-diff 解析** | 完全控制布局与性能 |
 | 字级 diff | **similar**（后续，仅视口） | |
 | Git | **gix（gitoxide）** | 唯一后端；无 CLI fallback |
-| 高亮 | **syntect** 或等价（Phase 4，异步） | 默认关或空闲；依赖体积不设门禁 |
+| 高亮 | **syntect**（视口 + 缓存 + 后台 worker） | 默认开；miss 先 plain；依赖体积不设门禁 |
 | CLI | **clap** | |
 | 错误 | **anyhow** / **thiserror** | |
 | 发布 | 常规 release；体积仅观测 | 见 PERF |
@@ -240,30 +240,30 @@ next-hunk/
 
 ### Phase 3 — 产品完整度（约 1–2 周）
 
-- [ ] `show` / `patch -` 打通
-- [ ] staged + git 额外参数透传
-- [ ] 可选两文件 diff
+- [x] `show` / `patch -` 打通
+- [x] staged + git 额外参数透传
+- [x] 可选两文件 diff（`filediff`）
 - [x] 轻量搜索（路径过滤和/或流内 `/`）
-- [ ] 最小配置（颜色、rail 宽度）
+- [x] 最小配置（颜色、theme、wrap、layout、line_numbers 等）
 
 **退出：** 可替代「delta + 手翻文件」主路径。
 
 ### Phase 4 — 差异化（约 2–3 周）
 
-- [ ] 简单本地 note（行/文件）
+- [x] 简单本地 note（行/文件；`--note` + serve comments）
 - [x] 语法高亮（syntect，仅视口 + 缓存，默认开启）
-- [ ] 异步 syntect（可取消，默认关或空闲）— 当前为同步视口实现
-- [ ] **仅视口内** word-level diff
-- [ ] 公开对比说明（与 delta 或同类工具公平可比时：延迟 / RSS，非体积）
+- [x] 异步 syntect（后台 worker + gen-id 拒绝过期结果；miss = plain）
+- [x] **仅视口内** word-level diff
+- [x] 公开对比说明（vs delta：`docs/PERF.md` 设计对比 + bench）
 
 **退出：** 叙事从「快」升级到「agent 时代 review 引擎」。
 
 ### Phase 5 — 硬化（持续）
 
 - [ ] Side-by-side（独立性能设计；未过门禁不做默认）
-- [ ] Watch / 增量 IR 刷新
+- [x] Watch / 增量 IR 刷新（`--watch`，reload 保状态）
 - [ ] jj 适配器
-- [ ] 主题、help overlay
+- [x] 主题、help overlay
 - [ ] Fuzz parse；更多真实仓库回归
 
 ---

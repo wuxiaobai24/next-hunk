@@ -137,8 +137,10 @@ pub fn run_review_tui(
         .as_deref()
         .map(theme::ThemeMode::parse)
         .unwrap_or_default();
-    let highlighter = crate::highlight::Highlighter::load(theme_mode.syntect_theme_name())
-        .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop());
+    let highlighter = std::sync::Arc::new(
+        crate::highlight::Highlighter::load(theme_mode.syntect_theme_name())
+            .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop()),
+    );
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.highlight_on = start_highlight;
     app.line_numbers_on = start_line_numbers;
@@ -150,7 +152,17 @@ pub fn run_review_tui(
     app.notes = options.notes;
     app.select_mode = options.select_mode;
     app.apply_focus();
-    run_loop(&mut terminal, &mut app, reloader, workdir, server.as_ref())
+    // Background highlight worker: viewport misses enqueue; main loop drains.
+    let hl_worker = crate::highlight::HighlightWorker::spawn();
+    app.hl_job_tx = Some(hl_worker.job_sender());
+    run_loop(
+        &mut terminal,
+        &mut app,
+        reloader,
+        workdir,
+        server.as_ref(),
+        Some(hl_worker),
+    )
 }
 
 fn run_loop(
@@ -159,6 +171,7 @@ fn run_loop(
     mut reloader: Option<Reloader>,
     workdir: Option<PathBuf>,
     #[allow(unused_variables)] server: Option<&ServerArg>,
+    hl_worker: Option<crate::highlight::HighlightWorker>,
 ) -> Result<Selections> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
@@ -180,6 +193,14 @@ fn run_loop(
     let mut last_event: Option<Instant> = None;
 
     loop {
+        // Apply finished highlight jobs before draw so the next frame can
+        // pick up styles. Stale gens are discarded inside apply_result.
+        if let Some(w) = hl_worker.as_ref() {
+            for result in w.drain() {
+                let _ = app.cache.apply_result(result);
+            }
+        }
+
         // Draw, then sync the app's viewport height from the rendered area so
         // clamping on the next key uses the real visible height.
         terminal.draw(|f| {
