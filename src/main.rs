@@ -54,6 +54,10 @@ enum Commands {
         /// agent to parse. Requires an interactive terminal.
         #[arg(long)]
         select: bool,
+        /// Diff stream layout: `unified` (default), `stack`, or `split`.
+        /// Overrides `layout` from config.toml.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -62,6 +66,9 @@ enum Commands {
     Show {
         /// Revision or range (e.g. HEAD, main..HEAD).
         rev: String,
+        /// Diff stream layout: `unified`, `stack`, or `split`.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
     },
     /// Diff two arbitrary files on disk.
     Filediff {
@@ -69,11 +76,17 @@ enum Commands {
         old: PathBuf,
         /// Second file (new).
         new: PathBuf,
+        /// Diff stream layout: `unified`, `stack`, or `split`.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
     },
     /// Review a unified patch from a file or stdin (`-`).
     Patch {
         /// Path to patch file, or `-` for stdin.
         path: PathBuf,
+        /// Diff stream layout: `unified`, `stack`, or `split`.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
     },
     /// Git pager mode. Reads a unified diff from stdin and opens the TUI.
     ///
@@ -119,6 +132,10 @@ enum Commands {
         /// `<path>:h<n>=<text>` / `banner=<text>`.
         #[arg(long, action = clap::ArgAction::Append)]
         note: Vec<String>,
+        /// Diff stream layout: `unified` (default), `stack`, or `split`.
+        /// Overrides `layout` from config.toml.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -255,6 +272,7 @@ fn run() -> Result<()> {
         focus: None,
         note: Vec::new(),
         select: false,
+        layout: None,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -265,6 +283,7 @@ fn run() -> Result<()> {
             focus,
             note,
             select,
+            layout,
             extra,
         } => {
             // Parse the agent-bridge specs and check the --select tty
@@ -298,6 +317,7 @@ fn run() -> Result<()> {
                     watch: if watch { Some(true) } else { None },
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
+                    layout,
                 },
             );
 
@@ -335,13 +355,16 @@ fn run() -> Result<()> {
                 None,
             )
         }
-        Commands::Show { rev } => {
+        Commands::Show { rev, layout } => {
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
             let text = git_show(&repo, &rev)?;
             // `show` is a one-shot snapshot: no watch, highlight default on.
-            // Honor the user/project theme config even for `show`.
+            // Honor the user/project theme/layout config even for `show`.
             let cfg = Config::load(&cwd);
+            let resolved_layout = layout
+                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
+                .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
                 None,
@@ -349,28 +372,33 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
-                LayoutMode::Unified,
+                resolved_layout,
                 Some(repo),
                 ReviewOptions::default(),
                 None,
             )
         }
-        Commands::Patch { path } => {
+        Commands::Patch { path, layout } => {
             let text = read_patch_input(&path)?;
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let cfg = Config::load(&cwd);
+            let resolved_layout = layout
+                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
+                .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
                 None,
                 true,
-                true,
-                false,
-                None,
-                LayoutMode::Unified,
+                cfg.line_numbers.unwrap_or(true),
+                cfg.wrap.unwrap_or(false),
+                cfg.theme,
+                resolved_layout,
                 None,
                 ReviewOptions::default(),
                 None,
             )
         }
-        Commands::Filediff { old, new } => {
+        Commands::Filediff { old, new, layout } => {
             let cwd = std::env::current_dir()?;
             let repo = open_repo(&cwd)?;
             let text = git_file_diff(&repo, &old, &new)?;
@@ -378,14 +406,18 @@ fn run() -> Result<()> {
                 eprintln!("(files are identical)");
                 return Ok(());
             }
+            let cfg = Config::load(&cwd);
+            let resolved_layout = layout
+                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
+                .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
                 None,
                 true,
-                true,
-                false,
-                None,
-                LayoutMode::Unified,
+                cfg.line_numbers.unwrap_or(true),
+                cfg.wrap.unwrap_or(false),
+                cfg.theme,
+                resolved_layout,
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
@@ -423,6 +455,11 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
+            let resolved_layout = cfg
+                .layout
+                .as_deref()
+                .map(LayoutMode::parse_str)
+                .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &buf,
                 None,
@@ -430,7 +467,7 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
-                LayoutMode::Unified,
+                resolved_layout,
                 workdir,
                 ReviewOptions::default(),
                 None,
@@ -443,6 +480,7 @@ fn run() -> Result<()> {
             include_untracked,
             focus,
             note,
+            layout,
             extra,
         } => run_serve(
             staged,
@@ -451,6 +489,7 @@ fn run() -> Result<()> {
             include_untracked,
             focus,
             note,
+            layout,
             extra,
         ),
         Commands::Push { focus, note } => run_push(focus, note),
@@ -483,6 +522,7 @@ fn make_diff_reloader(
 /// point of `serve` is to collect decisions via `next-hunk decision`) and
 /// binds a server listener on the repo's runtime socket path.
 #[cfg(all(feature = "serve", unix))]
+#[allow(clippy::too_many_arguments)] // mirrors Commands::Serve field set
 fn run_serve(
     staged: bool,
     watch: bool,
@@ -490,6 +530,7 @@ fn run_serve(
     include_untracked: bool,
     focus: Option<String>,
     note: Vec<String>,
+    layout: Option<LayoutMode>,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
@@ -516,6 +557,7 @@ fn run_serve(
             watch: if watch { Some(true) } else { None },
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
+            layout,
         },
     );
 
@@ -866,6 +908,7 @@ fn spawn_serve_listener(repo: &std::path::Path) -> Result<next_hunk::tui::Server
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
+#[allow(clippy::too_many_arguments)] // mirrors Commands::Serve field set
 fn run_serve(
     _staged: bool,
     _watch: bool,
@@ -873,9 +916,22 @@ fn run_serve(
     _include_untracked: bool,
     _focus: Option<String>,
     _note: Vec<String>,
+    _layout: Option<LayoutMode>,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
+}
+
+/// clap value_parser for `--layout`. Accepts unified|stack|split (case-insensitive).
+fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
+    match s.trim().to_lowercase().as_str() {
+        "unified" => Ok(LayoutMode::Unified),
+        "stack" => Ok(LayoutMode::Stack),
+        "split" => Ok(LayoutMode::Split),
+        other => Err(format!(
+            "unknown layout '{other}' (expected unified, stack, or split)"
+        )),
+    }
 }
 
 #[cfg(not(all(feature = "serve", unix)))]

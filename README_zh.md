@@ -44,6 +44,7 @@
 - [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
+- [x] Split 布局：`layout = "split"` / `--layout split` 左右分栏
 - [x] 折行配置：`wrap = true` 折行显示（默认截断）
 - [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
 - [x] 对常见工具（如 delta）的公开性能说明（设计对比 + bench 见 `docs/PERF.md`）
@@ -166,7 +167,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `watch` | bool | `false` | 文件变化时实时重载 |
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
 | `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
-| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）或 `"stack"`（每文件分旧/新两块） |
+| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
@@ -177,7 +178,7 @@ highlight = true
 watch = true
 ```
 
-CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`。
+CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`。
 
 ## Agent 集成
 

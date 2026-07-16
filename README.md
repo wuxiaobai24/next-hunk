@@ -44,6 +44,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [x] Stack layout: `layout = "stack"` config (unified default)
+- [x] Split layout: `layout = "split"` / `--layout split` side-by-side panes
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
@@ -202,7 +203,7 @@ Fields:
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
 | `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
-| `layout` | string | `"unified"` | `"unified"` (default, interleaved) or `"stack"` (old/new blocks per file) |
+| `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
@@ -213,7 +214,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`.
+CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`.
 
 ## Agent integration
 

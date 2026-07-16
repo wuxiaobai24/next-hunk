@@ -27,6 +27,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in two stacked blocks per file, separated by `▌ old` / `▌ new` labels. Set
   `layout = "stack"` in `.next-hunk/config.toml` (default is `"unified"`).
   Falls back to unified when the terminal is narrower than 40 columns.
+- **True side-by-side split layout (`layout = "split"`)** — left pane shows
+  old content (context + deletes), right pane shows new content (context +
+  adds), with consecutive delete/add runs paired on the same visual row. Set
+  `layout = "split"` in config, or pass `--layout split` on `diff` / `show` /
+  `patch` / `filediff` / `serve`. Responsive fallback: stream pane `< 80` cols
+  → stack, `< 40` cols → unified. Presentation-only — still viewport-only
+  materialization via `ViewportQuery::rows`; IR/scroll/search indices unchanged.
 
 ### Added — TUI
 - **`zc`/`zo` fold/unfold current file** — `zc` (close fold) collapses the

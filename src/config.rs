@@ -22,6 +22,9 @@ pub enum LayoutMode {
     /// Stacked diff: old content (context + deletes) then new content
     /// (context + adds) per file, vertically.
     Stack,
+    /// Side-by-side split: old (left) and new (right) panes for the same file.
+    /// Narrow terminals fall back to stack, then unified (see view layer).
+    Split,
 }
 
 impl LayoutMode {
@@ -29,12 +32,14 @@ impl LayoutMode {
         match self {
             LayoutMode::Unified => "unified",
             LayoutMode::Stack => "stack",
+            LayoutMode::Split => "split",
         }
     }
 
     pub fn parse_str(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "stack" => LayoutMode::Stack,
+            "split" => LayoutMode::Split,
             _ => LayoutMode::Unified,
         }
     }
@@ -52,7 +57,7 @@ pub struct Config {
     pub include_untracked: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
-    /// Layout mode: "unified" (default) or "stack".
+    /// Layout mode: "unified" (default), "stack", or "split".
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
@@ -124,7 +129,7 @@ pub struct ResolvedConfig {
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
     pub theme: Option<String>,
-    /// Layout mode for the diff stream: "unified" (default) or "stack".
+    /// Layout mode for the diff stream: "unified" (default), "stack", or "split".
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
@@ -160,6 +165,8 @@ pub struct CliFlags {
     pub highlight: Option<bool>,
     /// `--include-untracked` → `Some(true)`; absent → `None`.
     pub include_untracked: Option<bool>,
+    /// `--layout <mode>` → `Some(LayoutMode)`; absent → `None` (use config/default).
+    pub layout: Option<LayoutMode>,
 }
 
 impl ResolvedConfig {
@@ -178,10 +185,9 @@ impl ResolvedConfig {
                 .or(cfg.include_untracked)
                 .unwrap_or(d.include_untracked),
             theme: cfg.theme.clone(),
-            layout: cfg
+            layout: cli
                 .layout
-                .as_deref()
-                .map(LayoutMode::parse_str)
+                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(d.layout),
             wrap: cfg.wrap.unwrap_or(d.wrap),
         }
@@ -324,6 +330,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged); // CLI wins
@@ -339,6 +346,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged);
@@ -358,6 +366,7 @@ mod tests {
             watch: None,
             highlight: Some(false), // --no-highlight
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -374,6 +383,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
@@ -387,6 +397,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
@@ -403,6 +414,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
@@ -416,6 +428,7 @@ mod tests {
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());
@@ -522,6 +535,7 @@ theme = \"dark\"
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Unified);
@@ -537,6 +551,7 @@ theme = \"dark\"
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Stack);
@@ -546,6 +561,8 @@ theme = \"dark\"
     fn layout_mode_from_str() {
         assert_eq!(LayoutMode::parse_str("unified"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str("stack"), LayoutMode::Stack);
+        assert_eq!(LayoutMode::parse_str("split"), LayoutMode::Split);
+        assert_eq!(LayoutMode::parse_str("SPLIT"), LayoutMode::Split);
         assert_eq!(LayoutMode::parse_str("unknown"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str(""), LayoutMode::Unified);
     }
@@ -554,6 +571,38 @@ theme = \"dark\"
     fn layout_mode_as_str() {
         assert_eq!(LayoutMode::Unified.as_str(), "unified");
         assert_eq!(LayoutMode::Stack.as_str(), "stack");
+        assert_eq!(LayoutMode::Split.as_str(), "split");
+    }
+
+    #[test]
+    fn layout_mode_split_from_config() {
+        let (dir, _path) = write_tmp_config("layout = \"split\"\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.layout.as_deref(), Some("split"));
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+            layout: None,
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.layout, LayoutMode::Split);
+    }
+
+    #[test]
+    fn layout_mode_cli_overrides_config() {
+        let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
+        let cfg = Config::load_project(&dir.0);
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+            layout: Some(LayoutMode::Split),
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.layout, LayoutMode::Split);
     }
 
     #[test]
@@ -564,6 +613,7 @@ theme = \"dark\"
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap, "wrap should default to false");
@@ -579,6 +629,7 @@ theme = \"dark\"
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.wrap);
@@ -594,6 +645,7 @@ theme = \"dark\"
             watch: None,
             highlight: None,
             include_untracked: None,
+            layout: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap);

@@ -30,6 +30,14 @@ use crate::tui::app::{App, Decision, HunkId, InputMode};
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
 const RAIL_MAX_WIDTH: u16 = 32;
 
+/// Minimum stream-pane width for true side-by-side split. Below this, split
+/// falls back to stack (then unified below [`STACK_MIN_WIDTH`]).
+const SPLIT_MIN_WIDTH: u16 = 80;
+
+/// Minimum stream-pane width for stack layout. Below this, stack/split fall
+/// back to unified so the layout never collapses.
+const STACK_MIN_WIDTH: u16 = 40;
+
 /// Draw the whole app. Takes `&mut App` because highlighting populates the
 /// cache lazily during render.
 pub fn draw(app: &mut App, frame: &mut Frame) {
@@ -130,11 +138,19 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
-    // Narrow terminal: stack mode falls back to unified (no crash).
-    if app.layout_mode == crate::config::LayoutMode::Stack && area.width >= 40 {
-        draw_stream_stack(app, frame, area);
-    } else {
-        draw_stream_unified(app, frame, area);
+    // Responsive layout ladder (presentation only — IR/scroll indices unchanged):
+    //   split  (>= 80 cols) → stack (40..79) → unified (< 40)
+    //   stack  (>= 40 cols) → unified (< 40)
+    //   unified always
+    use crate::config::LayoutMode;
+    match app.layout_mode {
+        LayoutMode::Split if area.width >= SPLIT_MIN_WIDTH => {
+            draw_stream_split(app, frame, area);
+        }
+        LayoutMode::Split | LayoutMode::Stack if area.width >= STACK_MIN_WIDTH => {
+            draw_stream_stack(app, frame, area);
+        }
+        _ => draw_stream_unified(app, frame, area),
     }
 }
 
@@ -365,6 +381,437 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
+/// Side-by-side split layout: left pane shows old content (context + deletes),
+/// right pane shows new content (context + adds). Pairs consecutive delete/add
+/// runs so changed lines align across panes.
+///
+/// **IR invariant:** materializes only the current viewport via
+/// [`ViewportQuery::rows`] — never walks or caches the full stream. Scroll,
+/// search, and hunk-jump indices stay on the unified stream coordinate system.
+fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
+    let height = area.height as usize;
+    let scroll_y = app.scroll_y;
+    let viewport = Viewport {
+        start: scroll_y,
+        height,
+    };
+
+    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport, &app.folded)
+        .into_iter()
+        .enumerate()
+        .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))
+        .collect();
+
+    let current_match_row = if app.search.active && !app.search.matches.is_empty() {
+        Some(app.search.matches[app.search.current])
+    } else {
+        None
+    };
+    let match_rows: std::collections::HashSet<usize> = if app.search.active {
+        app.search.matches.iter().copied().collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+
+    // Pane width: half of the stream area minus the 1-col center gutter.
+    let pane_w = (area.width.saturating_sub(1) / 2).max(1) as usize;
+    let visual = build_split_visual_rows(owned_rows);
+
+    let mut lines: Vec<Line> = Vec::with_capacity(visual.len());
+    for v in visual {
+        match v {
+            SplitVisual::Full(row) => {
+                let abs_row = owned_row_abs(&row);
+                lines.push(stream_row_to_line(app, row, current_match_row, &match_rows));
+                if let Some(notes) = notes_by_row.get(&abs_row) {
+                    for text in notes {
+                        lines.push(Line::from(Span::styled(
+                            format!("  💬 {}", text),
+                            Style::default()
+                                .fg(app.theme.note)
+                                .add_modifier(Modifier::ITALIC),
+                        )));
+                    }
+                }
+            }
+            SplitVisual::Pair { left, right } => {
+                // Collect notes from either side (same abs_row when both set
+                // for context; for delete/add pairs notes attach to each side).
+                let note_rows: Vec<usize> = [left.as_ref(), right.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .map(owned_row_abs)
+                    .collect();
+                lines.push(render_split_pair_line(
+                    app,
+                    left,
+                    right,
+                    pane_w,
+                    current_match_row,
+                    &match_rows,
+                ));
+                // Fan-out notes under the paired row (dedupe by abs_row).
+                let mut seen = std::collections::HashSet::new();
+                for abs in note_rows {
+                    if !seen.insert(abs) {
+                        continue;
+                    }
+                    if let Some(notes) = notes_by_row.get(&abs) {
+                        for text in notes {
+                            lines.push(Line::from(Span::styled(
+                                format!("  💬 {}", text),
+                                Style::default()
+                                    .fg(app.theme.note)
+                                    .add_modifier(Modifier::ITALIC),
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Column labels so reviewers know which pane is old vs new.
+    let header = Line::from(vec![
+        Span::styled(
+            pad_display("▌ old", pane_w),
+            Style::default()
+                .fg(app.theme.dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("│", Style::default().fg(app.theme.dim)),
+        Span::styled(
+            pad_display(" ▌ new", pane_w),
+            Style::default()
+                .fg(app.theme.dim)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    lines.insert(0, header);
+
+    // Wrap is intentionally ignored in split: wrapping either pane would
+    // desync row alignment. Truncation to pane width is the presentation rule.
+    let _ = app.wrap_on;
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::NONE)
+            .title(format!(" {} ", app.current_path())),
+    );
+    frame.render_widget(para, area);
+}
+
+/// One visual row in the split stream: either a full-width header or a
+/// left|right pair of optional line rows.
+#[derive(Debug)]
+enum SplitVisual {
+    Full(OwnedRow),
+    Pair {
+        left: Option<OwnedRow>,
+        right: Option<OwnedRow>,
+    },
+}
+
+/// Transform viewport-owned unified rows into side-by-side visual rows.
+///
+/// Pure presentation: O(viewport). Consecutive delete runs are paired with
+/// following add runs so changed lines sit on the same visual row; unpaired
+/// sides render as blank. Context/meta lines appear on both panes.
+fn build_split_visual_rows(rows: Vec<OwnedRow>) -> Vec<SplitVisual> {
+    let mut out: Vec<SplitVisual> = Vec::with_capacity(rows.len());
+    let mut i = 0;
+    while i < rows.len() {
+        match &rows[i] {
+            OwnedRow::FileHeader { .. } | OwnedRow::HunkHeader { .. } => {
+                out.push(SplitVisual::Full(rows[i].clone()));
+                i += 1;
+            }
+            OwnedRow::Line {
+                kind: DiffLineKind::Context | DiffLineKind::Meta,
+                ..
+            } => {
+                let r = rows[i].clone();
+                out.push(SplitVisual::Pair {
+                    left: Some(r.clone()),
+                    right: Some(r),
+                });
+                i += 1;
+            }
+            OwnedRow::Line {
+                kind: DiffLineKind::Delete,
+                ..
+            } => {
+                let mut dels = Vec::new();
+                while i < rows.len() {
+                    if matches!(
+                        &rows[i],
+                        OwnedRow::Line {
+                            kind: DiffLineKind::Delete,
+                            ..
+                        }
+                    ) {
+                        dels.push(rows[i].clone());
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let mut adds = Vec::new();
+                while i < rows.len() {
+                    if matches!(
+                        &rows[i],
+                        OwnedRow::Line {
+                            kind: DiffLineKind::Add,
+                            ..
+                        }
+                    ) {
+                        adds.push(rows[i].clone());
+                        i += 1;
+                    } else {
+                        break;
+                    }
+                }
+                let n = dels.len().max(adds.len());
+                for j in 0..n {
+                    out.push(SplitVisual::Pair {
+                        left: dels.get(j).cloned(),
+                        right: adds.get(j).cloned(),
+                    });
+                }
+            }
+            OwnedRow::Line {
+                kind: DiffLineKind::Add,
+                ..
+            } => {
+                // Orphan add (no preceding deletes in this run).
+                out.push(SplitVisual::Pair {
+                    left: None,
+                    right: Some(rows[i].clone()),
+                });
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Render one side-by-side pair as a single ratatui line: `left │ right`,
+/// each pane truncated/padded to `pane_w` display columns.
+fn render_split_pair_line(
+    app: &mut App,
+    left: Option<OwnedRow>,
+    right: Option<OwnedRow>,
+    pane_w: usize,
+    current_match_row: Option<usize>,
+    match_rows: &std::collections::HashSet<usize>,
+) -> Line<'static> {
+    let left_line = left.map(|r| {
+        stream_row_to_line_split_pane(app, r, SplitPane::Old, current_match_row, match_rows)
+    });
+    let right_line = right.map(|r| {
+        stream_row_to_line_split_pane(app, r, SplitPane::New, current_match_row, match_rows)
+    });
+
+    let left_spans = truncate_line_to_width(left_line.unwrap_or_else(blank_pane_line), pane_w);
+    let right_spans = truncate_line_to_width(right_line.unwrap_or_else(blank_pane_line), pane_w);
+
+    let mut spans = left_spans;
+    spans.push(Span::styled("│", Style::default().fg(app.theme.dim)));
+    spans.extend(right_spans);
+    Line::from(spans)
+}
+
+#[derive(Clone, Copy)]
+enum SplitPane {
+    Old,
+    New,
+}
+
+fn blank_pane_line() -> Line<'static> {
+    Line::from(Span::raw(""))
+}
+
+/// Like [`stream_row_to_line`] but for one split pane: only the relevant
+/// line number is shown, and the +/- prefix is kept so change kind is clear.
+fn stream_row_to_line_split_pane(
+    app: &mut App,
+    row: OwnedRow,
+    pane: SplitPane,
+    current_match_row: Option<usize>,
+    match_rows: &std::collections::HashSet<usize>,
+) -> Line<'static> {
+    // Headers should not appear in panes (they use Full width).
+    match &row {
+        OwnedRow::FileHeader { .. } | OwnedRow::HunkHeader { .. } => {
+            return stream_row_to_line(app, row, current_match_row, match_rows);
+        }
+        OwnedRow::Line { .. } => {}
+    }
+
+    let OwnedRow::Line {
+        kind,
+        text,
+        file_idx,
+        abs_row,
+        old_no,
+        new_no,
+        counterpart,
+    } = row
+    else {
+        unreachable!()
+    };
+
+    let is_current_match = current_match_row == Some(abs_row);
+    let is_other_match = !is_current_match && match_rows.contains(&abs_row);
+
+    let (prefix, kind_style) = match kind {
+        DiffLineKind::Add => ('+', Style::default().fg(app.theme.add)),
+        DiffLineKind::Delete => ('-', Style::default().fg(app.theme.delete)),
+        DiffLineKind::Meta => ('\\', Style::default().fg(app.theme.dim)),
+        DiffLineKind::Context => (' ', Style::default()),
+    };
+
+    let line_in_file = ViewportQuery::file_and_line(&app.review, abs_row).map(|(_, li)| li);
+    let hl_runs = if app.highlight_on {
+        if let Some(li) = line_in_file {
+            let path = app.review.display_path(file_idx);
+            if let Some(runs) = app.cache.try_get(file_idx, li) {
+                runs
+            } else if let Some(tx) = app.hl_job_tx.as_ref() {
+                let _ = tx.send(crate::highlight::HighlightJob {
+                    gen: app.cache.current_gen(),
+                    file_idx,
+                    line_in_file: li,
+                    path: path.to_owned(),
+                    text: text.clone(),
+                    highlighter: Arc::clone(&app.highlighter),
+                });
+                vec![(Style::default(), text.clone())]
+            } else {
+                app.cache
+                    .get_or_highlight(file_idx, li, path, &text, &app.highlighter)
+            }
+        } else {
+            vec![(Style::default(), text.clone())]
+        }
+    } else {
+        vec![(Style::default(), text.clone())]
+    };
+
+    let runs = if app.word_diff_on {
+        if let Some(their) = counterpart.as_deref() {
+            let regions = word_diff_regions(&text, their);
+            refine_with_word_regions(
+                &hl_runs,
+                &regions,
+                kind,
+                app.theme.word_add,
+                app.theme.word_del,
+            )
+        } else {
+            hl_runs
+        }
+    } else {
+        hl_runs
+    };
+
+    let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 2);
+    if app.line_numbers_on {
+        let dim = Style::default().fg(app.theme.dim);
+        let no = match pane {
+            SplitPane::Old => old_no,
+            SplitPane::New => new_no,
+        };
+        let s = no
+            .map(|n| format!("{n:>5}"))
+            .unwrap_or_else(|| "     ".into());
+        spans.push(Span::styled(format!(" {s} "), dim));
+    }
+    spans.push(Span::styled(prefix.to_string(), kind_style));
+    for (style, txt) in runs {
+        spans.push(Span::styled(txt, style));
+    }
+
+    let line = Line::from(spans);
+    if is_current_match {
+        highlight_current_match_line(
+            line,
+            app.search.query.as_str(),
+            app.theme.match_active_fg,
+            app.theme.match_active_bg,
+            app.theme.match_inactive_bg,
+        )
+    } else if is_other_match {
+        line.style(Style::default().bg(app.theme.match_inactive_bg))
+    } else {
+        line
+    }
+}
+
+/// Pad `s` with trailing spaces so its display width equals `width`.
+fn pad_display(s: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let w = s.width();
+    if w >= width {
+        // Truncate by chars until width fits.
+        let mut out = String::new();
+        let mut used = 0;
+        for c in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(c).unwrap_or(0);
+            if used + cw > width {
+                break;
+            }
+            out.push(c);
+            used += cw;
+        }
+        while used < width {
+            out.push(' ');
+            used += 1;
+        }
+        out
+    } else {
+        format!("{s}{}", " ".repeat(width - w))
+    }
+}
+
+/// Truncate (or pad) a rendered line's spans to exactly `width` display columns.
+fn truncate_line_to_width(line: Line<'static>, width: usize) -> Vec<Span<'static>> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for sp in line.spans {
+        if used >= width {
+            break;
+        }
+        let content = sp.content.to_string();
+        let sw = content.width();
+        if used + sw <= width {
+            used += sw;
+            out.push(Span::styled(content, sp.style));
+        } else {
+            // Partial span.
+            let mut partial = String::new();
+            for c in content.chars() {
+                let cw = UnicodeWidthChar::width(c).unwrap_or(0);
+                if used + cw > width {
+                    break;
+                }
+                partial.push(c);
+                used += cw;
+            }
+            if !partial.is_empty() {
+                out.push(Span::styled(partial, sp.style));
+            }
+            break;
+        }
+    }
+    if used < width {
+        out.push(Span::raw(" ".repeat(width - used)));
+    }
+    out
+}
+
 /// The absolute stream row an [`OwnedRow`] occupies. Used to look up notes.
 fn owned_row_abs(row: &OwnedRow) -> usize {
     match row {
@@ -405,6 +852,7 @@ fn build_notes_by_row(
 
 /// Owned snapshot of a stream row's display data, so we can release the
 /// `&app.review` borrow before mutating `app` for highlight caching.
+#[derive(Clone, Debug)]
 enum OwnedRow {
     FileHeader {
         path: String,
@@ -1314,6 +1762,201 @@ diff --git a/a.rs b/a.rs
     fn status_path_zero_budget_returns_unchanged() {
         // A zero budget is a guard; we return the path as-is rather than panic.
         assert_eq!(status_path("a.rs", 0), "a.rs");
+    }
+
+    /// Split layout pairs delete+add on the same visual row and keeps
+    /// headers full-width. Pure unit test of the pairing transform — no TUI.
+    #[test]
+    fn build_split_pairs_delete_add_runs() {
+        let rows = vec![
+            OwnedRow::FileHeader {
+                path: "a.rs".into(),
+                abs_row: 0,
+            },
+            OwnedRow::HunkHeader {
+                text: "@@ -1 +1 @@".into(),
+                file_idx: 0,
+                hunk_idx: 0,
+                abs_row: 1,
+            },
+            OwnedRow::Line {
+                kind: DiffLineKind::Context,
+                text: "keep".into(),
+                file_idx: 0,
+                abs_row: 2,
+                old_no: Some(1),
+                new_no: Some(1),
+                counterpart: None,
+            },
+            OwnedRow::Line {
+                kind: DiffLineKind::Delete,
+                text: "old".into(),
+                file_idx: 0,
+                abs_row: 3,
+                old_no: Some(2),
+                new_no: None,
+                counterpart: Some("new".into()),
+            },
+            OwnedRow::Line {
+                kind: DiffLineKind::Add,
+                text: "new".into(),
+                file_idx: 0,
+                abs_row: 4,
+                old_no: None,
+                new_no: Some(2),
+                counterpart: Some("old".into()),
+            },
+            OwnedRow::Line {
+                kind: DiffLineKind::Add,
+                text: "extra".into(),
+                file_idx: 0,
+                abs_row: 5,
+                old_no: None,
+                new_no: Some(3),
+                counterpart: None,
+            },
+        ];
+        let visual = build_split_visual_rows(rows);
+        // FileHeader + HunkHeader + Context pair + Delete|Add pair + orphan Add
+        assert_eq!(visual.len(), 5);
+        assert!(matches!(visual[0], SplitVisual::Full(_)));
+        assert!(matches!(visual[1], SplitVisual::Full(_)));
+        match &visual[2] {
+            SplitVisual::Pair {
+                left: Some(l),
+                right: Some(r),
+            } => {
+                assert!(matches!(
+                    l,
+                    OwnedRow::Line {
+                        kind: DiffLineKind::Context,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    r,
+                    OwnedRow::Line {
+                        kind: DiffLineKind::Context,
+                        ..
+                    }
+                ));
+            }
+            other => panic!("expected context pair, got {other:?}"),
+        }
+        match &visual[3] {
+            SplitVisual::Pair {
+                left: Some(l),
+                right: Some(r),
+            } => {
+                assert!(matches!(
+                    l,
+                    OwnedRow::Line {
+                        kind: DiffLineKind::Delete,
+                        ..
+                    }
+                ));
+                assert!(matches!(
+                    r,
+                    OwnedRow::Line {
+                        kind: DiffLineKind::Add,
+                        text,
+                        ..
+                    } if text == "new"
+                ));
+            }
+            other => panic!("expected delete|add pair, got {other:?}"),
+        }
+        match &visual[4] {
+            SplitVisual::Pair {
+                left: None,
+                right: Some(r),
+            } => {
+                assert!(matches!(
+                    r,
+                    OwnedRow::Line {
+                        kind: DiffLineKind::Add,
+                        text,
+                        ..
+                    } if text == "extra"
+                ));
+            }
+            other => panic!("expected orphan add, got {other:?}"),
+        }
+    }
+
+    /// Wide terminal + layout=split: stream shows side-by-side labels and the
+    /// center gutter. Uses a 100-col backend so the stream pane (after rail)
+    /// is ≥ 80 cols and split is active.
+    #[test]
+    fn draw_split_shows_side_by_side_panes() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old_line
++new_line
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.layout_mode = crate::config::LayoutMode::Split;
+        app.viewport_height = 12;
+        // 100 wide: rail ~12–25, stream well above SPLIT_MIN_WIDTH (80).
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("old") && rendered.contains("new"),
+            "split should show old and new content: {rendered}"
+        );
+        assert!(
+            rendered.contains('│') || rendered.contains("▌"),
+            "split should show pane separator/labels: {rendered}"
+        );
+    }
+
+    /// Narrow stream width: layout=split must not crash and must fall back
+    /// (stack or unified) rather than attempting two panes that would clip.
+    #[test]
+    fn draw_split_falls_back_on_narrow_terminal() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.layout_mode = crate::config::LayoutMode::Split;
+        app.viewport_height = 8;
+        // 50 cols total → stream pane well under 80; must not panic.
+        let backend = ratatui::backend::TestBackend::new(50, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        // Still renders the file content somehow (fallback path).
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("old") || rendered.contains("new") || rendered.contains("a.rs"),
+            "narrow fallback should still render content: {rendered}"
+        );
     }
 
     /// A long path must not force the status row wider than the terminal.
