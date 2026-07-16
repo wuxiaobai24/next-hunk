@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Agent session
+- **`list` / `get` `repo` field was the first review file path** — `ServerReply::Info.repo_path`
+  incorrectly used `review.files[0].new_path` (e.g. `src/main.rs` or
+  `.next-hunk/config.toml`) instead of the worktree root known at `serve`
+  startup. Agents relying on `repo=` to select a session among worktrees got
+  misleading values. `Info` now reports the absolute repo/worktree root passed
+  into the TUI as `workdir`. Skill examples updated to match.
+
 ### Added — Configuration
 - **`line_numbers` config now actually works** — setting `line_numbers = false` in
   `.next-hunk/config.toml` (or the user-level config) hides the line-number

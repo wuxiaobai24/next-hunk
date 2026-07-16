@@ -234,7 +234,8 @@ fn run_loop(
         #[cfg(all(feature = "serve", unix))]
         if let Some(srv) = server {
             for req in srv.drain() {
-                let reply = apply_server_command(app, req.command, reloader.as_mut());
+                let reply =
+                    apply_server_command(app, req.command, reloader.as_mut(), workdir.as_deref());
                 // Best-effort reply: a dropped sender means the CLI client
                 // hung up (fine — the apply already took effect on the App).
                 let _ = req.reply.send(reply);
@@ -338,11 +339,14 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
 /// `server::ServerCommand` wire type with the App state — `App` stays free of
 /// server-protocol knowledge. Pure w.r.t. I/O; safe to unit-test headlessly.
 /// `reloader` is optional — when present, `Reload` commands re-fetch the diff.
+/// `workdir` is the repo root known at `serve` startup (not a file path from
+/// the review); used by `Info` so agents can disambiguate worktrees.
 #[cfg(all(feature = "serve", unix))]
 fn apply_server_command(
     app: &mut App,
     command: server::ServerCommand,
     reloader: Option<&mut Reloader>,
+    workdir: Option<&std::path::Path>,
 ) -> server::ServerReply {
     use crate::tui::app::{Note, NoteTarget};
     use server::{ServerCommand, ServerReply};
@@ -363,15 +367,16 @@ fn apply_server_command(
             ServerReply::Decisions(app.selections())
         }
         ServerCommand::Info => {
-            // Return basic session metadata.
+            // Repo root from serve startup — never the first review file path.
+            // Prefer an absolute path so agents can tell worktrees apart.
+            let repo_path = workdir
+                .map(|p| match p.canonicalize() {
+                    Ok(abs) => abs.display().to_string(),
+                    Err(_) => p.display().to_string(),
+                })
+                .unwrap_or_default();
             ServerReply::Info {
-                repo_path: app
-                    .review
-                    .files
-                    .first()
-                    .and_then(|f| f.new_path.clone())
-                    .or_else(|| app.review.files.first().and_then(|f| f.old_path.clone()))
-                    .unwrap_or_default(),
+                repo_path,
                 file_count: app.review.file_count(),
             }
         }
@@ -1097,5 +1102,51 @@ diff --git a/a.rs b/a.rs
             !rendered.contains("ghost"),
             "note targeting a missing file should not render: {rendered}"
         );
+    }
+
+    /// `Info.repo_path` must be the serve workdir (repo root), never the first
+    /// file path in the review — agents use it to pick among worktrees.
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn info_repo_path_is_workdir_not_first_file() {
+        use server::{ServerCommand, ServerReply};
+        use std::path::Path;
+
+        let mut app = sample_app();
+        // sample_app's first file is a.rs — the bug used that as "repo".
+        assert_eq!(
+            app.review.files.first().and_then(|f| f.new_path.as_deref()),
+            Some("a.rs")
+        );
+
+        let workdir = Path::new("/tmp/fake-worktree-root");
+        let reply = apply_server_command(&mut app, ServerCommand::Info, None, Some(workdir));
+        match reply {
+            ServerReply::Info {
+                repo_path,
+                file_count,
+            } => {
+                assert_eq!(file_count, 2);
+                // Absolute preferred; if canonicalize fails (path missing), still
+                // the workdir string — never "a.rs".
+                assert!(
+                    repo_path.ends_with("fake-worktree-root")
+                        || repo_path == "/tmp/fake-worktree-root",
+                    "repo_path should be workdir, got {repo_path:?}"
+                );
+                assert_ne!(repo_path, "a.rs");
+                assert!(!repo_path.ends_with("a.rs"));
+            }
+            other => panic!("expected Info, got {other:?}"),
+        }
+
+        // No workdir → empty repo_path (still not a file path).
+        let reply = apply_server_command(&mut app, ServerCommand::Info, None, None);
+        match reply {
+            ServerReply::Info { repo_path, .. } => {
+                assert_eq!(repo_path, "");
+            }
+            other => panic!("expected Info, got {other:?}"),
+        }
     }
 }
