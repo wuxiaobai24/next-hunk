@@ -205,6 +205,7 @@ Fields:
 | `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
+| `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -214,7 +215,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`.
+CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`.
 
 ## Agent integration
 
@@ -246,6 +247,24 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
 (undecided) per hunk; on quit the decisions are emitted as JSON for the agent
 to parse. `--select` requires an interactive terminal and errors out otherwise.
+
+**Full review report on quit (`export_on_quit`):**
+
+```bash
+# One JSON line: decisions + comments + notes (superset of --select shape)
+next-hunk diff --export-on-quit json --note banner="please review"
+
+# Markdown for pasting into a coding-agent chat (no --select required)
+next-hunk diff --export-on-quit markdown
+
+# Both formats
+next-hunk diff --select --export-on-quit both
+```
+
+Default is `none` so using next-hunk as `git core.pager` does not pollute
+stdout. With `export_on_quit = "json"|"markdown"|"both"`, quit emits the report
+even without `--select` (notes/comments included; hunks stay `undecided` until
+decided in select/serve).
 
 ### Agent skill
 

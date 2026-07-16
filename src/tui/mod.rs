@@ -24,7 +24,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::ir::Review;
-use crate::tui::app::{App, Selections};
+use crate::tui::app::{App, ReviewReport};
 use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
@@ -52,6 +52,8 @@ pub struct ReviewOptions {
     pub notes: Vec<app::Note>,
     /// `--select`: enable the per-hunk accept/reject gate; emit JSON on quit.
     pub select_mode: bool,
+    /// `export_on_quit` config / `--export-on-quit`: emit a structured report.
+    pub export_on_quit: crate::config::ExportOnQuit,
 }
 
 /// The server-listener handle threaded into the run loop, or `()` on builds
@@ -101,10 +103,11 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 /// started), the loop hot-reloads the review on filesystem changes, preserving
 /// scroll / selection as described in [`App::reload_review`].
 ///
-/// Returns the [`Selections`] (always present; empty buckets when not in
-/// `--select` mode) on clean quit. Errors only on fatal terminal I/O. If the
-/// process's stdout is not a tty, crossterm will typically still enter raw
-/// mode and the caller may choose to fall back to a non-interactive summary.
+/// Returns a [`ReviewReport`] (decisions + comments + notes) on clean quit.
+/// Outside `--select`, all hunks sit in `undecided` unless the human decided.
+/// Errors only on fatal terminal I/O. If the process's stdout is not a tty,
+/// crossterm will typically still enter raw mode and the caller may choose to
+/// fall back to a non-interactive summary.
 #[allow(clippy::too_many_arguments)]
 pub fn run_review_tui(
     review: Review,
@@ -117,7 +120,7 @@ pub fn run_review_tui(
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
     }
@@ -172,7 +175,7 @@ fn run_loop(
     workdir: Option<PathBuf>,
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
     // that case we keep running without live reload and surface a status note.
@@ -250,8 +253,8 @@ fn run_loop(
         if let Event::Key(key) = event {
             app.handle_key(key);
             if app.should_quit {
-                // Emit the per-hunk decisions (empty buckets outside --select).
-                return Ok(app.selections());
+                // Full report for the caller to emit (decisions + comments + notes).
+                return Ok(app.report());
             }
             // `o` requested opening a file in the editor. Suspend the TUI
             // (leave alt screen + raw mode so the editor gets a clean terminal),

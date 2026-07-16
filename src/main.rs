@@ -6,9 +6,10 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, LayoutMode, ResolvedConfig};
+use next_hunk::config::{CliFlags, Config, ExportOnQuit, LayoutMode, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
 use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
+use next_hunk::tui::app::ReviewReport;
 use next_hunk::tui::{run_review_tui, ReviewOptions};
 
 #[derive(Debug, Parser)]
@@ -54,6 +55,12 @@ enum Commands {
         /// agent to parse. Requires an interactive terminal.
         #[arg(long)]
         select: bool,
+        /// On quit, emit an agent-readable review report: `none` (default),
+        /// `json`, `markdown`, or `both`. Overrides `export_on_quit` in config.
+        /// Works without `--select` (exports notes/comments; all hunks undecided
+        /// unless the human used `a`/`r` in select/serve).
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
         /// Diff stream layout: `unified` (default), `stack`, or `split`.
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
@@ -132,6 +139,9 @@ enum Commands {
         /// `<path>:h<n>=<text>` / `banner=<text>`.
         #[arg(long, action = clap::ArgAction::Append)]
         note: Vec<String>,
+        /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
         /// Diff stream layout: `unified` (default), `stack`, or `split`.
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
@@ -272,6 +282,7 @@ fn run() -> Result<()> {
         focus: None,
         note: Vec::new(),
         select: false,
+        export_on_quit: None,
         layout: None,
         extra: Vec::new(),
     }) {
@@ -283,6 +294,7 @@ fn run() -> Result<()> {
             focus,
             note,
             select,
+            export_on_quit,
             layout,
             extra,
         } => {
@@ -318,6 +330,7 @@ fn run() -> Result<()> {
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
                     layout,
+                    export_on_quit,
                 },
             );
 
@@ -351,6 +364,7 @@ fn run() -> Result<()> {
                     focus: focus_target,
                     notes,
                     select_mode: select,
+                    export_on_quit: resolved.export_on_quit,
                 },
                 None,
             )
@@ -374,7 +388,14 @@ fn run() -> Result<()> {
                 cfg.theme,
                 resolved_layout,
                 Some(repo),
-                ReviewOptions::default(),
+                ReviewOptions {
+                    export_on_quit: cfg
+                        .export_on_quit
+                        .as_deref()
+                        .map(ExportOnQuit::parse_str)
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
                 None,
             )
         }
@@ -394,7 +415,14 @@ fn run() -> Result<()> {
                 cfg.theme,
                 resolved_layout,
                 None,
-                ReviewOptions::default(),
+                ReviewOptions {
+                    export_on_quit: cfg
+                        .export_on_quit
+                        .as_deref()
+                        .map(ExportOnQuit::parse_str)
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
                 None,
             )
         }
@@ -419,7 +447,14 @@ fn run() -> Result<()> {
                 cfg.theme,
                 resolved_layout,
                 repo.workdir().map(|p| p.to_owned()),
-                ReviewOptions::default(),
+                ReviewOptions {
+                    export_on_quit: cfg
+                        .export_on_quit
+                        .as_deref()
+                        .map(ExportOnQuit::parse_str)
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
                 None,
             )
         }
@@ -469,7 +504,14 @@ fn run() -> Result<()> {
                 cfg.theme,
                 resolved_layout,
                 workdir,
-                ReviewOptions::default(),
+                ReviewOptions {
+                    export_on_quit: cfg
+                        .export_on_quit
+                        .as_deref()
+                        .map(ExportOnQuit::parse_str)
+                        .unwrap_or_default(),
+                    ..Default::default()
+                },
                 None,
             )
         }
@@ -480,6 +522,7 @@ fn run() -> Result<()> {
             include_untracked,
             focus,
             note,
+            export_on_quit,
             layout,
             extra,
         } => run_serve(
@@ -489,6 +532,7 @@ fn run() -> Result<()> {
             include_untracked,
             focus,
             note,
+            export_on_quit,
             layout,
             extra,
         ),
@@ -530,6 +574,7 @@ fn run_serve(
     include_untracked: bool,
     focus: Option<String>,
     note: Vec<String>,
+    export_on_quit: Option<ExportOnQuit>,
     layout: Option<LayoutMode>,
     extra: Vec<String>,
 ) -> Result<()> {
@@ -558,6 +603,7 @@ fn run_serve(
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
             layout,
+            export_on_quit,
         },
     );
 
@@ -595,6 +641,7 @@ fn run_serve(
             notes,
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
+            export_on_quit: resolved.export_on_quit,
         },
         Some(server),
     )
@@ -916,6 +963,7 @@ fn run_serve(
     _include_untracked: bool,
     _focus: Option<String>,
     _note: Vec<String>,
+    _export_on_quit: Option<ExportOnQuit>,
     _layout: Option<LayoutMode>,
     _extra: Vec<String>,
 ) -> Result<()> {
@@ -930,6 +978,19 @@ fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
         "split" => Ok(LayoutMode::Split),
         other => Err(format!(
             "unknown layout '{other}' (expected unified, stack, or split)"
+        )),
+    }
+}
+
+/// clap value_parser for `--export-on-quit`. Accepts none|json|markdown|both.
+fn parse_export_on_quit_arg(s: &str) -> Result<ExportOnQuit, String> {
+    match s.trim().to_lowercase().as_str() {
+        "none" => Ok(ExportOnQuit::None),
+        "json" => Ok(ExportOnQuit::Json),
+        "markdown" | "md" => Ok(ExportOnQuit::Markdown),
+        "both" => Ok(ExportOnQuit::Both),
+        other => Err(format!(
+            "unknown export_on_quit '{other}' (expected none, json, markdown, or both)"
         )),
     }
 }
@@ -993,6 +1054,7 @@ fn open_review_from_text(
     }
     let review = parse_review(text)?;
     let select_mode = options.select_mode;
+    let export_on_quit = options.export_on_quit;
     // Interactive TUI (Phase 2). If stdout is not a terminal (piped, e.g. when
     // used as git's pager in a pipeline or scripted in CI), or if opening the
     // TUI fails for any other reason, fall back to a short inspect summary so
@@ -1019,13 +1081,8 @@ fn open_review_from_text(
         options,
         server,
     ) {
-        Ok(selections) => {
-            // In --select mode the human's per-hunk decisions go to stdout as
-            // JSON for the agent to parse. Outside --select, silently drop the
-            // (empty) selections.
-            if select_mode {
-                println!("{}", serde_json::to_string(&selections)?);
-            }
+        Ok(report) => {
+            emit_quit_report(&report, select_mode, export_on_quit)?;
             Ok(())
         }
         Err(err) => {
@@ -1034,6 +1091,33 @@ fn open_review_from_text(
             Ok(())
         }
     }
+}
+
+/// Print the quit-time report for agents / humans.
+///
+/// - `export_on_quit = none` + `--select`: legacy decisions-only JSON (compatible).
+/// - `export_on_quit = json|markdown|both`: full report (decisions + comments + notes),
+///   even when not in `--select` mode.
+fn emit_quit_report(report: &ReviewReport, select_mode: bool, export: ExportOnQuit) -> Result<()> {
+    match export {
+        ExportOnQuit::None => {
+            if select_mode {
+                // Backward-compatible: only the three decision buckets.
+                println!("{}", serde_json::to_string(&report.as_selections())?);
+            }
+        }
+        ExportOnQuit::Json => {
+            println!("{}", serde_json::to_string(report)?);
+        }
+        ExportOnQuit::Markdown => {
+            print!("{}", report.to_markdown());
+        }
+        ExportOnQuit::Both => {
+            println!("{}", serde_json::to_string(report)?);
+            print!("{}", report.to_markdown());
+        }
+    }
+    Ok(())
 }
 
 fn parse_review(text: &str) -> Result<Review> {

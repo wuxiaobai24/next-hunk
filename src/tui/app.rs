@@ -250,6 +250,111 @@ pub struct Selections {
     pub undecided: Vec<String>,
 }
 
+/// Full quit-time report for agents: decisions (same shape as [`Selections`])
+/// plus comments and notes. Extra fields use `skip_serializing_if` so a pure
+/// `--select` consumer still sees a compatible JSON object.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ReviewReport {
+    pub accepted: Vec<String>,
+    pub rejected: Vec<String>,
+    pub undecided: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub comments: Vec<ExportedComment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<ExportedNote>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
+}
+
+/// One comment in a [`ReviewReport`] (same fields as [`CommentEntry`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ExportedComment {
+    pub id: String,
+    pub file: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunk: Option<usize>,
+}
+
+/// One non-banner note in a [`ReviewReport`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct ExportedNote {
+    pub file: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunk: Option<usize>,
+}
+
+impl ReviewReport {
+    /// Decision-only view (identical to legacy `--select` / `decision` JSON).
+    pub fn as_selections(&self) -> Selections {
+        Selections {
+            accepted: self.accepted.clone(),
+            rejected: self.rejected.clone(),
+            undecided: self.undecided.clone(),
+        }
+    }
+
+    /// Markdown body suitable for pasting into a coding-agent chat.
+    pub fn to_markdown(&self) -> String {
+        let mut out = String::from("# next-hunk review report\n\n");
+        if let Some(banner) = &self.banner {
+            out.push_str("## Summary\n\n");
+            out.push_str(banner);
+            out.push_str("\n\n");
+        }
+        out.push_str("## Decisions\n\n");
+        out.push_str(&format_decision_list("Accepted", &self.accepted));
+        out.push_str(&format_decision_list("Rejected", &self.rejected));
+        out.push_str(&format_decision_list("Undecided", &self.undecided));
+        if !self.comments.is_empty() {
+            out.push_str("## Comments\n\n");
+            for c in &self.comments {
+                let loc = match (c.hunk, c.line) {
+                    (Some(h), _) => format!(":h{h}"),
+                    (_, Some(l)) => format!(":{l}"),
+                    _ => String::new(),
+                };
+                out.push_str(&format!(
+                    "- **{}{}** (`{}`): {}\n",
+                    c.file, loc, c.id, c.text
+                ));
+            }
+            out.push('\n');
+        }
+        if !self.notes.is_empty() {
+            out.push_str("## Notes\n\n");
+            for n in &self.notes {
+                let loc = match (n.hunk, n.line) {
+                    (Some(h), _) => format!(":h{h}"),
+                    (_, Some(l)) => format!(":{l}"),
+                    _ => String::new(),
+                };
+                out.push_str(&format!("- **{}{}**: {}\n", n.file, loc, n.text));
+            }
+            out.push('\n');
+        }
+        out
+    }
+}
+
+fn format_decision_list(title: &str, items: &[String]) -> String {
+    let mut s = format!("### {title}\n\n");
+    if items.is_empty() {
+        s.push_str("_(none)_\n\n");
+    } else {
+        for k in items {
+            s.push_str(&format!("- `{k}`\n"));
+        }
+        s.push('\n');
+    }
+    s
+}
+
 impl App {
     pub fn new(review: Review) -> Self {
         Self::with_highlighter(
@@ -424,6 +529,12 @@ impl App {
     /// `undecided`. Hunk keys are `"{display_path}:h{n}"` (1-based ordinal).
     /// Pure function — safe to unit-test headlessly.
     pub fn selections(&self) -> Selections {
+        self.report().as_selections()
+    }
+
+    /// Full quit-time report: decisions + session comments + agent notes.
+    /// Works without `--select` (all hunks land in `undecided` until decided).
+    pub fn report(&self) -> ReviewReport {
         let mut accepted = Vec::new();
         let mut rejected = Vec::new();
         let mut undecided = Vec::new();
@@ -442,10 +553,49 @@ impl App {
                 }
             }
         }
-        Selections {
+
+        let comments: Vec<ExportedComment> = self
+            .comments
+            .iter()
+            .map(|c| ExportedComment {
+                id: c.id.clone(),
+                file: c.file.clone(),
+                text: c.text.clone(),
+                line: c.line,
+                hunk: c.hunk,
+            })
+            .collect();
+
+        let mut banner = None;
+        let mut notes = Vec::new();
+        for n in &self.notes {
+            match &n.target {
+                NoteTarget::Banner => {
+                    // Last banner wins (later `push` / `--note` overwrites).
+                    banner = Some(n.text.clone());
+                }
+                NoteTarget::Line { path, line } => notes.push(ExportedNote {
+                    file: path.clone(),
+                    text: n.text.clone(),
+                    line: Some(*line),
+                    hunk: None,
+                }),
+                NoteTarget::Hunk { path, hunk } => notes.push(ExportedNote {
+                    file: path.clone(),
+                    text: n.text.clone(),
+                    line: None,
+                    hunk: Some(*hunk),
+                }),
+            }
+        }
+
+        ReviewReport {
             accepted,
             rejected,
             undecided,
+            comments,
+            notes,
+            banner,
         }
     }
 
@@ -2494,6 +2644,81 @@ diff --git a/b.rs b/b.rs
         let s = app.selections();
         assert!(s.accepted.is_empty());
         assert!(s.undecided.contains(&"a.rs:h1".to_string()));
+    }
+
+    // ---- export_on_quit: ReviewReport ----
+
+    #[test]
+    fn report_includes_decisions_comments_notes_and_banner() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1; // a.rs hunk 1
+        app.handle_key(char_key('a'));
+        app.comments.push(CommentEntry {
+            id: "c0".into(),
+            file: "a.rs".into(),
+            text: "looks good".into(),
+            line: None,
+            hunk: Some(1),
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Banner,
+            text: "auth refactor".into(),
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 2,
+            },
+            text: "watch the boundary".into(),
+        });
+
+        let r = app.report();
+        assert!(r.accepted.contains(&"a.rs:h1".to_string()));
+        assert_eq!(r.banner.as_deref(), Some("auth refactor"));
+        assert_eq!(r.comments.len(), 1);
+        assert_eq!(r.comments[0].id, "c0");
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes[0].line, Some(2));
+
+        // Extended JSON still carries the decision keys agents already parse.
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"accepted\""));
+        assert!(json.contains("\"comments\""));
+        assert!(json.contains("auth refactor"));
+
+        // Empty optional fields omitted when absent.
+        let bare = multi_hunk_app().report();
+        let bare_json = serde_json::to_string(&bare).unwrap();
+        assert!(!bare_json.contains("\"comments\""));
+        assert!(!bare_json.contains("\"banner\""));
+
+        let md = r.to_markdown();
+        assert!(md.contains("# next-hunk review report"));
+        assert!(md.contains("## Summary"));
+        assert!(md.contains("auth refactor"));
+        assert!(md.contains("`a.rs:h1`"));
+        assert!(md.contains("looks good"));
+        assert!(md.contains("watch the boundary"));
+    }
+
+    #[test]
+    fn report_works_without_select_mode() {
+        // Non-select sessions still export notes/comments; all hunks undecided.
+        let mut app = multi_hunk_app();
+        app.notes.push(Note {
+            target: NoteTarget::Hunk {
+                path: "b.rs".into(),
+                hunk: 1,
+            },
+            text: "key change".into(),
+        });
+        let r = app.report();
+        assert!(r.accepted.is_empty());
+        assert!(r.rejected.is_empty());
+        assert_eq!(r.undecided.len(), 4);
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes[0].hunk, Some(1));
     }
 
     // ---- mouse clicks ----
