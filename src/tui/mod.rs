@@ -24,15 +24,19 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::ir::Review;
-use crate::tui::app::{App, Selections};
+use crate::tui::app::{App, ReviewReport};
 use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
+pub mod export;
 pub mod input;
 pub mod server;
 pub mod theme;
 pub mod view;
 pub mod watch;
+
+pub use crate::config::ExportOnQuit;
+pub use export::emit_report;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -101,8 +105,9 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 /// started), the loop hot-reloads the review on filesystem changes, preserving
 /// scroll / selection as described in [`App::reload_review`].
 ///
-/// Returns the [`Selections`] (always present; empty buckets when not in
-/// `--select` mode) on clean quit. Errors only on fatal terminal I/O. If the
+/// Returns a [`ReviewReport`] (decisions + comments + banner) on clean quit.
+/// Decision buckets are empty of accepts/rejects outside `--select` mode
+/// (every hunk is undecided). Errors only on fatal terminal I/O. If the
 /// process's stdout is not a tty, crossterm will typically still enter raw
 /// mode and the caller may choose to fall back to a non-interactive summary.
 #[allow(clippy::too_many_arguments)]
@@ -117,7 +122,7 @@ pub fn run_review_tui(
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
     }
@@ -172,7 +177,7 @@ fn run_loop(
     workdir: Option<PathBuf>,
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
     // that case we keep running without live reload and surface a status note.
@@ -249,8 +254,8 @@ fn run_loop(
         if let Event::Key(key) = event {
             app.handle_key(key);
             if app.should_quit {
-                // Emit the per-hunk decisions (empty buckets outside --select).
-                return Ok(app.selections());
+                // Full report: decisions + comments + banner notes.
+                return Ok(app.review_report());
             }
             // `o` requested opening a file in the editor. Suspend the TUI
             // (leave alt screen + raw mode so the editor gets a clean terminal),

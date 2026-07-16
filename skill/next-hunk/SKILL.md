@@ -68,6 +68,58 @@ Hunk keys are `"<path>:h<n>"` (1-based ordinal within each file). **Parse stdout
 and apply only the `accepted` hunks.** Treat `undecided` as "not approved" — do
 not apply them unless the human asked you to.
 
+## Export full review report on quit
+
+When you want **decisions + comments + banner** in one agent-readable payload
+(even **without** `--select`), enable quit export:
+
+```bash
+# JSON (default agent shape) — works without --select
+next-hunk diff --export json --note banner="Please review the auth split"
+
+# Markdown — easy to paste into Claude Code / Codex
+next-hunk diff --export markdown --export-file /tmp/review.md
+
+# Both formats; or config: export_on_quit = "both"
+next-hunk diff --export both --select
+```
+
+Config (project or user `config.toml`):
+
+```toml
+export_on_quit = "json"   # none | json | markdown | both
+export_file = "review"    # optional; stdout when unset
+```
+
+### JSON shape (compatible extension of `decision` / `--select`)
+
+```json
+{
+  "accepted": ["src/auth.rs:h1"],
+  "rejected": [],
+  "undecided": ["src/util.rs:h1"],
+  "comments": [
+    {"id": "c0", "file": "src/auth.rs", "text": "…", "line": 42, "hunk": null},
+    {"id": "note-0", "file": "src/auth.rs", "text": "…", "line": null, "hunk": 1}
+  ],
+  "banner": "Please review the auth split"
+}
+```
+
+How to parse:
+
+| Field | Same as | Meaning |
+|-------|---------|---------|
+| `accepted` / `rejected` / `undecided` | `next-hunk decision` / `--select` quit | Per-hunk keys `"path:hN"` (1-based). Without `--select`, everything is `undecided`. |
+| `comments[]` | serve `comment list` (`CommentEntry`) | Session comments (`c0`, …) first; non-banner `--note` annotations follow as `note-0`, `note-1`, … |
+| `banner` | banner notes joined with `"; "` | High-level summary, or omitted/`null` when empty |
+
+**Without `--select` you still get `comments` + `banner`** — use this after a
+plain `diff` / `serve` session when you only need annotations, not a/r/u.
+
+Markdown layout: `# next-hunk review report` with `## Banner`, `## Decisions`,
+`## Comments` sections — paste the whole file into your next agent turn.
+
 ## Session workflow (persistent TUI + live agent control)
 
 For **ongoing** reviews where you expect to iterate (adjust focus, inspect
@@ -237,10 +289,12 @@ feature (on by default).
 | Situation | What to do |
 |-----------|------------|
 | Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
-| Just want them informed, you continue | no `--select` (they review, you move on) |
+| Want decisions **and** comments/banner on quit | `--export json` (or config `export_on_quit`) — works with or without `--select` |
+| Just want them informed, you continue | no `--select`, no `--export` (they review, you move on) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
 | `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
-| Iterating with the human | `serve` + session workflow (list → review → navigate → comment → decision) |
+| Iterating with the human | `serve` + session workflow (list → review → navigate → comment → decision); optional `--export` on serve quit |
+| Paste a full report into chat | `--export markdown` or `--export both` |
 
 If unsure, prefer **no `--select`** first. The human can always ask you to roll
 back; but a blocking `--select` that no one answers will hang.
@@ -270,7 +324,7 @@ Once the TUI is open, the human navigates with:
 - `W` — toggle ignore-whitespace
 - `t` — cycle theme (light → auto → dark)
 - `/` — search; `n`/`N` next/prev match
-- `q` — quit (in `--select`/`serve` mode, emits decisions JSON on quit)
+- `q` — quit (emits decisions JSON with `--select`/`serve`; full report when `export_on_quit` / `--export` is set)
 
 ## Examples
 

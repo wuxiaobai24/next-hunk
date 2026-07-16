@@ -250,6 +250,36 @@ pub struct Selections {
     pub undecided: Vec<String>,
 }
 
+/// Full review report emitted on quit when `export_on_quit` is enabled.
+///
+/// Compatible extension of [`Selections`]: the three decision arrays keep the
+/// same names/shape as `--select` quit / `next-hunk decision`. Additional
+/// fields:
+/// - `comments` — same shape as serve `comment list` ([`CommentEntry`]), plus
+///   synthetic `note-*` entries for non-banner `--note` annotations
+/// - `banner` — joined banner-note text, if any
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReviewReport {
+    pub accepted: Vec<String>,
+    pub rejected: Vec<String>,
+    pub undecided: Vec<String>,
+    #[serde(default)]
+    pub comments: Vec<CommentEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banner: Option<String>,
+}
+
+impl ReviewReport {
+    /// Project down to the legacy [`Selections`] shape (decision arrays only).
+    pub fn as_selections(&self) -> Selections {
+        Selections {
+            accepted: self.accepted.clone(),
+            rejected: self.rejected.clone(),
+            undecided: self.undecided.clone(),
+        }
+    }
+}
+
 impl App {
     pub fn new(review: Review) -> Self {
         Self::with_highlighter(
@@ -447,6 +477,12 @@ impl App {
             rejected,
             undecided,
         }
+    }
+
+    /// Build the full quit-time [`ReviewReport`]: decisions + session comments
+    /// + note-derived comments + banner. Pure — safe to unit-test headlessly.
+    pub fn review_report(&self) -> ReviewReport {
+        crate::tui::export::build_report(&self.selections(), &self.comments, &self.notes)
     }
 
     /// Handle a single key event. Pure: mutates state only, no I/O.
@@ -2494,6 +2530,43 @@ diff --git a/b.rs b/b.rs
         let s = app.selections();
         assert!(s.accepted.is_empty());
         assert!(s.undecided.contains(&"a.rs:h1".to_string()));
+    }
+
+    #[test]
+    fn review_report_includes_comments_and_banner_without_select() {
+        // Non-`--select` sessions still export comments + banner notes.
+        let mut app = multi_hunk_app();
+        app.select_mode = false;
+        app.comments.push(CommentEntry {
+            id: "c0".into(),
+            file: "a.rs".into(),
+            text: "human/session comment".into(),
+            line: Some(3),
+            hunk: None,
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Banner,
+            text: "banner summary".into(),
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 7,
+            },
+            text: "agent line note".into(),
+        });
+        let report = app.review_report();
+        assert!(report.accepted.is_empty());
+        assert!(
+            !report.undecided.is_empty(),
+            "all hunks undecided without select"
+        );
+        assert_eq!(report.banner.as_deref(), Some("banner summary"));
+        assert_eq!(report.comments.len(), 2);
+        assert_eq!(report.comments[0].id, "c0");
+        assert_eq!(report.comments[0].line, Some(3));
+        assert_eq!(report.comments[1].id, "note-0");
+        assert_eq!(report.comments[1].text, "agent line note");
     }
 
     // ---- mouse clicks ----

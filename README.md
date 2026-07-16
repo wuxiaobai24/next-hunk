@@ -38,6 +38,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
+- [x] Quit export: `export_on_quit` / `--export` JSON+Markdown review report (decisions + comments + banner)
 - [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
@@ -206,6 +207,8 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
+| `export_on_quit` | string | `"none"` | on TUI quit emit a review report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export`) |
+| `export_file` | string | — | write the quit export to this path instead of stdout (`--export-file`) |
 
 Example `~/.config/next-hunk/config.toml`:
 
@@ -214,7 +217,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`.
+CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export <none|json|markdown|both>`, `--export-file <path>`.
 
 ## Agent integration
 
@@ -246,6 +249,21 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
 (undecided) per hunk; on quit the decisions are emitted as JSON for the agent
 to parse. `--select` requires an interactive terminal and errors out otherwise.
+
+**Export full report on quit (decisions + comments + banner):**
+
+```bash
+# Works without --select — still exports comments / banner notes
+next-hunk diff --export json --note banner="Auth refactor"
+
+# Markdown for pasting into an agent chat
+next-hunk diff --export markdown --export-file review.md
+```
+
+JSON is a compatible extension of the `--select` / `decision` shape: the same
+`accepted` / `rejected` / `undecided` arrays, plus `comments` (same entries as
+serve `comment list`, plus `note-*` entries from non-banner `--note`s) and
+optional `banner`. Config: `export_on_quit = "json"` / `"markdown"` / `"both"`.
 
 ### Agent skill
 

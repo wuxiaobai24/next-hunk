@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Agent quit export
+- **`export_on_quit` / `--export`** — on TUI quit, optionally emit a structured
+  review report for agents (revdiff/tuicr-style handoff). Modes: `none` (default),
+  `json`, `markdown`, `both`. CLI: `next-hunk diff --export json` (also on
+  `serve`). Config: `export_on_quit = "json"` in `.next-hunk/config.toml`.
+- **`--export-file <path>` / `export_file`** — write the report to a file instead
+  of stdout; with `both`, writes `PATH.json` and `PATH.md`.
+- **JSON shape is a compatible extension of `--select` / `decision`**: same
+  `accepted` / `rejected` / `undecided` arrays, plus `comments` (same
+  `CommentEntry` shape as serve `comment list`, with synthetic `note-*` entries
+  for non-banner `--note` annotations) and optional `banner` (joined banner
+  notes). Works **without** `--select` so comment/banner-only sessions still
+  export. Legacy `--select` with `export_on_quit = none` still prints the
+  original three-field decisions JSON only.
+- **Markdown report** — `# next-hunk review report` with Banner / Decisions /
+  Comments sections for pasting into Claude Code / Codex.
+- **Skill updated** (`skill/next-hunk/SKILL.md`) — documents how agents parse
+  the quit report and when to use `--export` vs `--select` / `decision`.
+
 ### Added — Configuration
 - **`line_numbers` config now actually works** — setting `line_numbers = false` in
   `.next-hunk/config.toml` (or the user-level config) hides the line-number

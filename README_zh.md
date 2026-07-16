@@ -38,6 +38,7 @@
 - [x] 状态栏 diff 统计（per-file + 全局 `+ins/−del`）
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
+- [x] 退出导出：`export_on_quit` / `--export` JSON+Markdown 审查报告（decisions + comments + banner）
 - [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
@@ -170,6 +171,8 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
+| `export_on_quit` | string | `"none"` | 退出 TUI 时导出审查报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export`） |
+| `export_file` | string | — | 将退出导出写到该路径而非 stdout（`--export-file`） |
 
 示例 `~/.config/next-hunk/config.toml`:
 
@@ -178,7 +181,7 @@ highlight = true
 watch = true
 ```
 
-CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`。
+CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`、`--export <none|json|markdown|both>`、`--export-file <path>`。
 
 ## Agent 集成
 
@@ -206,6 +209,18 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 ```
 
 `--select` 模式下,人按 `a`(接受)/ `r`(拒绝)/ `u`(未决)逐 hunk 决策;退出时把决策以 JSON 输出供 agent 解析。`--select` 需要交互式终端,否则报错。
+
+**退出时导出完整报告（decisions + comments + banner）:**
+
+```bash
+# 无需 --select 也能导出 comments / banner notes
+next-hunk diff --export json --note banner="Auth 重构"
+
+# Markdown，方便粘贴进 agent 对话
+next-hunk diff --export markdown --export-file review.md
+```
+
+JSON 是 `--select` / `decision` 形状的兼容扩展：同样的 `accepted` / `rejected` / `undecided`，另加 `comments`（与 serve `comment list` 同形，非 banner 的 `--note` 变为 `note-*` 条目）和可选 `banner`。配置：`export_on_quit = "json"` / `"markdown"` / `"both"`。
 
 ### Agent skill
 

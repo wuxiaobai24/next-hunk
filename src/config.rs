@@ -13,6 +13,48 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// What to emit when the TUI quits (`export_on_quit` config / `--export` CLI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportOnQuit {
+    /// Emit nothing (unless `--select`, which still prints the legacy decisions JSON).
+    #[default]
+    None,
+    /// One JSON object (compatible extension of `Selections`).
+    Json,
+    /// Agent-friendly Markdown report.
+    Markdown,
+    /// Both formats (JSON then Markdown on stdout, or sibling files).
+    Both,
+}
+
+impl ExportOnQuit {
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "json" => ExportOnQuit::Json,
+            "markdown" | "md" => ExportOnQuit::Markdown,
+            "both" => ExportOnQuit::Both,
+            _ => ExportOnQuit::None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExportOnQuit::None => "none",
+            ExportOnQuit::Json => "json",
+            ExportOnQuit::Markdown => "markdown",
+            ExportOnQuit::Both => "both",
+        }
+    }
+
+    pub fn wants_json(self) -> bool {
+        matches!(self, ExportOnQuit::Json | ExportOnQuit::Both)
+    }
+
+    pub fn wants_markdown(self) -> bool {
+        matches!(self, ExportOnQuit::Markdown | ExportOnQuit::Both)
+    }
+}
+
 /// Layout mode for the diff stream pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutMode {
@@ -61,6 +103,11 @@ pub struct Config {
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
+    /// On TUI quit, export a structured review report:
+    /// `"none"` | `"json"` | `"markdown"` | `"both"`. Default `"none"`.
+    pub export_on_quit: Option<String>,
+    /// Optional path for the quit export (stdout when unset).
+    pub export_file: Option<String>,
 }
 
 impl Config {
@@ -90,6 +137,12 @@ impl Config {
         }
         if other.wrap.is_some() {
             self.wrap = other.wrap;
+        }
+        if other.export_on_quit.is_some() {
+            self.export_on_quit = other.export_on_quit;
+        }
+        if other.export_file.is_some() {
+            self.export_file = other.export_file;
         }
         self
     }
@@ -133,6 +186,10 @@ pub struct ResolvedConfig {
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
+    /// Emit a structured review report on TUI quit.
+    pub export_on_quit: ExportOnQuit,
+    /// Optional path for the quit export (`None` = stdout).
+    pub export_file: Option<PathBuf>,
 }
 
 impl Default for ResolvedConfig {
@@ -147,6 +204,8 @@ impl Default for ResolvedConfig {
             theme: None,
             layout: LayoutMode::Unified,
             wrap: false,
+            export_on_quit: ExportOnQuit::None,
+            export_file: None,
         }
     }
 }
@@ -156,6 +215,7 @@ impl Default for ResolvedConfig {
 /// Most options are "default unless overridden", so a simple `Option<bool>`
 /// (CLI sets `Some(false)` for `--no-flag`, `Some(true)` for `--flag`) composes
 /// cleanly with the config layer.
+#[derive(Debug, Clone, Default)]
 pub struct CliFlags {
     /// `--staged` / no flag.
     pub staged: Option<bool>,
@@ -167,6 +227,10 @@ pub struct CliFlags {
     pub include_untracked: Option<bool>,
     /// `--layout <mode>` → `Some(LayoutMode)`; absent → `None` (use config/default).
     pub layout: Option<LayoutMode>,
+    /// `--export <mode>` → `Some(ExportOnQuit)`; absent → `None`.
+    pub export_on_quit: Option<ExportOnQuit>,
+    /// `--export-file <path>` → `Some(PathBuf)`; absent → `None`.
+    pub export_file: Option<PathBuf>,
 }
 
 impl ResolvedConfig {
@@ -190,6 +254,14 @@ impl ResolvedConfig {
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(d.layout),
             wrap: cfg.wrap.unwrap_or(d.wrap),
+            export_on_quit: cli
+                .export_on_quit
+                .or_else(|| cfg.export_on_quit.as_deref().map(ExportOnQuit::parse_str))
+                .unwrap_or(d.export_on_quit),
+            export_file: cli
+                .export_file
+                .clone()
+                .or_else(|| cfg.export_file.as_ref().map(PathBuf::from)),
         }
     }
 }
@@ -331,6 +403,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged); // CLI wins
@@ -347,6 +421,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged);
@@ -367,6 +443,8 @@ mod tests {
             highlight: Some(false), // --no-highlight
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -384,6 +462,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
@@ -398,6 +478,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
@@ -415,6 +497,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
@@ -429,6 +513,8 @@ mod tests {
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());
@@ -536,6 +622,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Unified);
@@ -552,6 +640,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Stack);
@@ -585,6 +675,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
@@ -600,6 +692,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: Some(LayoutMode::Split),
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
@@ -614,6 +708,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap, "wrap should default to false");
@@ -630,6 +726,8 @@ theme = \"dark\"
             highlight: None,
             include_untracked: None,
             layout: None,
+            export_on_quit: None,
+            export_file: None,
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.wrap);
@@ -640,14 +738,61 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("wrap = false\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.wrap, Some(false));
-        let cli = CliFlags {
+        let cli = empty_cli();
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.wrap);
+    }
+
+    fn empty_cli() -> CliFlags {
+        CliFlags {
             staged: None,
             watch: None,
             highlight: None,
             include_untracked: None,
             layout: None,
-        };
+            export_on_quit: None,
+            export_file: None,
+        }
+    }
+
+    #[test]
+    fn export_on_quit_defaults_to_none() {
+        let r = ResolvedConfig::resolve(&Config::default(), &empty_cli());
+        assert_eq!(r.export_on_quit, ExportOnQuit::None);
+        assert!(r.export_file.is_none());
+    }
+
+    #[test]
+    fn export_on_quit_from_config() {
+        let (dir, _path) =
+            write_tmp_config("export_on_quit = \"json\"\nexport_file = \"review.json\"\n");
+        let cfg = Config::load_project(&dir.0);
+        assert_eq!(cfg.export_on_quit.as_deref(), Some("json"));
+        assert_eq!(cfg.export_file.as_deref(), Some("review.json"));
+        let r = ResolvedConfig::resolve(&cfg, &empty_cli());
+        assert_eq!(r.export_on_quit, ExportOnQuit::Json);
+        assert_eq!(r.export_file.as_deref(), Some(Path::new("review.json")));
+    }
+
+    #[test]
+    fn export_on_quit_cli_overrides_config() {
+        let (dir, _path) = write_tmp_config("export_on_quit = \"json\"\n");
+        let cfg = Config::load_project(&dir.0);
+        let mut cli = empty_cli();
+        cli.export_on_quit = Some(ExportOnQuit::Markdown);
+        cli.export_file = Some(PathBuf::from("/tmp/out.md"));
         let r = ResolvedConfig::resolve(&cfg, &cli);
-        assert!(!r.wrap);
+        assert_eq!(r.export_on_quit, ExportOnQuit::Markdown);
+        assert_eq!(r.export_file.as_deref(), Some(Path::new("/tmp/out.md")));
+    }
+
+    #[test]
+    fn export_on_quit_parse_str() {
+        assert_eq!(ExportOnQuit::parse_str("none"), ExportOnQuit::None);
+        assert_eq!(ExportOnQuit::parse_str("json"), ExportOnQuit::Json);
+        assert_eq!(ExportOnQuit::parse_str("markdown"), ExportOnQuit::Markdown);
+        assert_eq!(ExportOnQuit::parse_str("md"), ExportOnQuit::Markdown);
+        assert_eq!(ExportOnQuit::parse_str("both"), ExportOnQuit::Both);
+        assert_eq!(ExportOnQuit::as_str(ExportOnQuit::Both), "both");
     }
 }

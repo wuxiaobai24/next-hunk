@@ -6,10 +6,10 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, LayoutMode, ResolvedConfig};
+use next_hunk::config::{CliFlags, Config, ExportOnQuit, LayoutMode, ResolvedConfig};
 use next_hunk::ir::{parse_unified_diff, Review};
 use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
-use next_hunk::tui::{run_review_tui, ReviewOptions};
+use next_hunk::tui::{emit_report, run_review_tui, ReviewOptions};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -58,6 +58,16 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// On quit, export a structured review report for agents:
+        /// `none` | `json` | `markdown` | `both`. Overrides `export_on_quit`
+        /// from config.toml. JSON is a compatible extension of `--select` /
+        /// `decision` (adds `comments` + `banner`). Works without `--select`.
+        #[arg(long, value_name = "MODE", value_parser = parse_export_arg)]
+        export: Option<ExportOnQuit>,
+        /// Write the quit export to this path instead of stdout. With
+        /// `--export both`, writes `PATH.json` and `PATH.md`.
+        #[arg(long, value_name = "PATH")]
+        export_file: Option<PathBuf>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -136,6 +146,12 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// On quit, export a structured review report (`none`/`json`/`markdown`/`both`).
+        #[arg(long, value_name = "MODE", value_parser = parse_export_arg)]
+        export: Option<ExportOnQuit>,
+        /// Write the quit export to this path instead of stdout.
+        #[arg(long, value_name = "PATH")]
+        export_file: Option<PathBuf>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -273,6 +289,8 @@ fn run() -> Result<()> {
         note: Vec::new(),
         select: false,
         layout: None,
+        export: None,
+        export_file: None,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -284,6 +302,8 @@ fn run() -> Result<()> {
             note,
             select,
             layout,
+            export,
+            export_file,
             extra,
         } => {
             // Parse the agent-bridge specs and check the --select tty
@@ -318,6 +338,8 @@ fn run() -> Result<()> {
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
                     layout,
+                    export_on_quit: export,
+                    export_file,
                 },
             );
 
@@ -353,6 +375,8 @@ fn run() -> Result<()> {
                     select_mode: select,
                 },
                 None,
+                resolved.export_on_quit,
+                resolved.export_file,
             )
         }
         Commands::Show { rev, layout } => {
@@ -376,6 +400,8 @@ fn run() -> Result<()> {
                 Some(repo),
                 ReviewOptions::default(),
                 None,
+                ExportOnQuit::parse_str(cfg.export_on_quit.as_deref().unwrap_or("none")),
+                cfg.export_file.as_ref().map(PathBuf::from),
             )
         }
         Commands::Patch { path, layout } => {
@@ -396,6 +422,8 @@ fn run() -> Result<()> {
                 None,
                 ReviewOptions::default(),
                 None,
+                ExportOnQuit::parse_str(cfg.export_on_quit.as_deref().unwrap_or("none")),
+                cfg.export_file.as_ref().map(PathBuf::from),
             )
         }
         Commands::Filediff { old, new, layout } => {
@@ -421,6 +449,8 @@ fn run() -> Result<()> {
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
+                ExportOnQuit::parse_str(cfg.export_on_quit.as_deref().unwrap_or("none")),
+                cfg.export_file.as_ref().map(PathBuf::from),
             )
         }
         Commands::Inspect { path, staged } => {
@@ -471,6 +501,8 @@ fn run() -> Result<()> {
                 workdir,
                 ReviewOptions::default(),
                 None,
+                ExportOnQuit::parse_str(cfg.export_on_quit.as_deref().unwrap_or("none")),
+                cfg.export_file.as_ref().map(PathBuf::from),
             )
         }
         Commands::Serve {
@@ -481,6 +513,8 @@ fn run() -> Result<()> {
             focus,
             note,
             layout,
+            export,
+            export_file,
             extra,
         } => run_serve(
             staged,
@@ -490,6 +524,8 @@ fn run() -> Result<()> {
             focus,
             note,
             layout,
+            export,
+            export_file,
             extra,
         ),
         Commands::Push { focus, note } => run_push(focus, note),
@@ -531,6 +567,8 @@ fn run_serve(
     focus: Option<String>,
     note: Vec<String>,
     layout: Option<LayoutMode>,
+    export: Option<ExportOnQuit>,
+    export_file: Option<PathBuf>,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
@@ -558,6 +596,8 @@ fn run_serve(
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
             layout,
+            export_on_quit: export,
+            export_file,
         },
     );
 
@@ -597,6 +637,8 @@ fn run_serve(
             select_mode: true,
         },
         Some(server),
+        resolved.export_on_quit,
+        resolved.export_file,
     )
 }
 
@@ -917,6 +959,8 @@ fn run_serve(
     _focus: Option<String>,
     _note: Vec<String>,
     _layout: Option<LayoutMode>,
+    _export: Option<ExportOnQuit>,
+    _export_file: Option<PathBuf>,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
@@ -930,6 +974,19 @@ fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
         "split" => Ok(LayoutMode::Split),
         other => Err(format!(
             "unknown layout '{other}' (expected unified, stack, or split)"
+        )),
+    }
+}
+
+/// clap value_parser for `--export`. Accepts none|json|markdown|md|both.
+fn parse_export_arg(s: &str) -> Result<ExportOnQuit, String> {
+    match s.trim().to_lowercase().as_str() {
+        "none" => Ok(ExportOnQuit::None),
+        "json" => Ok(ExportOnQuit::Json),
+        "markdown" | "md" => Ok(ExportOnQuit::Markdown),
+        "both" => Ok(ExportOnQuit::Both),
+        other => Err(format!(
+            "unknown export mode '{other}' (expected none, json, markdown, or both)"
         )),
     }
 }
@@ -986,6 +1043,8 @@ fn open_review_from_text(
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<next_hunk::tui::ServerArg>,
+    export_on_quit: ExportOnQuit,
+    export_file: Option<PathBuf>,
 ) -> Result<()> {
     if text.trim().is_empty() {
         eprintln!("(empty diff)");
@@ -1019,13 +1078,10 @@ fn open_review_from_text(
         options,
         server,
     ) {
-        Ok(selections) => {
-            // In --select mode the human's per-hunk decisions go to stdout as
-            // JSON for the agent to parse. Outside --select, silently drop the
-            // (empty) selections.
-            if select_mode {
-                println!("{}", serde_json::to_string(&selections)?);
-            }
+        Ok(report) => {
+            // Emit structured export / legacy --select JSON after the TUI
+            // restores the normal terminal (so stdout is clean for agents).
+            emit_report(&report, export_on_quit, select_mode, export_file.as_deref())?;
             Ok(())
         }
         Err(err) => {
