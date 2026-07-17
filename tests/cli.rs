@@ -1198,6 +1198,130 @@ fn mcp_initialize_and_tools_list_over_stdio() {
     assert!(status.success(), "mcp should exit 0 on EOF");
 }
 
+#[test]
+fn overlay_help_lists_subcommand() {
+    let out = Command::new(bin())
+        .args(["overlay", "--help"])
+        .output()
+        .expect("run next-hunk overlay --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("tmux") || stdout.contains("TMUX"),
+        "help should mention tmux: {stdout}"
+    );
+    assert!(
+        stdout.contains("export") || stdout.contains("JSON") || stdout.contains("json"),
+        "help should mention export/json: {stdout}"
+    );
+}
+
+#[test]
+fn overlay_without_multiplexer_prints_degradation() {
+    // WXB-24: headless + no $TMUX/$ZELLIJ → clear fallback (serve / select),
+    // non-zero exit. Unset mux env so CI/dev shells that inherit TMUX still
+    // exercise the degradation path.
+    let out = Command::new(bin())
+        .args(["overlay", "--all", "--include-untracked"])
+        .env_remove("TMUX")
+        .env_remove("ZELLIJ")
+        .env_remove("ZELLIJ_SESSION_NAME")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run next-hunk overlay");
+    assert!(
+        !out.status.success(),
+        "overlay without mux should fail (got success)"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        combined.contains("no terminal multiplexer")
+            || combined.contains("TMUX")
+            || combined.contains("tmux"),
+        "should explain missing mux: {combined}"
+    );
+    assert!(
+        combined.contains("serve"),
+        "degradation should mention serve fallback: {combined}"
+    );
+    assert!(
+        combined.contains("--select") || combined.contains("select"),
+        "degradation should mention one-shot select: {combined}"
+    );
+}
+
+#[test]
+fn export_path_env_writes_full_json_without_stdout() {
+    // NEXT_HUNK_EXPORT_PATH (used by overlay) captures the full report and
+    // suppresses duplicate stdout emission.
+    let patch = fixture("tiny_simple.patch");
+    let dir = tempfile_dir("next-hunk-export-path");
+    let export_file = dir.join("report.json");
+    let mut child = Command::new(bin())
+        .args([
+            "patch",
+            "-",
+            "--export-on-quit",
+            "json",
+            "--note",
+            "banner=overlay-path",
+        ])
+        .env("NEXT_HUNK_EXPORT_PATH", &export_file)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "export path non-tty should exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.trim().is_empty() || !stdout.contains("schema_version"),
+        "when EXPORT_PATH is set, stdout should not carry the report: {stdout}"
+    );
+    let body =
+        std::fs::read_to_string(&export_file).unwrap_or_else(|e| panic!("read export file: {e}"));
+    let v: serde_json::Value =
+        serde_json::from_str(body.trim()).expect("export file should be JSON");
+    assert_eq!(
+        v.get("schema_version").and_then(|n| n.as_u64()),
+        Some(1),
+        "full export must carry schema_version: {v}"
+    );
+    assert_eq!(
+        v.get("banner").and_then(|b| b.as_str()),
+        Some("overlay-path")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+fn tempfile_dir(prefix: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "{prefix}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir temp");
+    dir
+}
+
 #[cfg(feature = "mcp")]
 #[test]
 fn mcp_help_lists_subcommand() {

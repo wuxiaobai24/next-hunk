@@ -40,6 +40,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
 - [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
+- [x] Overlay mode: `next-hunk overlay` (tmux popup / zellij float → export JSON on agent stdout)
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] Working-set review: `diff --all` / `scope = "working-set"` (staged + unstaged; rail `S`/`M`/`?`)
@@ -471,6 +472,28 @@ Tools mirror the session CLI (`list_sessions`, `review_structure`, `navigate`,
 `add_comment`, `get_decision`, `push_focus_note`, `reload`). Feature `mcp` is
 on by default (no extra crates); config snippets for Claude Code and generic
 hosts are in **[`docs/MCP.md`](./docs/MCP.md)**.
+
+### Overlay (in-session one-shot review)
+
+When the agent already runs **inside tmux or zellij**, open a floating review
+without a separate `serve` pane:
+
+```bash
+# Blocks until you quit the popup; prints full export JSON on the caller's stdout:
+next-hunk overlay --all --include-untracked \
+  --focus src/auth.rs:42 --note banner="please review token expiry"
+```
+
+| Host | Behavior |
+|------|----------|
+| `$TMUX` set | `tmux display-popup` (blocks; size via `NEXT_HUNK_POPUP_WIDTH`/`HEIGHT`, default 90%) |
+| `$ZELLIJ` set | floating pane + wait for quit |
+| No mux, but TTY | one-shot `diff --select --export-on-quit json` in the current terminal |
+| No mux, no TTY | clear error: use adjacent `serve`, or re-run inside tmux/zellij |
+
+Stdout contract matches `--export-on-quit json` / `last-export` (`schema_version`,
+decisions, comments, notes, banner). Internally uses `NEXT_HUNK_EXPORT_PATH` so
+popup TTY stdout does not need to be the agent's pipe.
 
 ## Testing & benchmarks
 
