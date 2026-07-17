@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Agent-bridge path validation (WXB-33)
+- **`navigate` / `comment add` reject unknown paths** — both commands now
+  validate the target file against the live review's file set and return
+  `error: '<path>' is not in the current review (files: …)` instead of a
+  silent `ok`. Stops agent scripts from treating a bad path as confirmation
+  that the human TUI moved or stored a comment.
+
 ### Added — Jujutsu (jj) first-class support
 - **VCS auto-detect** — walk for `.jj` / `.git`; `vcs = "auto" | "git" | "jj"`
   in config and `--vcs` on `diff` / `show` / `serve` / `inspect` / `filediff`.
