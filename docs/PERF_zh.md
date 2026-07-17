@@ -123,6 +123,17 @@ seed=S
 | `parse_ms` | medium | — | ~0.24 ms | 观测 |
 | `parse_ms` | small | — | ~8.2 µs | 观测 |
 
+#### 增量 reload（WXB-26）
+
+watch / `reload` 按文件 section 指纹复用未变 `FileDiff`，仅重 parse 脏文件；失败回退全量。
+
+| 指标 | Fixture | 场景 | 指引 | 命令 |
+|------|---------|------|------|------|
+| `reload_full_ms` | huge | 全量重 parse | 同 `parse_ms` | `reload/huge_full_reparse` |
+| `reload_inc_1file_ms` | huge | 仅 1 文件脏 | **&lt; 全量 50%**（N≫1） | `reload/huge_incremental_1file` |
+
+`cargo bench --bench parse`（`reload` 组）。实测（x86_64 Linux release，huge 200 文件）：全量重 parse **~1.37 ms**；仅 1 文件脏的增量 **~0.75 ms**（约 1.8× 更快）。相同输入的 reload 直接复用旧 IR。RSS 复用旧 arena 并追加脏 section。
+
 huge fixture 的 IR arena ~1 MB，远低于 150 MB RSS 门禁；带仪表的 RSS 尚待 `bench` 入口。
 
 ### 与 `delta` 的粗对比（设计声明 + bench）

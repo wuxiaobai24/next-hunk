@@ -264,6 +264,11 @@ pub struct App {
     pub comment_draft: String,
     /// Resolved placement for the in-progress comment draft.
     pub comment_placement: Option<CommentPlacement>,
+
+    /// Raw patch text from the last successful load/reload. Enables incremental
+    /// IR rebuild via per-section byte compare (WXB-26). Empty until the first
+    /// successful reload with text.
+    pub(crate) last_diff_text: Option<String>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -645,6 +650,7 @@ impl App {
             visual: None,
             comment_draft: String::new(),
             comment_placement: None,
+            last_diff_text: None,
         }
     }
 
@@ -2140,18 +2146,54 @@ impl App {
     }
 
     /// Hot-reload with optional per-file origin marks (`S`/`M`/`?`).
+    ///
+    /// Prefers an **incremental** IR rebuild when prior patch sections match
+    /// byte-for-byte (WXB-26). Falls back to a full
+    /// [`crate::ir::parse_unified_diff`] when nothing can be reused or when
+    /// incremental parse fails — the previous review is kept only on total
+    /// parse failure (same as before).
     pub fn reload_review_with_origins(&mut self, text: &str, origins: &[crate::ir::FileOrigin]) {
         if text.trim().is_empty() {
             self.status = "reloaded (empty diff)".into();
             return;
         }
-        let mut new_review = match crate::ir::parse_unified_diff(text) {
+
+        // Move base_review into the incremental path so the text arena can be
+        // reused without re-interning unchanged files. `self.review` still holds
+        // the live view for decision/fold remap below.
+        let previous_text = self.last_diff_text.take();
+        let previous = if previous_text.is_some() {
+            Some(std::mem::take(&mut self.base_review))
+        } else {
+            None
+        };
+
+        let parsed = match crate::ir::parse_unified_diff_incremental(
+            previous,
+            previous_text.as_deref(),
+            text,
+        ) {
             Ok(r) => r,
             Err(e) => {
-                self.status = format!("reload failed: {e}");
-                return;
+                if let Some(prev) = e.previous {
+                    self.base_review = prev;
+                } else if self.base_review.is_empty() && !self.review.is_empty() {
+                    self.base_review = self.review.clone();
+                }
+                self.last_diff_text = previous_text;
+                match crate::ir::parse_unified_diff_full(text) {
+                    Ok(r) => r,
+                    Err(err) => {
+                        self.status = format!("reload failed: {err}");
+                        return;
+                    }
+                }
             }
         };
+
+        let mut new_review = parsed.review;
+        let stats = parsed.stats;
+        self.last_diff_text = Some(parsed.source_text);
         new_review.apply_file_origins(origins);
 
         // Build path→index maps for the new review so we can re-map indices.
@@ -2237,7 +2279,17 @@ impl App {
             }
         }
 
-        self.status = format!("reloaded ({} files)", self.review.file_count());
+        self.status = match stats.mode {
+            crate::ir::ReloadMode::Incremental => format!(
+                "reloaded ({} files, {} reused, {} reparsed)",
+                self.review.file_count(),
+                stats.reused_files,
+                stats.reparsed_files
+            ),
+            crate::ir::ReloadMode::Full => {
+                format!("reloaded ({} files)", self.review.file_count())
+            }
+        };
     }
 
     /// Run the search without jumping/overwriting a caller-set status prefix.
@@ -3439,6 +3491,87 @@ diff --git a/b.rs b/b.rs
         let b_start = ViewportQuery::file_start_row(&app.review, 1);
         assert_eq!(b_start, 4, "b.rs should start at row 4");
         assert_eq!(app.scroll_y, 4, "focus should be re-applied after reload");
+    }
+
+    /// Second reload with only one file changed should report incremental reuse
+    /// and keep decisions/notes on the untouched file (WXB-26).
+    #[test]
+    fn reload_incremental_reuses_unchanged_file_and_keeps_state() {
+        // Pair where only a.rs changes; b.rs section is byte-identical.
+        let before = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-foo
++bar
+";
+        let after_only_a = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++changed
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-foo
++bar
+";
+        let review = parse_unified_diff(before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 1;
+        app.decisions.insert(
+            HunkId {
+                file_idx: 1,
+                hunk_idx: 0,
+            },
+            Decision::Reject,
+        );
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "b.rs".into(),
+                line: 1,
+            },
+            text: "keep me".into(),
+        });
+
+        // First reload seeds last_diff_text (full path — no prior source).
+        app.reload_review(before);
+        assert!(
+            app.status.contains("reloaded"),
+            "first reload seeds source text: {}",
+            app.status
+        );
+        assert!(app.last_diff_text.is_some());
+        // Decisions remapped after first reload.
+        assert!(app.selections().rejected.contains(&"b.rs:h1".to_string()));
+
+        // Second reload: only a.rs body changed; b.rs section identical.
+        app.reload_review(after_only_a);
+        assert!(
+            app.status.contains("reused"),
+            "expected incremental status, got: {}",
+            app.status
+        );
+        assert!(
+            app.status.contains("reparsed"),
+            "expected reparsed count in status: {}",
+            app.status
+        );
+        // b.rs decision + note survive.
+        let s = app.selections();
+        assert!(s.rejected.contains(&"b.rs:h1".to_string()));
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.notes[0].text, "keep me");
     }
 
     // ---- --focus: apply_focus ----

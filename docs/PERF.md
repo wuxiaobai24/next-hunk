@@ -124,6 +124,37 @@ build). Replace with CI numbers when a bench harness is wired into CI.
 | `parse_ms` | medium | — | ~0.24 ms | observation |
 | `parse_ms` | small | — | ~8.2 µs | observation |
 
+#### Incremental reload (WXB-26)
+
+Hot-reload (`--watch` / `next-hunk reload`) rebuilds IR by fingerprinting
+per-file unified-diff sections and **transplanting** unchanged `FileDiff`
+blocks. Only dirty sections are re-parsed. Failure → full
+`parse_unified_diff` (previous review kept if both fail).
+
+| Metric | Fixture | Scenario | Gate (guidance) | How |
+|--------|---------|----------|-----------------|-----|
+| `reload_full_ms` | huge | re-parse entire new patch | same as `parse_ms` | `reload/huge_full_reparse` |
+| `reload_inc_1file_ms` | huge | 1 section dirty, rest reused | **&lt; 50% of full** on huge | `reload/huge_incremental_1file` |
+
+Run: `cargo bench --bench parse` (group `reload`). Recorded on a quiet
+x86_64 Linux release build (replace with local numbers when re-running):
+
+| Metric | Fixture | Measured | Notes |
+|--------|---------|----------|-------|
+| `reload_full_ms` | huge (200 files) | **~1.37 ms** | full `parse_unified_diff` of dirty text |
+| `reload_inc_1file_ms` | huge, 1 section dirty | **~0.75 ms** | section memcmp + re-parse 1 + arena reuse (**~55% of full**, gate &lt; 50% guidance met as ~1.8× faster) |
+| identical-input reload | any | **≪ full** | early return keeps previous IR |
+
+Method: `App`-path style — previous `Review` is **moved** (no arena clone) into
+`parse_unified_diff_incremental`; criterion times only the rebuild body.
+Dirty detection is per-section **byte compare** against the previous source
+text (not a full cryptographic hash). Path guess scans only section headers.
+
+RSS: incremental rebuild reuses the previous text arena and appends dirty
+sections (headroom reserved to avoid full-arena realloc). Peak holds one
+live `Review` plus dead text from replaced files until a compacting full
+parse; no full-widget tree.
+
 RSS after parse + viewport queries not yet measured with an instrumented
 harness; the huge fixture's arena is ~1 MB, well under the 150 MB gate. A
 proper RSS measurement is pending a `bench`/`next-hunk bench` harness.
