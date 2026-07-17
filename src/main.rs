@@ -381,6 +381,15 @@ enum Commands {
         #[arg(long)]
         hash: Option<String>,
     },
+    /// Run an MCP (Model Context Protocol) stdio server for the serve control plane.
+    ///
+    /// Maps live session commands to MCP tools (`list_sessions`,
+    /// `review_structure`, `navigate`, `add_comment`, `get_decision`,
+    /// `push_focus_note`, `reload`) over newline-delimited JSON-RPC. Still
+    /// talks to a human-owned `next-hunk serve` via Unix socket — no HTTP
+    /// broker. Requires `--features mcp` (and Unix). Never write non-protocol
+    /// traffic to stdout when this is running (hosts own the pipe).
+    Mcp,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -901,6 +910,7 @@ fn run() -> Result<()> {
         Commands::Navigate { target, hash } => run_navigate(target, hash),
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
+        Commands::Mcp => run_mcp(),
     }
 }
 
@@ -1783,6 +1793,20 @@ fn run_comment(_action: CommentAction) -> Result<()> {
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_reload(_hash: Option<String>) -> Result<()> {
     bail!("`reload` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+/// `next-hunk mcp`: stdio MCP server for the serve session control plane.
+#[cfg(all(feature = "mcp", feature = "serve", unix))]
+fn run_mcp() -> Result<()> {
+    next_hunk::mcp::run_stdio()
+}
+
+#[cfg(not(all(feature = "mcp", feature = "serve", unix)))]
+fn run_mcp() -> Result<()> {
+    bail!(
+        "`mcp` requires the `mcp` feature on a Unix OS \
+         (rebuild with --features mcp; mcp implies serve)"
+    )
 }
 
 #[allow(clippy::too_many_arguments)]

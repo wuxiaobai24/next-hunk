@@ -454,6 +454,71 @@ subcommands report that they're unavailable. The `decision` output matches the
 `--select` quit shape (three buckets only), so an agent parses both identically.
 Full post-quit reports (with comments) use `export_on_quit` / `last-export`.
 
+### MCP control plane (optional)
+
+Hosts that prefer **MCP tools** over multi-step shell can expose the same serve
+session protocol without an HTTP broker:
+
+```bash
+# Build with the mcp feature (implies serve; not on by default):
+cargo install next-hunk --features mcp
+# or: cargo build --release --features mcp
+
+# Human still owns the TUI:
+next-hunk serve --all --include-untracked
+
+# MCP host spawns (stdio JSON-RPC; do not write non-protocol data to stdout):
+next-hunk mcp
+```
+
+**Tools** (same semantics as the CLI session commands):
+
+| Tool | CLI equivalent |
+|------|----------------|
+| `list_sessions` | `next-hunk list` |
+| `review_structure` | `next-hunk review` |
+| `navigate` | `next-hunk navigate <target>` |
+| `add_comment` | `next-hunk comment add …` |
+| `get_decision` | `next-hunk decision` |
+| `push_focus_note` | `next-hunk push --focus … --note …` |
+| `reload` | `next-hunk reload` |
+
+Tool failures return structured JSON (`isError: true` + `{"error":"…"}`) so a
+non-TTY host can complete **point → annotate → read decision** without parsing
+shell stderr.
+
+**Claude Code** — add to `.mcp.json` / user MCP settings (adjust the binary path):
+
+```json
+{
+  "mcpServers": {
+    "next-hunk": {
+      "command": "next-hunk",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**Generic MCP host** (stdio transport):
+
+```json
+{
+  "mcpServers": {
+    "next-hunk": {
+      "command": "/path/to/next-hunk",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Install note: `cargo install next-hunk` (default features) does **not** include
+`mcp`. Use `--features mcp`, or a dist binary built with `--all-features`.
+Skill + CLI remain the primary path; MCP is an alternate entry, not a
+replacement.
+
 ## Testing & benchmarks
 
 ```bash

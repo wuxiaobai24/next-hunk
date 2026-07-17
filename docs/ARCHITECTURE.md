@@ -51,7 +51,7 @@ Tech choices optimize for **correctness, maintainability, and hot-path performan
 | Full git client (stage / commit / rebase suite) | That is lazygit / gitui territory |
 | Syntax highlight on by default for whole files | Kills scroll budget (async, cancellable, viewport-only is fine) |
 | jj / Sapling day-one parity | Adapter later |
-| Session daemon / MCP as core | Complexity explosion |
+| Full session-broker monorepo / remote MCP ops plane as core | Complexity explosion (lightweight stdio MCP is optional: `next-hunk mcp`) |
 | Binary size as a success criterion | **Not a requirement**; release size is observational only |
 
 ---

@@ -19,7 +19,7 @@
 | 文件折叠 | 完整 HTTP/WS session-broker monorepo |
 | 至少一种 split **或** stack 布局（auto 可选） | STML 富文本 note、可嵌入组件库 |
 | 配置真接线（`line_numbers` 等，消灭 silent no-op） | Homebrew / 社区运营对标 |
-| 轻量 live session CLI：list / review / navigate / comment / reload | MCP 全套运维面 |
+| 轻量 live session CLI：list / review / navigate / comment / reload | 完整 session-broker monorepo / 远程多租户 |
 | skill 与 hunk-review **工作流同构** | 像素级 UI 抄袭 |
 | 保留并强化 `--select` + `decision` | Windows 完整 serve（可推 0.9） |
 
@@ -136,7 +136,8 @@
 ## 暂缓（其余）
 
 - Sapling 适配  
-- 完整 session-broker / MCP  
+- 完整 session-broker / 远程多租户 daemon  
+- ~~轻量 MCP 会话控制面（stdio tools ↔ serve socket）~~ → done (WXB-23: `next-hunk mcp`)  
 - STML / 富文本 note  
 - OpenTUI 式可嵌入组件  
 - parse fuzz、增量 IR 编辑（非全量 reload）  

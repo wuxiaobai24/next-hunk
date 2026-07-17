@@ -1132,3 +1132,137 @@ impl Drop for DirGuard {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+/// MCP stdio: initialize + tools/list without a live serve (no TTY required).
+#[cfg(all(unix, feature = "mcp"))]
+#[test]
+fn mcp_stdio_initialize_and_list_tools() {
+    use std::io::Write;
+
+    let mut child = Command::new(bin())
+        .args(["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn next-hunk mcp");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2024-11-05","capabilities":{{}},"clientInfo":{{"name":"test","version":"0"}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","method":"notifications/initialized"}}"#
+        )
+        .unwrap();
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}}"#
+        )
+        .unwrap();
+        // Closing stdin ends the MCP server loop.
+    }
+
+    let out = child.wait_with_output().expect("wait mcp");
+    assert!(
+        out.status.success(),
+        "mcp exit non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut saw_init = false;
+    let mut saw_tools = false;
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line)
+            .unwrap_or_else(|e| panic!("invalid JSON-RPC line `{line}`: {e}"));
+        match v.get("id").and_then(|i| i.as_u64()) {
+            Some(1) => {
+                assert_eq!(v["result"]["serverInfo"]["name"], "next-hunk");
+                assert!(v["result"]["capabilities"]["tools"].is_object());
+                saw_init = true;
+            }
+            Some(2) => {
+                let tools = v["result"]["tools"].as_array().expect("tools array");
+                assert_eq!(tools.len(), 7);
+                let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
+                for expected in [
+                    "list_sessions",
+                    "review_structure",
+                    "navigate",
+                    "add_comment",
+                    "get_decision",
+                    "push_focus_note",
+                    "reload",
+                ] {
+                    assert!(names.contains(&expected), "missing tool {expected}");
+                }
+                saw_tools = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_init, "missing initialize response in:\n{stdout}");
+    assert!(saw_tools, "missing tools/list response in:\n{stdout}");
+}
+
+/// MCP tool errors are structured (`isError`) when no serve is live.
+#[cfg(all(unix, feature = "mcp"))]
+#[test]
+fn mcp_get_decision_without_serve_is_tool_error() {
+    use std::io::Write;
+
+    let Some(dir) = make_git_repo_with_change() else {
+        return;
+    };
+    let _guard = DirGuard(dir.clone());
+
+    let mut child = Command::new(bin())
+        .args(["mcp"])
+        .current_dir(&dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn next-hunk mcp");
+
+    {
+        let mut stdin = child.stdin.take().expect("stdin");
+        writeln!(
+            stdin,
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"get_decision","arguments":{{}}}}}}"#
+        )
+        .unwrap();
+    }
+
+    let out = child.wait_with_output().expect("wait mcp");
+    assert!(
+        out.status.success(),
+        "mcp should exit 0 even on tool errors: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let mut found = false;
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line).expect("json");
+        if v.get("id").and_then(|i| i.as_u64()) == Some(1) {
+            assert_eq!(v["result"]["isError"], true);
+            let text = v["result"]["content"][0]["text"].as_str().unwrap_or("");
+            assert!(
+                text.contains("error") || text.contains("server") || text.contains("no next-hunk"),
+                "unexpected tool error body: {text}"
+            );
+            found = true;
+        }
+    }
+    assert!(found, "missing tools/call response in:\n{stdout}");
+}

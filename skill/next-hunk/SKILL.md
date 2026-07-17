@@ -483,6 +483,29 @@ Agent:  next-hunk last-export                   # if stdout was missed
 `comment`, `reload`, `push`, `decision`) require a Unix OS and the `serve`
 feature (on by default). Auto-forward on `diff` uses the same socket.
 
+## MCP alternative (optional host integration)
+
+If your host speaks **MCP** and the binary was built with `--features mcp`,
+you can drive the same control plane without shelling out:
+
+```bash
+# Human: next-hunk serve …
+# Host config: command=next-hunk, args=["mcp"]
+```
+
+| MCP tool | Same as CLI |
+|----------|-------------|
+| `list_sessions` | `list` |
+| `review_structure` | `review` |
+| `navigate` | `navigate` |
+| `add_comment` | `comment add` |
+| `get_decision` | `decision` |
+| `push_focus_note` | `push --focus / --note` |
+| `reload` | `reload` |
+
+Prefer CLI/skill when available; use MCP when the host only exposes tools.
+Still requires a human-owned `serve` TUI. See README **MCP control plane**.
+
 ## Decision guide
 
 | Situation | What to do |

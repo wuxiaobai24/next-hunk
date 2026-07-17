@@ -51,7 +51,7 @@
 | 完整 git 客户端（stage/commit/rebase 全家桶） | 那是 lazygit / gitui 的战场 |
 | 默认对整文件开语法高亮 | 吃掉滚动预算（可异步、可取消、仅视口） |
 | 第一天 jj / Sapling 对等 | 适配器后挂 |
-| 以 session daemon / MCP 为核心 | 复杂度爆炸 |
+| 以完整 session-broker monorepo / 远程 MCP 运维面为核心 | 复杂度爆炸（轻量 stdio MCP 已可选：`next-hunk mcp`） |
 | 以二进制体积为成功标准 | **不是需求**；发布体积仅作观测项 |
 
 ---

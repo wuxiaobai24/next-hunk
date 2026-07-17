@@ -65,6 +65,11 @@ watch = ["dep:notify"]
 # agent→human streaming into a persistent TUI. Uses std Unix sockets (no new
 # crate), so on non-Unix the subcommands exist but error at runtime.
 serve = []
+# Optional MCP stdio control plane (`next-hunk mcp`) mapping the serve
+# protocol to first-class tools. No extra crates (hand-rolled JSON-RPC over
+# stdio). Requires `serve` (and Unix). Off by default so constrained builds
+# stay lean; enable with `--features mcp`. Release/CI `--all-features` includes it.
+mcp = ["serve"]
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }

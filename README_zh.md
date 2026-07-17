@@ -341,6 +341,65 @@ next-hunk list --all-worktrees
 
 需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
 
+### MCP 控制面（可选）
+
+偏好 **MCP 工具**、不想多步拼 shell 的 host，可把同一套 serve 协议暴露为一等工具（仍走 Unix socket，无 HTTP broker）：
+
+```bash
+# 需启用 mcp feature（会拉上 serve；默认 feature 不含 mcp）：
+cargo install next-hunk --features mcp
+# 或: cargo build --release --features mcp
+
+# 人类仍拥有 TUI：
+next-hunk serve --all --include-untracked
+
+# MCP host 以 stdio JSON-RPC 启动（stdout 只允许协议消息）：
+next-hunk mcp
+```
+
+**工具**（语义对齐 CLI session 命令）：
+
+| 工具 | CLI 对应 |
+|------|----------|
+| `list_sessions` | `next-hunk list` |
+| `review_structure` | `next-hunk review` |
+| `navigate` | `next-hunk navigate <target>` |
+| `add_comment` | `next-hunk comment add …` |
+| `get_decision` | `next-hunk decision` |
+| `push_focus_note` | `next-hunk push --focus … --note …` |
+| `reload` | `next-hunk reload` |
+
+工具失败返回结构化 JSON（`isError: true` + `{"error":"…"}`），无 TTY 的 host 也能完成 **指向 → 批注 → 读 decision**。
+
+**Claude Code** — 写入 `.mcp.json` / 用户 MCP 配置（按需改二进制路径）：
+
+```json
+{
+  "mcpServers": {
+    "next-hunk": {
+      "command": "next-hunk",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+**通用 MCP host**（stdio transport）：
+
+```json
+{
+  "mcpServers": {
+    "next-hunk": {
+      "command": "/path/to/next-hunk",
+      "args": ["mcp"],
+      "env": {}
+    }
+  }
+}
+```
+
+说明：默认 `cargo install next-hunk` **不含** `mcp`，需 `--features mcp`，或使用 `--all-features` 的 dist 二进制。Skill / CLI 仍是主路径；MCP 是并列入口，不替代 skill 文档。
+
 ## 测试与基准
 
 ```bash

@@ -11,5 +11,11 @@ pub mod cli_parse;
 pub mod config;
 pub mod highlight;
 pub mod ir;
+/// Optional MCP stdio control plane (`--features mcp`).
+#[cfg(all(feature = "mcp", feature = "serve", unix))]
+pub mod mcp;
+/// Shared live-session client (CLI + MCP). Available when `serve` is on (Unix).
+#[cfg(all(feature = "serve", unix))]
+pub mod session;
 pub mod source;
 pub mod tui;
