@@ -389,6 +389,62 @@ enum Commands {
     /// `next-hunk serve` for tool calls. Feature-gated (`mcp`, on by default).
     /// See `docs/MCP.md` for host config snippets.
     Mcp,
+    /// Open an in-session review overlay (tmux popup / zellij float / direct TTY).
+    ///
+    /// Detects `$TMUX` or `$ZELLIJ`, runs `diff --select --export-on-quit json`
+    /// in a floating pane that does not leave the agent session, then prints
+    /// the full export JSON on this process's stdout when the human quits.
+    /// Same report shape as `last-export` / `--export-on-quit json`.
+    ///
+    /// Without a multiplexer and without a TTY, prints a clear degradation
+    /// message (use adjacent pane `serve`, or one-shot `--select`).
+    Overlay {
+        /// Review staged changes (`git diff --cached`).
+        #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
+        staged: bool,
+        /// Full working set: staged + unstaged (+ optional untracked).
+        #[arg(long, short = 'a', conflicts_with_all = ["staged", "base", "range"])]
+        all: bool,
+        /// Branch-level review against `<rev>` (see `diff --base`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "range"])]
+        base: Option<String>,
+        /// Explicit commit range (see `diff --range`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "base"])]
+        range: Option<String>,
+        /// Diff strategy (see `diff --strategy`).
+        #[arg(long, value_parser = parse_strategy_arg)]
+        strategy: Option<DiffStrategy>,
+        /// Disable syntax highlighting.
+        #[arg(long)]
+        no_highlight: bool,
+        /// Include untracked files in worktree / working-set / base diff.
+        #[arg(long)]
+        include_untracked: bool,
+        /// Scroll to this location on startup (same as `diff --focus`).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable (same as `diff --note`).
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Diff stream layout: `unified`, `stack`, or `split`.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
+        /// VCS backend: `auto` (default), `git`, or `jj`.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
+        /// Disable persisting review decisions across sessions.
+        #[arg(long)]
+        no_persist: bool,
+        /// Export mode on quit (default `json`). Same values as `--export-on-quit`.
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
+        /// Optional pathspecs to limit the review.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -910,7 +966,93 @@ fn run() -> Result<()> {
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
         Commands::Mcp => run_mcp(),
+        Commands::Overlay {
+            staged,
+            all,
+            base,
+            range,
+            strategy,
+            no_highlight,
+            include_untracked,
+            focus,
+            note,
+            layout,
+            theme_preset,
+            vcs,
+            no_persist,
+            export_on_quit,
+            extra,
+        } => run_overlay(
+            staged,
+            all,
+            base,
+            range,
+            strategy,
+            no_highlight,
+            include_untracked,
+            focus,
+            note,
+            layout,
+            theme_preset,
+            vcs,
+            no_persist,
+            export_on_quit,
+            extra,
+        ),
     }
+}
+
+/// `next-hunk overlay`: tmux/zellij popup review → full export JSON on stdout.
+#[allow(clippy::too_many_arguments)]
+fn run_overlay(
+    staged: bool,
+    all: bool,
+    base: Option<String>,
+    range: Option<String>,
+    strategy: Option<DiffStrategy>,
+    no_highlight: bool,
+    include_untracked: bool,
+    focus: Option<String>,
+    note: Vec<String>,
+    layout: Option<LayoutMode>,
+    theme_preset: Option<String>,
+    vcs: Option<VcsPreference>,
+    no_persist: bool,
+    export_on_quit: Option<ExportOnQuit>,
+    extra: Vec<String>,
+) -> Result<()> {
+    // Validate focus/note specs early (same parser as diff) so bad agent args
+    // fail before opening a popup.
+    if let Some(ref f) = focus {
+        let _ = next_hunk::cli_parse::parse_focus(f)?;
+    }
+    for n in &note {
+        let _ = next_hunk::cli_parse::parse_note(n)?;
+    }
+
+    let args = next_hunk::overlay::OverlayDiffArgs {
+        staged,
+        all,
+        base,
+        range,
+        strategy: strategy.map(|s| s.as_str().to_string()),
+        include_untracked,
+        focus,
+        note,
+        layout: layout.map(|l| l.as_str().to_string()),
+        theme_preset,
+        vcs: vcs.map(|v| v.as_str().to_string()),
+        no_highlight,
+        no_persist,
+        extra,
+        export_on_quit: export_on_quit.map(|e| e.as_str().to_string()),
+        binary: None,
+        cwd: None,
+        popup_width: None,
+        popup_height: None,
+    };
+    let env = next_hunk::overlay::OverlayEnv::detect();
+    next_hunk::overlay::run_overlay(&args, &env)
 }
 
 /// `next-hunk mcp`: MCP stdio server (feature `mcp`).
@@ -1953,6 +2095,21 @@ fn emit_quit_report(
     if select_mode || export != ExportOnQuit::None {
         if let Err(e) = next_hunk::tui::persist::save_last_export(workdir, report) {
             eprintln!("warning: cannot cache last export: {e}");
+        }
+        // Overlay / external launchers set NEXT_HUNK_EXPORT_PATH so the parent
+        // process can read the full report after a tmux/zellij popup closes
+        // (popup stdout is not the caller's pipe). Write full JSON and skip
+        // printing to this process's stdout — the parent emits once.
+        if let Ok(path) = std::env::var(next_hunk::overlay::EXPORT_PATH_ENV) {
+            if !path.is_empty() {
+                match std::fs::write(&path, serde_json::to_string(report)?) {
+                    Ok(()) => return Ok(()),
+                    Err(e) => eprintln!(
+                        "warning: cannot write {}={path}: {e}",
+                        next_hunk::overlay::EXPORT_PATH_ENV
+                    ),
+                }
+            }
         }
     }
     match export {

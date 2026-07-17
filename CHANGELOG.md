@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — tmux/zellij overlay + in-session one-shot review (WXB-24)
+- **`next-hunk overlay`** — one command for agent sessions inside a multiplexer:
+  detects `$TMUX` / `$ZELLIJ`, opens a floating review (`diff --select
+  --export-on-quit json` + pass-through flags), blocks until quit, then prints
+  the full export JSON on the **caller's** stdout (same shape as `last-export`).
+- **tmux** — `display-popup -E` (90% size; override with
+  `NEXT_HUNK_POPUP_WIDTH` / `NEXT_HUNK_POPUP_HEIGHT`).
+- **zellij** — floating pane + sentinel wait for the same stdout contract.
+- **Direct TTY** — when no mux but stdout is a terminal, runs one-shot in place.
+- **Clear degradation** — no mux and no TTY: non-zero exit with instructions for
+  adjacent-pane `serve`, one-shot `--select`, or re-running inside tmux/zellij.
+- **`NEXT_HUNK_EXPORT_PATH`** — child writes full report JSON here so popup
+  stdout (owned by the mux) is not required for capture; suppresses duplicate
+  stdout print when set.
+- **Docs / skill** — recommended Claude Code / Codex / OpenCode layouts for
+  in-session overlay vs persistent `serve`.
+
 ### Added — MCP session control plane (WXB-23)
 - **`next-hunk mcp`** — stdio Model Context Protocol server that maps the live
   `serve` control plane to first-class tools: `list_sessions`,

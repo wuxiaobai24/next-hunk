@@ -356,6 +356,28 @@ next-hunk mcp
 工具与 session CLI 对齐：`list_sessions`、`review_structure`、`navigate`、
 `add_comment`、`get_decision`、`push_focus_note`、`reload`。`mcp` feature 默认开启（无额外 crate）。配置片段见 **[`docs/MCP.md`](./docs/MCP.md)**。
 
+### Overlay（会话内一键审查）
+
+当 agent 已运行在 **tmux / zellij** 会话里时，可直接弹出叠层审查，无需另开
+`serve` 窗格：
+
+```bash
+# 阻塞直到你退出 popup；完整 export JSON 打在调用方 stdout：
+next-hunk overlay --all --include-untracked \
+  --focus src/auth.rs:42 --note banner="请检查 token 过期逻辑"
+```
+
+| 环境 | 行为 |
+|------|------|
+| 设置了 `$TMUX` | `tmux display-popup`（阻塞；尺寸可用 `NEXT_HUNK_POPUP_WIDTH`/`HEIGHT`，默认 90%） |
+| 设置了 `$ZELLIJ` | 浮动窗 + 等待退出 |
+| 无 mux 但有 TTY | 在当前终端 one-shot `diff --select --export-on-quit json` |
+| 无 mux 且无 TTY | 清晰报错：邻窗 `serve`，或在 tmux/zellij 内重跑 |
+
+stdout 契约与 `--export-on-quit json` / `last-export` 一致（`schema_version`、
+决策三桶、comments、notes、banner）。内部用 `NEXT_HUNK_EXPORT_PATH` 回灌，
+不依赖 popup 自己的 stdout。
+
 ## 测试与基准
 
 ```bash

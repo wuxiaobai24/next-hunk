@@ -163,6 +163,93 @@ Hunk keys are `"<path>:h<n>"` (1-based ordinal within each file). **Parse stdout
 and apply only the `accepted` hunks.** Treat `undecided` as "not approved" — do
 not apply them unless the human asked you to.
 
+## Overlay: in-session popup (preferred when agent is inside tmux/zellij)
+
+When **you** run inside the human's multiplexer session (`$TMUX` or `$ZELLIJ`),
+prefer **`next-hunk overlay`** over opening a second pane for `serve` or asking
+the human to leave the agent chat:
+
+```bash
+# One command: floating TUI → human reviews → full export JSON on *your* stdout
+next-hunk overlay --all --include-untracked \
+  --focus <path>:<line> \
+  --note banner="<1-sentence summary>" \
+  --note <path>:<line>="<why this matters>"
+```
+
+What happens:
+
+| Environment | Result |
+|-------------|--------|
+| `$TMUX` set | `tmux display-popup` with `diff --select --export-on-quit json` (blocks) |
+| `$ZELLIJ` set | floating pane; same export contract |
+| No mux, but interactive TTY | one-shot select in the current terminal |
+| No mux, headless | **errors** with a clear fallback (see below) — do **not** hang |
+
+On success, stdout is the **full** export JSON (`schema_version`,
+`accepted`/`rejected`/`undecided`, `comments`, `notes`, `banner`) — same shape
+as `last-export` / `--export-on-quit json`. Parse it and apply the After review
+playbook.
+
+**Long-running:** the command blocks until the human quits. Raise your shell
+tool timeout to the maximum the harness allows (e.g. 30+ minutes). Do **not**
+background it.
+
+**If overlay errors (no mux):**
+
+```text
+1. Ask the human to open an adjacent pane and run:
+     next-hunk serve --all --include-untracked
+   then use diff --focus / decision / last-export as usual.
+2. Or they run one-shot themselves:
+     next-hunk diff --all --include-untracked --select --export-on-quit json
+   and paste / you recover with last-export.
+```
+
+Popup size: `NEXT_HUNK_POPUP_WIDTH` / `NEXT_HUNK_POPUP_HEIGHT` (default `90%`).
+
+### Recommended layouts (Claude / Codex / OpenCode)
+
+**Claude Code (tmux)** — agent and human share one session; overlay stacks on top:
+
+```text
+┌─ tmux window ──────────────────────────────────────────────────┐
+│  Claude Code (this pane owns $TMUX)                            │
+│    …edits…                                                     │
+│    next-hunk overlay --all --include-untracked \               │
+│      --focus src/a.rs:h1 --note banner="please review"         │
+│    → display-popup opens; human q → JSON back on Claude stdout │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**Codex (zellij or tmux)** — same one-command path; if the harness has no mux,
+open a neighbor pane for `serve` once per worktree:
+
+```text
+┌─ zellij / tmux ────────────────────────────────────────────────┐
+│ pane 0: Codex agent          │ pane 1 (only if no overlay):    │
+│   next-hunk overlay …        │   next-hunk serve --all         │
+│   (or diff --focus if serve) │                                 │
+└──────────────────────────────┴─────────────────────────────────┘
+```
+
+**OpenCode / Multica dogfood** — after a multi-file edit, before commit:
+
+```bash
+# Prefer (agent inside human's tmux/zellij):
+next-hunk overlay --all --include-untracked \
+  --focus <main-changed-path> \
+  --note banner="dogfood: review before commit"
+
+# Fallback when headless / no mux (human already has serve):
+next-hunk diff --all --include-untracked \
+  --focus <path> --note banner="…"
+# then: next-hunk decision  /  after quit: next-hunk last-export
+```
+
+Do **not** invent a custom terminal emulator; do **not** fork next-hunk
+business logic in a skill script — call the `next-hunk` binary only.
+
 ## Session workflow (persistent TUI + live agent control)
 
 For **ongoing** reviews where you expect to iterate (adjust focus, inspect
@@ -499,11 +586,12 @@ feature (on by default). Auto-forward on `diff` uses the same socket.
 
 | Situation | What to do |
 |-----------|------------|
-| Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
-| Need comments + decisions after human quits | `serve` quit stdout (default json) or `last-export` |
+| Inside `$TMUX`/`$ZELLIJ`, need one blocking review | **`overlay`** (popup → full JSON on your stdout) |
+| Need approval to proceed (no mux) | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
+| Need comments + decisions after human quits | `overlay` / `serve` quit / `last-export` |
 | Just want them informed, you continue | `diff --focus` / `--note` (auto-forwards if serve is live) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
-| `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
+| `--select` / `overlay` in a non-interactive context | **errors out** — only when a human can see a TTY/popup |
 | Iterating with the human | `serve` + `diff --focus` (prefer) or explicit `push` / `navigate` |
 | After review: only fix what they rejected | parse export → rejected/commented files only → `diff --focus` |
 

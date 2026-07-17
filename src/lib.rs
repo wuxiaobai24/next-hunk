@@ -13,6 +13,7 @@ pub mod cli_parse;
 pub mod config;
 pub mod highlight;
 pub mod ir;
+pub mod overlay;
 pub mod source;
 pub mod tui;
 
