@@ -39,7 +39,9 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// A live-reload source: produces a fresh unified-diff string on demand.
 /// Carried into the run loop so `--watch` can re-fetch the diff without
 /// touching the terminal from a background thread.
-pub type Reloader = Box<dyn FnMut() -> Result<String>>;
+/// Live-reload callback. Returns fresh unified-diff text plus optional
+/// per-file origins (`S`/`M`/`?`) for working-set reviews.
+pub type Reloader = Box<dyn FnMut() -> Result<crate::source::ProducedDiff>>;
 
 /// Agent-bridge options threaded from the CLI into the run loop. All fields are
 /// optional/empty by default, so callers that don't care about the agent
@@ -330,7 +332,7 @@ fn launch_editor(target: &app::OpenTarget, workdir: Option<&std::path::Path>) ->
 /// Fetch a fresh diff via the reloader and hot-swap it into `app`.
 fn reload_once(app: &mut App, reloader: &mut Reloader) {
     match reloader() {
-        Ok(text) => app.reload_review(&text),
+        Ok(produced) => app.reload_review_with_origins(&produced.text, &produced.origins),
         Err(e) => {
             app.status = format!("reload error: {e}");
         }
@@ -455,8 +457,8 @@ fn apply_server_command(
         }
         ServerCommand::Reload => match reloader {
             Some(r) => match (*r)() {
-                Ok(text) => {
-                    app.reload_review(&text);
+                Ok(produced) => {
+                    app.reload_review_with_origins(&produced.text, &produced.origins);
                     app.status = "reloaded by agent".into();
                     ServerReply::Ok
                 }

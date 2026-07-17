@@ -41,6 +41,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
+- [x] Working-set review: `diff --all` / `scope = "working-set"` (staged + unstaged; rail `S`/`M`/`?`)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [x] Stack layout: `layout = "stack"` config (unified default)
@@ -136,14 +137,17 @@ git config --global core.pager "next-hunk pager"
 ## Usage
 
 ```bash
-next-hunk                  # working tree diff
-next-hunk diff --staged
+next-hunk                  # working tree diff (unstaged only)
+next-hunk diff --staged    # staged only (`git diff --cached`)
+next-hunk diff --all       # full working set: staged + unstaged
+next-hunk diff --all --include-untracked  # everything `git status` would list
 next-hunk diff --watch     # live-reload on file changes
-next-hunk diff --include-untracked  # include untracked files
+next-hunk diff --include-untracked  # include untracked files (worktree / --all)
 next-hunk filediff old.rs new.rs    # diff two arbitrary files
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
+next-hunk inspect --all --include-untracked  # script: list all local buckets
 
 # Use next-hunk as git's pager for everyday diff/show/log:
 git config core.pager "next-hunk pager"
@@ -198,11 +202,12 @@ Fields:
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
-| `staged` | bool | `false` | review staged changes |
+| `scope` | string | `"worktree"` | `"worktree"` (unstaged), `"staged"`, or `"working-set"` (staged+unstaged; CLI `--all`) |
+| `staged` | bool | `false` | legacy alias for `scope = "staged"` when `scope` is unset |
 | `highlight` | bool | `true` | syntax highlighting |
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
-| `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
+| `include_untracked` | bool | `false` | include untracked files in worktree / working-set diff (`--include-untracked`) |
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
@@ -215,7 +220,11 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`.
+CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`.
+
+When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail
+tags each path with its git bucket: **`S`** staged, **`M`** modified (unstaged),
+**`?`** untracked. A path that has both staged and unstaged edits appears twice.
 
 ## Agent integration
 

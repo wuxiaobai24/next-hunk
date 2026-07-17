@@ -6,9 +6,9 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, ExportOnQuit, LayoutMode, ResolvedConfig};
-use next_hunk::ir::{parse_unified_diff, Review};
-use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
+use next_hunk::config::{CliFlags, Config, DiffScope, ExportOnQuit, LayoutMode, ResolvedConfig};
+use next_hunk::ir::{parse_unified_diff, FileOrigin, Review};
+use next_hunk::source::{find_repo, git_diff_produced, git_file_diff, git_show, open_repo};
 use next_hunk::tui::app::ReviewReport;
 use next_hunk::tui::{run_review_tui, ReviewOptions};
 
@@ -25,11 +25,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Review working-tree (or staged) diff.
+    /// Review working-tree (or staged / full working-set) diff.
     Diff {
         /// Review staged changes (`git diff --cached`).
-        #[arg(long, short = 's')]
+        #[arg(long, short = 's', conflicts_with = "all")]
         staged: bool,
+        /// Review the full working set: staged + unstaged (+ optional untracked).
+        ///
+        /// One command to see everything `git status` would list as local
+        /// changes. File rail marks origins as `S` staged / `M` modified /
+        /// `?` untracked when `--include-untracked` is set.
+        #[arg(long, short = 'a', conflicts_with = "staged")]
+        all: bool,
         /// Re-run on filesystem changes (live reload). Requires the `watch`
         /// feature; otherwise reports that it is unavailable.
         #[arg(long)]
@@ -37,7 +44,7 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
-        /// Include untracked files in worktree diff (default: off).
+        /// Include untracked files in worktree / working-set diff (default: off).
         #[arg(long)]
         include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
@@ -107,8 +114,14 @@ enum Commands {
     Inspect {
         /// Path to patch file, or `-` for stdin. If omitted, uses worktree diff.
         path: Option<PathBuf>,
-        #[arg(long, short = 's')]
+        #[arg(long, short = 's', conflicts_with = "all")]
         staged: bool,
+        /// Full working set (staged + unstaged); see `diff --all`.
+        #[arg(long, short = 'a', conflicts_with = "staged")]
+        all: bool,
+        /// Include untracked files when reviewing the worktree / working-set.
+        #[arg(long)]
+        include_untracked: bool,
     },
     /// Open a persistent review TUI that also listens for agent pushes.
     ///
@@ -119,8 +132,11 @@ enum Commands {
     /// accept/reject results.
     Serve {
         /// Review staged changes (`git diff --cached`).
-        #[arg(long, short = 's')]
+        #[arg(long, short = 's', conflicts_with = "all")]
         staged: bool,
+        /// Review the full working set: staged + unstaged (+ optional untracked).
+        #[arg(long, short = 'a', conflicts_with = "staged")]
+        all: bool,
         /// Re-run on filesystem changes (live reload). Requires the `watch`
         /// feature.
         #[arg(long)]
@@ -128,7 +144,7 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
-        /// Include untracked files in worktree diff (default: off).
+        /// Include untracked files in worktree / working-set diff (default: off).
         #[arg(long)]
         include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
@@ -276,6 +292,7 @@ fn run() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Commands::Diff {
         staged: false,
+        all: false,
         watch: false,
         no_highlight: false,
         include_untracked: false,
@@ -288,6 +305,7 @@ fn run() -> Result<()> {
     }) {
         Commands::Diff {
             staged,
+            all,
             watch,
             no_highlight,
             include_untracked,
@@ -326,6 +344,7 @@ fn run() -> Result<()> {
                 &cfg,
                 &CliFlags {
                     staged: if staged { Some(true) } else { None },
+                    all: if all { Some(true) } else { None },
                     watch: if watch { Some(true) } else { None },
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
@@ -340,19 +359,20 @@ fn run() -> Result<()> {
                 );
             }
 
-            let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
+            let produced =
+                git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
             let reloader = if resolved.watch {
                 Some(make_diff_reloader(
                     repo.clone(),
-                    resolved.staged,
+                    resolved.scope,
                     extra,
                     resolved.include_untracked,
                 ))
             } else {
                 None
             };
-            open_review_from_text(
-                &text,
+            open_review_from_produced(
+                produced,
                 reloader,
                 resolved.highlight,
                 resolved.line_numbers,
@@ -381,6 +401,7 @@ fn run() -> Result<()> {
                 .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
+                &[],
                 None,
                 true,
                 cfg.line_numbers.unwrap_or(true),
@@ -408,6 +429,7 @@ fn run() -> Result<()> {
                 .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
+                &[],
                 None,
                 true,
                 cfg.line_numbers.unwrap_or(true),
@@ -440,6 +462,7 @@ fn run() -> Result<()> {
                 .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &text,
+                &[],
                 None,
                 true,
                 cfg.line_numbers.unwrap_or(true),
@@ -458,18 +481,33 @@ fn run() -> Result<()> {
                 None,
             )
         }
-        Commands::Inspect { path, staged } => {
-            let text = if let Some(path) = path {
-                read_patch_input(&path)?
+        Commands::Inspect {
+            path,
+            staged,
+            all,
+            include_untracked,
+        } => {
+            let (text, origins) = if let Some(path) = path {
+                (read_patch_input(&path)?, Vec::new())
             } else {
-                let repo = find_repo(&std::env::current_dir()?)?;
-                git_diff(&repo, staged, &[], false)?
+                let cwd = std::env::current_dir()?;
+                let repo = find_repo(&cwd)?;
+                let scope = if all {
+                    DiffScope::WorkingSet
+                } else if staged {
+                    DiffScope::Staged
+                } else {
+                    DiffScope::Worktree
+                };
+                let produced = git_diff_produced(&repo, scope, &[], include_untracked)?;
+                (produced.text, produced.origins)
             };
             if text.trim().is_empty() {
                 println!("files=0 stream_rows=0 arena_bytes=0");
                 return Ok(());
             }
-            let review = parse_review(&text)?;
+            let mut review = parse_review(&text)?;
+            review.apply_file_origins(&origins);
             print_inspect(&review);
             Ok(())
         }
@@ -497,6 +535,7 @@ fn run() -> Result<()> {
                 .unwrap_or(LayoutMode::Unified);
             open_review_from_text(
                 &buf,
+                &[],
                 None,
                 true,
                 cfg.line_numbers.unwrap_or(true),
@@ -517,6 +556,7 @@ fn run() -> Result<()> {
         }
         Commands::Serve {
             staged,
+            all,
             watch,
             no_highlight,
             include_untracked,
@@ -527,6 +567,7 @@ fn run() -> Result<()> {
             extra,
         } => run_serve(
             staged,
+            all,
             watch,
             no_highlight,
             include_untracked,
@@ -548,15 +589,16 @@ fn run() -> Result<()> {
 }
 
 /// Build the live-reload closure for `--watch`: re-runs the same git diff.
-/// Captures the repo path, staged flag, pathspecs, and untracked flag by value.
+/// Captures the repo path, scope, pathspecs, and untracked flag by value.
 fn make_diff_reloader(
     repo: PathBuf,
-    staged: bool,
+    scope: DiffScope,
     extra: Vec<String>,
     include_untracked: bool,
 ) -> next_hunk::tui::Reloader {
     Box::new(move || {
-        git_diff(&repo, staged, &extra, include_untracked).context("re-run git diff for --watch")
+        git_diff_produced(&repo, scope, &extra, include_untracked)
+            .context("re-run git diff for --watch")
     })
 }
 
@@ -569,6 +611,7 @@ fn make_diff_reloader(
 #[allow(clippy::too_many_arguments)] // mirrors Commands::Serve field set
 fn run_serve(
     staged: bool,
+    all: bool,
     watch: bool,
     no_highlight: bool,
     include_untracked: bool,
@@ -599,6 +642,7 @@ fn run_serve(
         &cfg,
         &CliFlags {
             staged: if staged { Some(true) } else { None },
+            all: if all { Some(true) } else { None },
             watch: if watch { Some(true) } else { None },
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
@@ -616,19 +660,19 @@ fn run_serve(
     // (e.g. another serve running) is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&repo)?;
 
-    let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
+    let produced = git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
     let reloader = if resolved.watch {
         Some(make_diff_reloader(
             repo.clone(),
-            resolved.staged,
+            resolved.scope,
             extra,
             resolved.include_untracked,
         ))
     } else {
         None
     };
-    open_review_from_text(
-        &text,
+    open_review_from_produced(
+        produced,
         reloader,
         resolved.highlight,
         resolved.line_numbers,
@@ -958,6 +1002,7 @@ fn spawn_serve_listener(repo: &std::path::Path) -> Result<next_hunk::tui::Server
 #[allow(clippy::too_many_arguments)] // mirrors Commands::Serve field set
 fn run_serve(
     _staged: bool,
+    _all: bool,
     _watch: bool,
     _no_highlight: bool,
     _include_untracked: bool,
@@ -1036,8 +1081,39 @@ fn run_reload(_hash: Option<String>) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn open_review_from_produced(
+    produced: next_hunk::source::ProducedDiff,
+    reloader: Option<next_hunk::tui::Reloader>,
+    highlight_on: bool,
+    line_numbers_on: bool,
+    wrap_on: bool,
+    theme: Option<String>,
+    layout: next_hunk::config::LayoutMode,
+    workdir: Option<PathBuf>,
+    options: ReviewOptions,
+    server: Option<next_hunk::tui::ServerArg>,
+) -> Result<()> {
+    open_review_from_text(
+        &produced.text,
+        &produced.origins,
+        reloader,
+        highlight_on,
+        line_numbers_on,
+        wrap_on,
+        theme,
+        layout,
+        workdir,
+        options,
+        server,
+    )
+}
+
+// Mirrors the layered open path (diff text + origins + TUI knobs + server);
+// packing into a struct would only rename the same surface area.
+#[allow(clippy::too_many_arguments)]
 fn open_review_from_text(
     text: &str,
+    origins: &[FileOrigin],
     reloader: Option<next_hunk::tui::Reloader>,
     highlight_on: bool,
     line_numbers_on: bool,
@@ -1052,7 +1128,8 @@ fn open_review_from_text(
         eprintln!("(empty diff)");
         return Ok(());
     }
-    let review = parse_review(text)?;
+    let mut review = parse_review(text)?;
+    review.apply_file_origins(origins);
     let select_mode = options.select_mode;
     let export_on_quit = options.export_on_quit;
     // Interactive TUI (Phase 2). If stdout is not a terminal (piped, e.g. when
@@ -1132,9 +1209,14 @@ fn print_inspect(review: &Review) {
         review.text_arena.len()
     );
     for (i, file) in review.files.iter().enumerate() {
+        let origin = file
+            .origin
+            .map(|o| format!(" [{}]", o.mark()))
+            .unwrap_or_default();
         println!(
-            "  [{i}] {}  hunks={} stream=[{}+{})",
+            "  [{i}] {}{}  hunks={} stream=[{}+{})",
             file.display_path,
+            origin,
             file.hunks.len(),
             file.stream_start,
             file.stream_len

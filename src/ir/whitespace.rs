@@ -71,6 +71,7 @@ pub fn strip_whitespace_changes(review: &Review) -> Review {
             stream_len: file.stream_len,
             inserts: file_inserts,
             deletes: file_deletes,
+            origin: file.origin,
         });
     }
     out

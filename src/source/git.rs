@@ -14,6 +14,25 @@ use gix::objs::{self, tree::EntryKind, Write as _};
 use gix::status::{index_worktree::Item as IwItem, UntrackedFiles};
 use gix::{ObjectId, Repository};
 
+use crate::config::DiffScope;
+use crate::ir::FileOrigin;
+
+/// Unified-diff text plus optional per-file origin tags (parse order).
+///
+/// Origins line up with files produced by [`crate::ir::parse_unified_diff`] of
+/// `text` when every rendered patch yields a reviewable file entry.
+#[derive(Debug, Clone, Default)]
+pub struct ProducedDiff {
+    pub text: String,
+    pub origins: Vec<FileOrigin>,
+}
+
+impl ProducedDiff {
+    pub fn is_empty(&self) -> bool {
+        self.text.trim().is_empty()
+    }
+}
+
 /// Discover the repository containing `start` and return its worktree root
 /// (or the git dir for bare repos).
 pub fn find_repo(start: &Path) -> Result<PathBuf> {
@@ -116,24 +135,44 @@ pub fn git_file_diff(repo: &Repository, old_path: &Path, new_path: &Path) -> Res
     Ok(out)
 }
 
-/// Working-tree or staged diff as a unified-diff string.
+/// Working-tree / staged / working-set diff as a unified-diff string.
 ///
-/// * `staged = false` → index vs worktree (`git diff`)
-/// * `staged = true`  → HEAD tree vs index (`git diff --cached`)
+/// Prefer [`git_diff_produced`] when the caller needs file-rail origin marks
+/// (`S` / `M` / `?`).
 ///
 /// `pathspecs` filters by path prefix (best-effort); empty means all.
-/// `include_untracked` includes untracked files in the worktree diff.
+/// `include_untracked` includes untracked files in the worktree half (and in
+/// working-set mode).
 pub fn git_diff(
     repo_path: &Path,
-    staged: bool,
+    scope: DiffScope,
     pathspecs: &[String],
     include_untracked: bool,
 ) -> Result<String> {
+    Ok(git_diff_produced(repo_path, scope, pathspecs, include_untracked)?.text)
+}
+
+/// Like [`git_diff`], but also returns per-file [`FileOrigin`] in parse order.
+pub fn git_diff_produced(
+    repo_path: &Path,
+    scope: DiffScope,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<ProducedDiff> {
     let repo = open_repo(repo_path)?;
-    if staged {
-        diff_staged(&repo, pathspecs)
-    } else {
-        diff_worktree(&repo, pathspecs, include_untracked)
+    match scope {
+        DiffScope::Worktree => diff_worktree(&repo, pathspecs, include_untracked),
+        DiffScope::Staged => diff_staged(&repo, pathspecs),
+        DiffScope::WorkingSet => {
+            // Staged first, then unstaged (+ optional untracked). A path that
+            // has both staged and unstaged edits appears twice — once per
+            // bucket — so the human can review each side of the index boundary.
+            let mut staged = diff_staged(&repo, pathspecs)?;
+            let worktree = diff_worktree(&repo, pathspecs, include_untracked)?;
+            staged.text.push_str(&worktree.text);
+            staged.origins.extend(worktree.origins);
+            Ok(staged)
+        }
     }
 }
 
@@ -175,7 +214,22 @@ pub fn git_show(repo_path: &Path, rev: &str) -> Result<String> {
 
 // ─── staged / worktree ───────────────────────────────────────────────────────
 
-fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
+/// Record a file origin if `render` actually appended patch text.
+fn push_origin_if_appended(
+    out: &mut String,
+    origins: &mut Vec<FileOrigin>,
+    origin: FileOrigin,
+    render: impl FnOnce(&mut String) -> Result<()>,
+) -> Result<()> {
+    let before = out.len();
+    render(out)?;
+    if out.len() > before {
+        origins.push(origin);
+    }
+    Ok(())
+}
+
+fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<ProducedDiff> {
     let index = repo
         .index_or_load_from_head_or_empty()
         .context("open index")?;
@@ -185,6 +239,7 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
         .detach();
 
     let mut out = String::new();
+    let mut origins = Vec::new();
     let mut resource_cache = repo
         .diff_resource_cache_for_tree_diff()
         .context("diff resource cache")?;
@@ -199,7 +254,9 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
             if !pathspec_match(change.location().as_bstr(), pathspecs) {
                 return Ok(std::ops::ControlFlow::Continue(()));
             }
-            if let Err(e) = append_index_change(repo, &mut resource_cache, &mut out, &change) {
+            if let Err(e) =
+                append_index_change(repo, &mut resource_cache, &mut out, &mut origins, &change)
+            {
                 eprintln!("warning: skip staged change {}: {e:#}", change.location());
             }
             resource_cache.clear_resource_cache_keep_allocation();
@@ -208,20 +265,21 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
     )
     .context("tree-index status (staged)")?;
 
-    Ok(out)
+    Ok(ProducedDiff { text: out, origins })
 }
 
 fn diff_worktree(
     repo: &Repository,
     pathspecs: &[String],
     include_untracked: bool,
-) -> Result<String> {
+) -> Result<ProducedDiff> {
     let workdir = repo
         .workdir()
         .ok_or_else(|| anyhow!("bare repository has no worktree to diff"))?
         .to_owned();
 
     let mut out = String::new();
+    let mut origins = Vec::new();
     let mut resource_cache = repo
         .diff_resource_cache(
             gix::diff::blob::pipeline::Mode::ToGit,
@@ -250,20 +308,27 @@ fn diff_worktree(
 
     for item in iter {
         let item = item.context("index-worktree item")?;
-        if let Err(e) = append_worktree_item(repo, &mut resource_cache, &mut out, &item, pathspecs)
-        {
+        if let Err(e) = append_worktree_item(
+            repo,
+            &mut resource_cache,
+            &mut out,
+            &mut origins,
+            &item,
+            pathspecs,
+        ) {
             eprintln!("warning: skip worktree change {}: {e:#}", item.rela_path());
         }
         resource_cache.clear_resource_cache_keep_allocation();
     }
 
-    Ok(out)
+    Ok(ProducedDiff { text: out, origins })
 }
 
 fn append_worktree_item(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     out: &mut String,
+    origins: &mut Vec<FileOrigin>,
     item: &IwItem,
     pathspecs: &[String],
 ) -> Result<()> {
@@ -299,7 +364,9 @@ fn append_worktree_item(
                         rela_path.as_bstr(),
                         rela_path.as_bstr(),
                     )?;
-                    render_file_patch(out, Some(&path), None, cache)?;
+                    push_origin_if_appended(out, origins, FileOrigin::Modified, |out| {
+                        render_file_patch(out, Some(&path), None, cache)
+                    })?;
                 }
                 EntryStatus::Change(Change::Modification { .. })
                 | EntryStatus::Change(Change::Type { .. })
@@ -314,7 +381,9 @@ fn append_worktree_item(
                         rela_path.as_bstr(),
                         rela_path.as_bstr(),
                     )?;
-                    render_file_patch(out, Some(&path), Some(&path), cache)?;
+                    push_origin_if_appended(out, origins, FileOrigin::Modified, |out| {
+                        render_file_patch(out, Some(&path), Some(&path), cache)
+                    })?;
                 }
                 EntryStatus::Change(Change::SubmoduleModification(_))
                 | EntryStatus::Conflict { .. }
@@ -365,7 +434,9 @@ fn append_worktree_item(
                     &repo.objects,
                 )
                 .context("set new resource for untracked")?;
-            render_file_patch(out, None, Some(&path), cache)?;
+            push_origin_if_appended(out, origins, FileOrigin::Untracked, |out| {
+                render_file_patch(out, None, Some(&path), cache)
+            })?;
         }
         IwItem::Rewrite { .. } => {}
     }
@@ -376,6 +447,7 @@ fn append_index_change(
     repo: &Repository,
     cache: &mut gix::diff::blob::Platform,
     out: &mut String,
+    origins: &mut Vec<FileOrigin>,
     change: &gix::diff::index::ChangeRef<'_, '_>,
 ) -> Result<()> {
     use gix::diff::index::ChangeRef;
@@ -403,7 +475,9 @@ fn append_index_change(
                 location.as_ref(),
                 location.as_ref(),
             )?;
-            render_file_patch(out, None, Some(&path), cache)?;
+            push_origin_if_appended(out, origins, FileOrigin::Staged, |out| {
+                render_file_patch(out, None, Some(&path), cache)
+            })?;
         }
         ChangeRef::Deletion {
             location,
@@ -426,7 +500,9 @@ fn append_index_change(
                 location.as_ref(),
                 location.as_ref(),
             )?;
-            render_file_patch(out, Some(&path), None, cache)?;
+            push_origin_if_appended(out, origins, FileOrigin::Staged, |out| {
+                render_file_patch(out, Some(&path), None, cache)
+            })?;
         }
         ChangeRef::Modification {
             location,
@@ -455,7 +531,9 @@ fn append_index_change(
                 location.as_ref(),
                 location.as_ref(),
             )?;
-            render_file_patch(out, Some(&path), Some(&path), cache)?;
+            push_origin_if_appended(out, origins, FileOrigin::Staged, |out| {
+                render_file_patch(out, Some(&path), Some(&path), cache)
+            })?;
         }
         ChangeRef::Rewrite {
             source_location,
@@ -486,7 +564,9 @@ fn append_index_change(
                 source_location.as_ref(),
                 location.as_ref(),
             )?;
-            render_file_patch(out, Some(&old_path), Some(&new_path), cache)?;
+            push_origin_if_appended(out, origins, FileOrigin::Staged, |out| {
+                render_file_patch(out, Some(&old_path), Some(&new_path), cache)
+            })?;
         }
     }
     Ok(())

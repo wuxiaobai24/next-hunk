@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Working-set review (dogfood P0)
+- **`diff --all` / `scope = "working-set"`** — one command reviews **staged +
+  unstaged** local changes (optional untracked still via `--include-untracked`
+  / `include_untracked`). Closes the dogfood gap where `diff` missed staged
+  files and `diff --staged` missed the worktree. Also on `serve` and `inspect`.
+  Default remains worktree-only (`git diff` muscle memory). Config: prefer
+  `scope = "worktree" | "staged" | "working-set"`; legacy `staged = true` still
+  maps to staged-only. CLI: `--all` / `-a` conflicts with `--staged` / `-s`.
+- **File-rail origin marks** — working-set (and single-bucket) reviews tag each
+  file as `S` staged / `M` modified / `?` untracked so the human sees which
+  git bucket a path came from. Paths with both staged and unstaged edits appear
+  twice (once per bucket). `inspect` prints `[S]`/`[M]`/`[?]` next to paths.
+  Skill + README point agents at
+  `next-hunk diff --all --include-untracked` for a full local review.
+
 ### Added — Agent export
 - **`export_on_quit` config + `--export-on-quit` CLI** — on TUI quit, optionally
   emit an agent-readable review report: `none` (default) / `json` / `markdown` /

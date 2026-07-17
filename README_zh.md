@@ -41,6 +41,7 @@
 - [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
+- [x] Working-set 全量审查：`diff --all` / `scope = "working-set"`（staged+unstaged；文件栏 `S`/`M`/`?`）
 - [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
@@ -101,14 +102,17 @@ git config --global core.pager "next-hunk pager"
 ## 用法
 
 ```bash
-next-hunk                  # 工作区 diff
-next-hunk diff --staged
+next-hunk                  # 工作区 diff（仅 unstaged）
+next-hunk diff --staged    # 仅 staged（`git diff --cached`）
+next-hunk diff --all       # 完整工作集：staged + unstaged
+next-hunk diff --all --include-untracked  # git status 里能看到的本地改动全量
 next-hunk diff --watch     # 文件变化时实时重载
-next-hunk diff --include-untracked  # 包含未跟踪文件
+next-hunk diff --include-untracked  # 包含未跟踪文件（worktree / --all）
 next-hunk filediff old.rs new.rs    # 对比磁盘上两个文件
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
+next-hunk inspect --all --include-untracked  # 脚本：列出全部本地桶
 
 # 把 next-hunk 设为 git 的 pager，日常 diff/show/log 直接进 TUI：
 git config core.pager "next-hunk pager"
@@ -162,11 +166,12 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
-| `staged` | bool | `false` | 查看 staged 改动 |
+| `scope` | string | `"worktree"` | `"worktree"`（unstaged）、`"staged"`、或 `"working-set"`（staged+unstaged；CLI `--all`） |
+| `staged` | bool | `false` | 兼容别名：未设置 `scope` 时 `staged = true` 等价于 `scope = "staged"` |
 | `highlight` | bool | `true` | 语法高亮 |
 | `watch` | bool | `false` | 文件变化时实时重载 |
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
-| `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
+| `include_untracked` | bool | `false` | 在 worktree / working-set diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `export_on_quit` | string | `"none"` | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`） |
@@ -179,7 +184,9 @@ highlight = true
 watch = true
 ```
 
-CLI 覆盖:`--staged`、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`。
+CLI 覆盖:`--all` / `--staged`（互斥）、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`、`--export-on-quit <none|json|markdown|both>`。
+
+使用 working-set（`--all` 或 `scope = "working-set"`）时，文件栏会标注来源：**`S`** staged、**`M`** modified（unstaged）、**`?`** untracked。同一路径若既有 staged 又有 unstaged，会各出现一次。
 
 ## Agent 集成
 

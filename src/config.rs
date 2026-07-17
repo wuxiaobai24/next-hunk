@@ -13,6 +13,42 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Which local git buckets to include in a `diff` / `serve` / `inspect` review.
+///
+/// Default stays [`DiffScope::Worktree`] (unstaged only) so existing muscle
+/// memory matches `git diff`. Use [`DiffScope::WorkingSet`] (`--all`) to see
+/// staged + unstaged (+ optional untracked) in one session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffScope {
+    /// Index vs worktree (`git diff`). Optional untracked via `include_untracked`.
+    #[default]
+    Worktree,
+    /// HEAD vs index (`git diff --cached` / `--staged`).
+    Staged,
+    /// Staged + unstaged (+ optional untracked). CLI: `--all`.
+    WorkingSet,
+}
+
+impl DiffScope {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiffScope::Worktree => "worktree",
+            DiffScope::Staged => "staged",
+            DiffScope::WorkingSet => "working-set",
+        }
+    }
+
+    /// Parse config values. Unknown → `Worktree` (safe default).
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "staged" | "cached" | "index" => DiffScope::Staged,
+            "working-set" | "working_set" | "all" | "ws" => DiffScope::WorkingSet,
+            "worktree" | "unstaged" | "wt" => DiffScope::Worktree,
+            _ => DiffScope::Worktree,
+        }
+    }
+}
+
 /// Layout mode for the diff stream pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutMode {
@@ -86,12 +122,16 @@ impl LayoutMode {
 /// Raw user-configurable options. Every field optional: `None` = "not set".
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
+    /// Legacy: `staged = true` maps to [`DiffScope::Staged`] when `scope` is unset.
     pub staged: Option<bool>,
+    /// Diff bucket scope: `"worktree"` | `"staged"` | `"working-set"`.
+    /// Preferred over `staged` when both are set.
+    pub scope: Option<String>,
     pub highlight: Option<bool>,
     pub watch: Option<bool>,
     /// Show a line-number gutter column.
     pub line_numbers: Option<bool>,
-    /// Include untracked files in worktree diff.
+    /// Include untracked files in worktree / working-set diff.
     pub include_untracked: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
@@ -109,6 +149,9 @@ impl Config {
     pub fn merge(mut self, other: Config) -> Config {
         if other.staged.is_some() {
             self.staged = other.staged;
+        }
+        if other.scope.is_some() {
+            self.scope = other.scope;
         }
         if other.highlight.is_some() {
             self.highlight = other.highlight;
@@ -162,12 +205,13 @@ impl Config {
 /// The effective values after merging config layers with CLI flags.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
-    pub staged: bool,
+    /// Which local change buckets to review.
+    pub scope: DiffScope,
     pub highlight: bool,
     pub watch: bool,
     /// Show a line-number gutter column. ON by default.
     pub line_numbers: bool,
-    /// Include untracked files in worktree diff. OFF by default (safe).
+    /// Include untracked files in worktree / working-set diff. OFF by default (safe).
     pub include_untracked: bool,
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
@@ -182,9 +226,9 @@ pub struct ResolvedConfig {
 
 impl Default for ResolvedConfig {
     fn default() -> Self {
-        // Defaults: highlight on (matches existing TUI behavior), staged/watch off.
+        // Defaults: highlight on (matches existing TUI behavior), worktree/watch off.
         Self {
-            staged: false,
+            scope: DiffScope::Worktree,
             highlight: true,
             watch: false,
             line_numbers: true,
@@ -204,8 +248,10 @@ impl Default for ResolvedConfig {
 /// cleanly with the config layer.
 #[derive(Debug, Clone, Default)]
 pub struct CliFlags {
-    /// `--staged` / no flag.
+    /// `--staged` / no flag. Mutually exclusive with `--all` at the clap layer.
     pub staged: Option<bool>,
+    /// `--all` → full working-set (staged + unstaged).
+    pub all: Option<bool>,
     /// `--watch` / no flag.
     pub watch: Option<bool>,
     /// `--no-highlight` → `Some(false)`; absent → `None`.
@@ -225,7 +271,7 @@ impl ResolvedConfig {
     pub fn resolve(cfg: &Config, cli: &CliFlags) -> Self {
         let d = Self::default();
         Self {
-            staged: cli.staged.or(cfg.staged).unwrap_or(d.staged),
+            scope: resolve_scope(cfg, cli),
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
             line_numbers: cfg.line_numbers.unwrap_or(d.line_numbers),
@@ -245,6 +291,31 @@ impl ResolvedConfig {
                 .unwrap_or(d.export_on_quit),
         }
     }
+}
+
+/// Resolve [`DiffScope`] from CLI + config.
+///
+/// Precedence:
+/// 1. CLI `--all` → `WorkingSet`
+/// 2. CLI `--staged` → `Staged`
+/// 3. Config `scope = "..."`
+/// 4. Config `staged = true` → `Staged` (legacy)
+/// 5. Default `Worktree`
+fn resolve_scope(cfg: &Config, cli: &CliFlags) -> DiffScope {
+    if cli.all == Some(true) {
+        return DiffScope::WorkingSet;
+    }
+    if cli.staged == Some(true) {
+        return DiffScope::Staged;
+    }
+    // Explicit CLI staged=false (shouldn't happen with a pure flag) keeps config.
+    if let Some(scope) = cfg.scope.as_deref() {
+        return DiffScope::parse_str(scope);
+    }
+    if cfg.staged == Some(true) {
+        return DiffScope::Staged;
+    }
+    DiffScope::Worktree
 }
 
 // ─── file discovery ───────────────────────────────────────────────────────────
@@ -378,33 +449,56 @@ mod tests {
             watch: Some(true),
             ..Default::default()
         };
+        // --all wins over config staged=true
         let cli = CliFlags {
-            staged: Some(false), // CLI overrides
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
+            all: Some(true),
+            ..Default::default()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
-        assert!(!r.staged); // CLI wins
+        assert_eq!(r.scope, DiffScope::WorkingSet);
         assert!(!r.highlight); // config wins (CLI None)
         assert!(r.watch); // config wins
     }
 
     #[test]
-    fn resolve_defaults_when_nothing_set() {
-        let cfg = Config::default();
+    fn resolve_cli_staged_overrides_config_scope() {
+        let cfg = Config {
+            scope: Some("worktree".into()),
+            ..Default::default()
+        };
         let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
+            staged: Some(true),
+            ..Default::default()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
-        assert!(!r.staged);
+        assert_eq!(r.scope, DiffScope::Staged);
+    }
+
+    #[test]
+    fn resolve_config_scope_working_set() {
+        let cfg = Config {
+            scope: Some("working-set".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        assert_eq!(r.scope, DiffScope::WorkingSet);
+    }
+
+    #[test]
+    fn resolve_legacy_staged_config() {
+        let cfg = Config {
+            staged: Some(true),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        assert_eq!(r.scope, DiffScope::Staged);
+    }
+
+    #[test]
+    fn resolve_defaults_when_nothing_set() {
+        let cfg = Config::default();
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        assert_eq!(r.scope, DiffScope::Worktree);
         assert!(r.highlight); // default on
         assert!(!r.watch);
         assert!(r.line_numbers); // default on
@@ -417,12 +511,8 @@ mod tests {
             ..Default::default()
         };
         let cli = CliFlags {
-            staged: None,
-            watch: None,
             highlight: Some(false), // --no-highlight
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
+            ..Default::default()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -434,14 +524,7 @@ mod tests {
             line_numbers: Some(false),
             ..Default::default()
         };
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
     }
@@ -449,14 +532,7 @@ mod tests {
     #[test]
     fn resolve_line_numbers_defaults_to_true() {
         let cfg = Config::default(); // line_numbers = None
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
     }
@@ -467,14 +543,7 @@ mod tests {
             theme: Some("light".into()),
             ..Default::default()
         };
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
     }
@@ -482,14 +551,7 @@ mod tests {
     #[test]
     fn resolve_theme_none_when_unset() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());
     }
@@ -590,14 +652,7 @@ theme = \"dark\"
     #[test]
     fn layout_mode_defaults_to_unified() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Unified);
     }
@@ -607,14 +662,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.layout.as_deref(), Some("stack"));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Stack);
     }
@@ -641,14 +689,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("layout = \"split\"\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.layout.as_deref(), Some("split"));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
     }
@@ -658,12 +699,8 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
         let cfg = Config::load_project(&dir.0);
         let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
             layout: Some(LayoutMode::Split),
-            export_on_quit: None,
+            ..Default::default()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Split);
@@ -672,14 +709,7 @@ theme = \"dark\"
     #[test]
     fn wrap_defaults_to_false() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap, "wrap should default to false");
     }
@@ -689,14 +719,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("wrap = true\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.wrap, Some(true));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.wrap);
     }
@@ -706,14 +729,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("wrap = false\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.wrap, Some(false));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-            layout: None,
-            export_on_quit: None,
-        };
+        let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap);
     }
