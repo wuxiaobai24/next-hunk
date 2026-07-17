@@ -61,8 +61,12 @@ pub enum ServerCommand {
     CommentAdd {
         file: String,
         text: String,
-        /// Optional line number (new-side source line).
+        /// Optional line number (new-side source line) — range start when
+        /// `line_end` is also set.
         line: Option<u32>,
+        /// Optional inclusive end of a new-side line range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line_end: Option<u32>,
         /// Optional hunk ordinal (1-based).
         hunk: Option<usize>,
     },
@@ -553,6 +557,7 @@ mod tests {
                 file: "a.rs".into(),
                 text: "text".into(),
                 line: None,
+                line_end: None,
                 hunk: None,
             }],
         };
@@ -585,6 +590,7 @@ mod tests {
                                 file: "a.rs".into(),
                                 text: "review this".into(),
                                 line: None,
+                                line_end: None,
                                 hunk: None,
                             });
                             let _ = r.reply.send(ServerReply::CommentAdded { id: "c1".into() });
@@ -620,6 +626,7 @@ mod tests {
                 file: "a.rs".into(),
                 text: "review this".into(),
                 line: None,
+                line_end: None,
                 hunk: None,
             },
         )

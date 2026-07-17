@@ -76,6 +76,71 @@ pub enum InputMode {
     Search,
     /// Editing a file-rail path filter.
     Filter,
+    /// Visual range select (`v`): extend with `j`/`k`, annotate with `c`.
+    /// Selection state lives only on the viewport layer — never in the IR.
+    Visual,
+    /// Editing a comment draft for a resolved placement target.
+    Comment,
+}
+
+/// Visual range select state (viewport-layer only).
+///
+/// Absolute stream rows of the anchor (where `v` was pressed) and the moving
+/// cursor. The inclusive range is `[min(anchor,cursor), max(anchor,cursor)]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualSelect {
+    pub anchor: usize,
+    pub cursor: usize,
+}
+
+impl VisualSelect {
+    /// Inclusive low/high absolute stream rows of the selection.
+    pub fn range(&self) -> (usize, usize) {
+        if self.anchor <= self.cursor {
+            (self.anchor, self.cursor)
+        } else {
+            (self.cursor, self.anchor)
+        }
+    }
+
+    /// True when absolute stream row `row` lies inside the selection.
+    pub fn contains(&self, row: usize) -> bool {
+        let (lo, hi) = self.range();
+        row >= lo && row <= hi
+    }
+}
+
+/// Where a TUI-authored comment will land once the draft is committed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommentPlacement {
+    /// Single new-side source line.
+    Line { file: String, line: u32 },
+    /// Inclusive new-side line range (`line_start`..=`line_end`).
+    Range {
+        file: String,
+        line_start: u32,
+        line_end: u32,
+    },
+    /// 1-based hunk ordinal within `file`.
+    Hunk { file: String, hunk: usize },
+    /// Status-bar banner (no file/line attachment).
+    Banner,
+}
+
+impl CommentPlacement {
+    /// Compact status/prompt label for the placement.
+    pub fn display(&self) -> String {
+        match self {
+            CommentPlacement::Line { file, line } => format!("{file}:{line}"),
+            CommentPlacement::Range {
+                file,
+                line_start,
+                line_end,
+            } => format!("{file}:{line_start}-{line_end}"),
+            CommentPlacement::Hunk { file, hunk } => format!("{file}:h{hunk}"),
+            CommentPlacement::Banner => "banner".into(),
+        }
+    }
 }
 
 /// In-stream content search state.
@@ -189,6 +254,14 @@ pub struct App {
     pub comments: Vec<CommentEntry>,
     /// True after any decision mutation this session (drives persist save).
     pub decisions_dirty: bool,
+
+    /// Visual range select (`v` mode). `None` outside visual mode.
+    /// Lives only on the viewport layer — never written into the IR.
+    pub visual: Option<VisualSelect>,
+    /// Draft text while `InputMode::Comment` is active.
+    pub comment_draft: String,
+    /// Resolved placement for the in-progress comment draft.
+    pub comment_placement: Option<CommentPlacement>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -244,12 +317,23 @@ pub struct Note {
 
 /// A comment entry in the session. Defined here (not in server.rs) so it's
 /// available without the `serve` feature gate.
+///
+/// Placement fields (mutually informative, not exclusive):
+/// - `line` — new-side start line (single line, or range start)
+/// - `line_end` — new-side end line (inclusive); set only for multi-line ranges
+/// - `hunk` — 1-based hunk ordinal (hunk-level comment)
+/// - none of the above — banner
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CommentEntry {
     pub id: String,
     pub file: String,
     pub text: String,
     pub line: Option<u32>,
+    /// Inclusive end of a line range. Present only when `line` is set and the
+    /// range spans more than one new-side line. Serializes as `line_end` so
+    /// export JSON stays aligned with the agent-bridge comment protocol.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
     pub hunk: Option<usize>,
 }
 
@@ -318,6 +402,9 @@ pub struct ReviewReport {
 }
 
 /// One comment in a [`ReviewReport`] (same fields as [`CommentEntry`]).
+///
+/// Range shape: `line` is the start, `line_end` the inclusive end. Single-line
+/// comments omit `line_end`. Agents may treat `line` as `line_start`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ExportedComment {
     pub id: String,
@@ -325,6 +412,8 @@ pub struct ExportedComment {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_end: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hunk: Option<usize>,
 }
@@ -407,9 +496,10 @@ impl ReviewReport {
         if !self.comments.is_empty() {
             out.push_str("## Comments\n\n");
             for c in &self.comments {
-                let loc = match (c.hunk, c.line) {
-                    (Some(h), _) => format!(":h{h}"),
-                    (_, Some(l)) => format!(":{l}"),
+                let loc = match (c.hunk, c.line, c.line_end) {
+                    (Some(h), _, _) => format!(":h{h}"),
+                    (_, Some(l), Some(e)) if e != l => format!(":{l}-{e}"),
+                    (_, Some(l), _) => format!(":{l}"),
                     _ => String::new(),
                 };
                 out.push_str(&format!(
@@ -513,6 +603,9 @@ impl App {
             folded: HashSet::new(),
             layout_mode: LayoutMode::Unified,
             decisions_dirty: false,
+            visual: None,
+            comment_draft: String::new(),
+            comment_placement: None,
         }
     }
 
@@ -999,6 +1092,7 @@ impl App {
                 file: c.file.clone(),
                 text: c.text.clone(),
                 line: c.line,
+                line_end: c.line_end,
                 hunk: c.hunk,
             })
             .collect();
@@ -1069,6 +1163,14 @@ impl App {
             }
             InputMode::Filter => {
                 self.handle_filter_input(key);
+                return;
+            }
+            InputMode::Visual => {
+                self.handle_visual_key(key);
+                return;
+            }
+            InputMode::Comment => {
+                self.handle_comment_input(key);
                 return;
             }
             InputMode::Normal => {}
@@ -1396,6 +1498,20 @@ impl App {
                     self.status = "nothing to open here (move to a code line)".into();
                 }
             },
+            // enter visual range select (viewport-layer only)
+            KeyCode::Char('v') => {
+                self.enter_visual_mode();
+            }
+            // comment on the current top code line (or banner if none)
+            KeyCode::Char('c') => {
+                let placement = self.placement_for_current_line();
+                self.begin_comment(placement);
+            }
+            // comment on the current hunk
+            KeyCode::Char('C') => match self.placement_for_current_hunk() {
+                Some(p) => self.begin_comment(p),
+                None => self.status = "no hunk in view to comment on".into(),
+            },
             // next / prev search match
             KeyCode::Char('n') => {
                 self.advance_match(true);
@@ -1511,6 +1627,344 @@ impl App {
                 self.status = format!("filter: {}", self.path_filter);
             }
             _ => {}
+        }
+    }
+
+    /// Enter visual range-select mode at the top-of-viewport code row.
+    fn enter_visual_mode(&mut self) {
+        let row = self
+            .first_code_row_in_view()
+            .unwrap_or(self.scroll_y.min(self.review.stream_len.saturating_sub(1)));
+        self.visual = Some(VisualSelect {
+            anchor: row,
+            cursor: row,
+        });
+        self.mode = InputMode::Visual;
+        self.pending_prefix = None;
+        self.refresh_visual_status();
+    }
+
+    /// Leave visual mode without committing a comment.
+    fn exit_visual_mode(&mut self) {
+        self.visual = None;
+        self.mode = InputMode::Normal;
+        self.status = "visual cancelled".into();
+    }
+
+    /// Keys while a visual range is active.
+    fn handle_visual_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('q') => {
+                self.exit_visual_mode();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.extend_visual(1);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.extend_visual(-1);
+            }
+            KeyCode::Char('J') | KeyCode::PageDown => {
+                let half = (self.viewport_height.max(1) / 2) as i64;
+                self.extend_visual(half.max(1));
+            }
+            KeyCode::Char('K') | KeyCode::PageUp => {
+                let half = (self.viewport_height.max(1) / 2) as i64;
+                self.extend_visual(-half.max(1));
+            }
+            // Commit range → comment input
+            KeyCode::Char('c') => {
+                let placement = self.placement_from_visual();
+                self.visual = None;
+                self.begin_comment(placement);
+            }
+            // Hunk-level comment for the hunk under the visual cursor
+            KeyCode::Char('C') => match self.placement_for_current_hunk() {
+                Some(p) => {
+                    self.visual = None;
+                    self.begin_comment(p);
+                }
+                None => self.status = "no hunk in view to comment on".into(),
+            },
+            _ => {
+                // Swallow other keys so navigation behind visual doesn't surprise.
+                self.refresh_visual_status();
+            }
+        }
+    }
+
+    /// Move the visual cursor by `delta` stream rows and keep it in view.
+    fn extend_visual(&mut self, delta: i64) {
+        let Some(sel) = self.visual.as_mut() else {
+            return;
+        };
+        let max_row = self.review.stream_len.saturating_sub(1);
+        let next = if delta >= 0 {
+            sel.cursor.saturating_add(delta as usize).min(max_row)
+        } else {
+            sel.cursor.saturating_sub((-delta) as usize)
+        };
+        sel.cursor = next;
+        // Keep the moving end visible inside the viewport window.
+        let vh = self.viewport_height.max(1);
+        if next < self.scroll_y {
+            self.scroll_y = next;
+        } else if next >= self.scroll_y.saturating_add(vh) {
+            self.scroll_y = next.saturating_sub(vh.saturating_sub(1));
+        }
+        self.scroll_y = self.scroll_y.min(self.max_scroll());
+        self.sync_selected_file();
+        self.refresh_visual_status();
+    }
+
+    fn refresh_visual_status(&mut self) {
+        let Some(sel) = self.visual else {
+            return;
+        };
+        let (lo, hi) = sel.range();
+        let rows = hi.saturating_sub(lo) + 1;
+        let label = match self.placement_from_visual() {
+            CommentPlacement::Range {
+                file,
+                line_start,
+                line_end,
+            } => format!("{file}:{line_start}-{line_end}"),
+            CommentPlacement::Line { file, line } => format!("{file}:{line}"),
+            other => other.display(),
+        };
+        self.status = format!("VISUAL {label} ({rows} row(s)) · c comment · C hunk · Esc cancel");
+    }
+
+    /// Open comment-input mode for `placement`.
+    fn begin_comment(&mut self, placement: CommentPlacement) {
+        self.comment_placement = Some(placement.clone());
+        self.comment_draft.clear();
+        self.mode = InputMode::Comment;
+        self.pending_prefix = None;
+        self.status = format!("comment [{}]: ", placement.display());
+    }
+
+    /// Keys while typing a comment draft.
+    fn handle_comment_input(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('u') => {
+                    self.comment_draft.clear();
+                    let loc = self
+                        .comment_placement
+                        .as_ref()
+                        .map(|p| p.display())
+                        .unwrap_or_else(|| "?".into());
+                    self.status = format!("comment [{loc}]: ");
+                    return;
+                }
+                KeyCode::Char('w') => {
+                    drop_last_word(&mut self.comment_draft);
+                    let loc = self
+                        .comment_placement
+                        .as_ref()
+                        .map(|p| p.display())
+                        .unwrap_or_else(|| "?".into());
+                    self.status = format!("comment [{loc}]: {}", self.comment_draft);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match key.code {
+            KeyCode::Enter => {
+                self.commit_comment();
+            }
+            KeyCode::Esc => {
+                self.comment_draft.clear();
+                self.comment_placement = None;
+                self.mode = InputMode::Normal;
+                self.status = "comment cancelled".into();
+            }
+            KeyCode::Backspace => {
+                self.comment_draft.pop();
+                let loc = self
+                    .comment_placement
+                    .as_ref()
+                    .map(|p| p.display())
+                    .unwrap_or_else(|| "?".into());
+                self.status = format!("comment [{loc}]: {}", self.comment_draft);
+            }
+            KeyCode::Char(c) => {
+                self.comment_draft.push(c);
+                let loc = self
+                    .comment_placement
+                    .as_ref()
+                    .map(|p| p.display())
+                    .unwrap_or_else(|| "?".into());
+                self.status = format!("comment [{loc}]: {}", self.comment_draft);
+            }
+            _ => {}
+        }
+    }
+
+    /// Persist the draft as a session comment and surface it as a note.
+    fn commit_comment(&mut self) {
+        let text = self.comment_draft.trim().to_string();
+        let placement = self.comment_placement.take();
+        self.comment_draft.clear();
+        self.mode = InputMode::Normal;
+        if text.is_empty() {
+            self.status = "comment empty — cancelled".into();
+            return;
+        }
+        let Some(placement) = placement else {
+            self.status = "comment cancelled".into();
+            return;
+        };
+        let id = self.allocate_comment_id();
+        let (file, line, line_end, hunk) = match &placement {
+            CommentPlacement::Line { file, line } => (file.clone(), Some(*line), None, None),
+            CommentPlacement::Range {
+                file,
+                line_start,
+                line_end,
+            } => (file.clone(), Some(*line_start), Some(*line_end), None),
+            CommentPlacement::Hunk { file, hunk } => (file.clone(), None, None, Some(*hunk)),
+            CommentPlacement::Banner => (String::new(), None, None, None),
+        };
+        let entry = CommentEntry {
+            id: id.clone(),
+            file: file.clone(),
+            text: text.clone(),
+            line,
+            line_end,
+            hunk,
+        };
+        // Also render immediately as a note so the human sees it without
+        // needing `comment apply` (serve path still supports that for CLI).
+        let note = Self::comment_entry_to_note(&entry);
+        self.comments.push(entry);
+        self.notes.push(note);
+        self.status = format!("comment {id} → {}", placement.display());
+    }
+
+    /// Stable id `cN` that does not collide with existing session comments.
+    fn allocate_comment_id(&self) -> String {
+        let mut n = self.comments.len() as u64;
+        loop {
+            let id = format!("c{n}");
+            if !self.comments.iter().any(|c| c.id == id) {
+                return id;
+            }
+            n += 1;
+        }
+    }
+
+    /// Map a stored comment to a renderable [`Note`].
+    pub fn comment_entry_to_note(c: &CommentEntry) -> Note {
+        let target = if let Some(hunk) = c.hunk {
+            NoteTarget::Hunk {
+                path: c.file.clone(),
+                hunk,
+            }
+        } else if let Some(line) = c.line {
+            // Ranges attach at the start line; the note text carries the span.
+            NoteTarget::Line {
+                path: c.file.clone(),
+                line,
+            }
+        } else {
+            NoteTarget::Banner
+        };
+        let loc = match (c.line, c.line_end, c.hunk) {
+            (_, _, Some(h)) => format!("h{h}"),
+            (Some(s), Some(e), _) if e != s => format!("{s}-{e}"),
+            (Some(s), _, _) => format!("{s}"),
+            _ => "banner".into(),
+        };
+        Note {
+            target,
+            text: format!("💬 {}:{} {}", c.id, loc, c.text),
+        }
+    }
+
+    /// First code-line absolute row inside the current viewport, if any.
+    fn first_code_row_in_view(&self) -> Option<usize> {
+        let start = self.scroll_y;
+        let end = self
+            .review
+            .stream_len
+            .min(start + self.viewport_height.max(1));
+        (start..end).find(|&row| ViewportQuery::row_line_numbers(&self.review, row).is_some())
+    }
+
+    /// Single-line (or banner) placement for the top-of-view code line.
+    fn placement_for_current_line(&self) -> CommentPlacement {
+        if let Some(row) = self.first_code_row_in_view() {
+            if let Some(p) = self.placement_from_row(row) {
+                return p;
+            }
+        }
+        CommentPlacement::Banner
+    }
+
+    /// Hunk placement for the hunk under the viewport, if any.
+    fn placement_for_current_hunk(&self) -> Option<CommentPlacement> {
+        let id = self.current_hunk_id()?;
+        let file = self.review.files.get(id.file_idx)?;
+        Some(CommentPlacement::Hunk {
+            file: file.display_path.clone(),
+            hunk: id.hunk_idx + 1, // 1-based for protocol
+        })
+    }
+
+    /// Resolve a single absolute stream row to a line placement.
+    fn placement_from_row(&self, row: usize) -> Option<CommentPlacement> {
+        let (old_no, new_no) = ViewportQuery::row_line_numbers(&self.review, row)?;
+        let line = new_no.or(old_no)?;
+        let (file_idx, _) = ViewportQuery::file_and_line(&self.review, row)?;
+        let file = self.review.files.get(file_idx)?;
+        Some(CommentPlacement::Line {
+            file: file.display_path.clone(),
+            line,
+        })
+    }
+
+    /// Resolve the current visual range to a comment placement.
+    ///
+    /// Uses new-side line numbers when available (else old-side). Multi-line
+    /// spans in the same file become a `Range`; a single code line becomes
+    /// `Line`; a selection covering only headers falls back to the current
+    /// hunk or banner.
+    fn placement_from_visual(&self) -> CommentPlacement {
+        let Some(sel) = self.visual else {
+            return self.placement_for_current_line();
+        };
+        let (lo, hi) = sel.range();
+        let mut lines: Vec<(String, u32)> = Vec::new();
+        for row in lo..=hi {
+            if let Some(CommentPlacement::Line { file, line }) = self.placement_from_row(row) {
+                // Keep only the first file encountered so cross-file selections
+                // still produce a coherent single-file span.
+                if lines.is_empty() || lines[0].0 == file {
+                    lines.push((file, line));
+                }
+            }
+        }
+        if lines.is_empty() {
+            return self
+                .placement_for_current_hunk()
+                .unwrap_or(CommentPlacement::Banner);
+        }
+        let file = lines[0].0.clone();
+        let mut nums: Vec<u32> = lines.into_iter().map(|(_, l)| l).collect();
+        nums.sort_unstable();
+        nums.dedup();
+        let start = *nums.first().unwrap();
+        let end = *nums.last().unwrap();
+        if start == end {
+            CommentPlacement::Line { file, line: start }
+        } else {
+            CommentPlacement::Range {
+                file,
+                line_start: start,
+                line_end: end,
+            }
         }
     }
 
@@ -3315,6 +3769,7 @@ diff --git a/b.rs b/b.rs
             file: "a.rs".into(),
             text: "looks good".into(),
             line: None,
+            line_end: None,
             hunk: Some(1),
         });
         app.notes.push(Note {
@@ -3406,6 +3861,123 @@ diff --git a/b.rs b/b.rs
         assert_eq!(r.undecided.len(), 4);
         assert_eq!(r.notes.len(), 1);
         assert_eq!(r.notes[0].hunk, Some(1));
+    }
+
+    // ---- visual range select + TUI comments ----
+
+    #[test]
+    fn visual_mode_enter_extend_and_cancel() {
+        let mut app = two_file_app();
+        app.viewport_height = 10;
+        // Land on a code line (row 2 is typically +new after file/hunk headers).
+        app.scroll_y = 2;
+        app.handle_key(char_key('v'));
+        assert_eq!(app.mode, InputMode::Visual);
+        let sel = app.visual.expect("visual state set");
+        assert_eq!(sel.anchor, sel.cursor);
+        let start = sel.cursor;
+        app.handle_key(char_key('j'));
+        let sel = app.visual.expect("still visual");
+        assert_eq!(sel.cursor, start + 1);
+        assert!(sel.contains(start));
+        assert!(sel.contains(start + 1));
+        app.handle_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert!(app.visual.is_none());
+    }
+
+    #[test]
+    fn visual_range_comment_exports_line_end() {
+        // Multi-line new-side range: use a patch with several +lines so
+        // visual j extends across distinct new-side line numbers.
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,1 +1,4 @@
+ context
++one
++two
++three
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        // Row 0 file header, 1 hunk header, 2 context, 3 +one, 4 +two, 5 +three
+        app.scroll_y = 3;
+        app.handle_key(char_key('v'));
+        app.handle_key(char_key('j')); // include +two
+        app.handle_key(char_key('j')); // include +three
+        assert_eq!(app.mode, InputMode::Visual);
+        app.handle_key(char_key('c'));
+        assert_eq!(app.mode, InputMode::Comment);
+        for ch in "rewrite this block".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(app.comments.len(), 1);
+        let c = &app.comments[0];
+        assert_eq!(c.file, "a.rs");
+        assert_eq!(c.line, Some(2)); // +one is new-side line 2 (after context 1)
+        assert_eq!(c.line_end, Some(4)); // +three
+        assert_eq!(c.text, "rewrite this block");
+        // Immediately rendered as a note.
+        assert!(!app.notes.is_empty());
+        // Export JSON carries line_end.
+        let r = app.report();
+        assert_eq!(r.comments.len(), 1);
+        assert_eq!(r.comments[0].line, Some(2));
+        assert_eq!(r.comments[0].line_end, Some(4));
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"line_end\":4"), "json={json}");
+        let md = r.to_markdown();
+        assert!(md.contains("a.rs:2-4"), "md={md}");
+    }
+
+    #[test]
+    fn normal_c_comments_single_line() {
+        let mut app = two_file_app();
+        app.viewport_height = 10;
+        app.scroll_y = 2; // code line
+        app.handle_key(char_key('c'));
+        assert_eq!(app.mode, InputMode::Comment);
+        for ch in "nit".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.comments.len(), 1);
+        assert!(app.comments[0].line.is_some());
+        assert!(app.comments[0].line_end.is_none());
+        assert_eq!(app.comments[0].text, "nit");
+    }
+
+    #[test]
+    fn capital_c_comments_current_hunk() {
+        let mut app = two_file_app();
+        app.viewport_height = 10;
+        app.scroll_y = 1;
+        app.handle_key(char_key('C'));
+        assert_eq!(app.mode, InputMode::Comment);
+        for ch in "whole hunk".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(app.comments.len(), 1);
+        assert_eq!(app.comments[0].hunk, Some(1));
+        assert!(app.comments[0].line.is_none());
+        assert_eq!(app.comments[0].text, "whole hunk");
+    }
+
+    #[test]
+    fn empty_comment_draft_is_discarded() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('c'));
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.comments.is_empty());
+        assert_eq!(app.mode, InputMode::Normal);
     }
 
     // ---- mouse clicks ----

@@ -361,9 +361,12 @@ enum CommentAction {
         /// Target file path.
         #[arg(long)]
         file: String,
-        /// Optional new-side source line number.
+        /// Optional new-side source line number (range start when `--line-end` is set).
         #[arg(long)]
         line: Option<u32>,
+        /// Optional inclusive end of a new-side line range (requires `--line`).
+        #[arg(long)]
+        line_end: Option<u32>,
         /// Optional hunk ordinal (1-based).
         #[arg(long)]
         hunk: Option<usize>,
@@ -1378,6 +1381,7 @@ fn run_comment(action: CommentAction) -> Result<()> {
         CommentAction::Add {
             file,
             line,
+            line_end,
             hunk,
             hash,
             text,
@@ -1389,6 +1393,7 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     file,
                     text,
                     line,
+                    line_end,
                     hunk,
                 },
             ) {
@@ -1411,9 +1416,10 @@ fn run_comment(action: CommentAction) -> Result<()> {
                         println!("no comments");
                     } else {
                         for c in &comments {
-                            let loc = match (c.hunk, c.line) {
-                                (Some(h), _) => format!(" hunk={h}"),
-                                (_, Some(l)) => format!(" line={l}"),
+                            let loc = match (c.hunk, c.line, c.line_end) {
+                                (Some(h), _, _) => format!(" hunk={h}"),
+                                (_, Some(l), Some(e)) if e != l => format!(" line={l}-{e}"),
+                                (_, Some(l), _) => format!(" line={l}"),
                                 _ => String::new(),
                             };
                             println!("{}  {}{}  {}", c.id, c.file, loc, c.text);

@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — TUI visual range select + line/range comments (WXB-19)
+- **Visual range select** — press `v` to enter select mode at the top code row
+  of the viewport; `j`/`k` (and half-page `J`/`K`) extend the selection;
+  `Esc`/`v` cancel. Selection state lives only on the viewport layer (two
+  absolute stream-row indices) and never materializes the full IR stream.
+- **In-TUI comments** — `c` opens a bottom prompt for the current line (or the
+  visual range); `C` targets the current hunk. Enter saves, Esc cancels.
+  Empty drafts are discarded. Comments are stored on the session, rendered
+  immediately as note rows, and included in `export_on_quit` reports.
+- **Range protocol** — `CommentEntry` / export JSON / `comment list` gain an
+  optional `line_end` (inclusive). Single-line comments keep only `line`
+  (the start / `line_start`). Serve CLI: `comment add --file PATH --line N
+  --line-end M "…"`. Agents parse `line` + `line_end` as an inclusive span.
+- **Docs** — README (EN/ZH), skill, and `?` help overlay document visual keys
+  and how agents should read range comments.
+
 ### Fixed — `--export-on-quit` on non-TTY (WXB-31)
 - **Headless export no longer falls back to inspect** — when stdout is not a
   TTY and `export_on_quit` is `json` / `markdown` / `both`, next-hunk emits the

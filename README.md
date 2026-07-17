@@ -249,11 +249,16 @@ git show HEAD   # → launches the review TUI
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
+| `v` | enter **visual range select** at the top code row |
+| `j` / `k` (in visual) | extend the selection down / up |
+| `c` | comment: current line (normal) or selected range (visual) |
+| `C` | comment on the current hunk |
+| Enter / Esc (comment draft) | save / cancel the comment |
 | `?` | toggle the full-screen keybinding help |
 | `a` / `r` / `u` | `--select`: accept / reject / undecided current hunk (auto next) |
 | `A` / `R` | `--select`: accept / reject rest of current file |
 | `Ctrl-A` / `Ctrl-R` | `--select`: accept / reject all remaining hunks |
-| `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
+| `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search / cancels visual first) |
 
 ## Configuration
 

@@ -941,11 +941,17 @@ fn stream_row_to_line(
     match_rows: &std::collections::HashSet<usize>,
 ) -> Line<'static> {
     let abs_row = match &row {
+        OwnedRow::FileHeader { abs_row, .. } => *abs_row,
+        OwnedRow::HunkHeader { abs_row, .. } => *abs_row,
         OwnedRow::Line { abs_row, .. } => *abs_row,
-        _ => usize::MAX, // headers never match
     };
-    let is_current_match = current_match_row == Some(abs_row);
-    let is_other_match = !is_current_match && match_rows.contains(&abs_row);
+    // Search matches only apply to code lines (headers use usize::MAX sentinel
+    // historically — keep headers out of match sets by comparing against
+    // the true abs_row only for Line rows via match_rows membership).
+    let is_code_line = matches!(row, OwnedRow::Line { .. });
+    let is_current_match = is_code_line && current_match_row == Some(abs_row);
+    let is_other_match = is_code_line && !is_current_match && match_rows.contains(&abs_row);
+    let in_visual = app.visual.as_ref().is_some_and(|v| v.contains(abs_row));
 
     let line = match row {
         OwnedRow::FileHeader { path, .. } => Line::from(Span::styled(
@@ -1088,6 +1094,13 @@ fn stream_row_to_line(
         )
     } else if is_other_match {
         line.style(Style::default().bg(app.theme.match_inactive_bg))
+    } else if in_visual {
+        // Visual range select highlight (viewport-layer only).
+        line.style(
+            Style::default()
+                .bg(app.theme.selection_bg)
+                .fg(app.theme.selection_fg),
+        )
     } else {
         line
     }
@@ -1274,12 +1287,24 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                 app.path_filter
             )
         }
+        InputMode::Visual => app.status.clone(),
+        InputMode::Comment => {
+            let loc = app
+                .comment_placement
+                .as_ref()
+                .map(|p| p.display())
+                .unwrap_or_else(|| "?".into());
+            format!(
+                "comment [{loc}]: {}▌  (Enter save · Esc cancel)",
+                app.comment_draft
+            )
+        }
         InputMode::Normal => {
             if app.decisions_active() {
-                " j/k · ]h/[h hunk · ]u unreviewed · a/r/u decide · A file · zc/zo · / · o · ? · q "
+                " j/k · ]h/[h hunk · ]u unreviewed · a/r/u decide · A file · v visual · c comment · zc/zo · / · o · ? · q "
                     .to_string()
             } else {
-                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
+                " j/k scroll · ]h/[h hunk · v visual · c/C comment · zc/zo fold · Tab file · / search · o open · ? help · q quit "
                     .to_string()
             }
         }
@@ -1365,6 +1390,20 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("/", "search diff content"),
             ("n / N", "next / previous match"),
             ("f", "filter files by path substring"),
+        ],
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "Comments (visual range)",
+        &[
+            ("v", "enter visual select at top code row"),
+            ("j / k", "extend selection (in visual)"),
+            ("c", "comment: current line, or range in visual"),
+            ("C", "comment on current hunk"),
+            ("Enter / Esc", "save / cancel comment draft"),
         ],
         head,
         key,
