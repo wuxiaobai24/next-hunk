@@ -1666,6 +1666,9 @@ fn resolve_export_opt(cli: Option<ExportOnQuit>, cfg: &Config) -> Result<ExportO
 
 /// Serve export default: `json` when neither CLI nor config set a value.
 /// Explicit `none` (CLI or config) is preserved. Pager/diff do not use this.
+/// Gated with the serve+unix call site so no-default-features / non-Unix
+/// builds do not emit `dead_code`; kept under `test` so unit tests still run.
+#[cfg(any(all(feature = "serve", unix), test))]
 fn resolve_serve_export(
     cli_override: Option<ExportOnQuit>,
     cfg: &Config,
