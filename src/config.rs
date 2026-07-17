@@ -145,16 +145,24 @@ impl DiffStrategy {
         }
     }
 
+    /// Parse CLI/config values. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_lowercase().as_str() {
+            "worktree" | "unstaged" | "wt" => Ok(DiffStrategy::Worktree),
+            "staged" | "cached" | "index" => Ok(DiffStrategy::Staged),
+            "working-set" | "working_set" | "all" | "ws" => Ok(DiffStrategy::WorkingSet),
+            "upstream-ahead" | "upstream_ahead" | "upstream" => Ok(DiffStrategy::UpstreamAhead),
+            "merge-base" | "merge_base" | "mb" => Ok(DiffStrategy::MergeBase),
+            other => Err(format!(
+                "unknown strategy '{other}' (expected worktree, staged, working-set, \
+                 upstream-ahead, or merge-base)"
+            )),
+        }
+    }
+
     /// Parse CLI/config values. Unknown → `None` (caller keeps other defaults).
     pub fn parse_str(s: &str) -> Option<Self> {
-        match s.trim().to_lowercase().as_str() {
-            "worktree" | "unstaged" | "wt" => Some(DiffStrategy::Worktree),
-            "staged" | "cached" | "index" => Some(DiffStrategy::Staged),
-            "working-set" | "working_set" | "all" | "ws" => Some(DiffStrategy::WorkingSet),
-            "upstream-ahead" | "upstream_ahead" | "upstream" => Some(DiffStrategy::UpstreamAhead),
-            "merge-base" | "merge_base" | "mb" => Some(DiffStrategy::MergeBase),
-            _ => None,
-        }
+        Self::try_parse(s).ok()
     }
 }
 
@@ -651,12 +659,34 @@ fn find_project_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Keys recognized on [`Config`]. Anything else in `config.toml` is a likely
+/// typo and is warned about at load time (still parsed so forward-compat keys
+/// do not hard-fail).
+const KNOWN_CONFIG_KEYS: &[&str] = &[
+    "staged",
+    "scope",
+    "strategy",
+    "base",
+    "highlight",
+    "watch",
+    "line_numbers",
+    "include_untracked",
+    "theme",
+    "layout",
+    "wrap",
+    "export_on_quit",
+    "vcs",
+    "persist_review",
+    "auto_forward",
+];
+
 /// Read + parse a config file.
 ///
 /// * Missing file → `Ok(None)` (common case, silent).
 /// * Present but unreadable / invalid TOML / illegal enum → `Err` with a clear
 ///   message so the process exits non-zero instead of silently ignoring typos
 ///   like `layout = "sidebyside"`.
+/// * Unknown top-level keys → warning on stderr (path + key), then continue.
 fn load_file(path: &Path) -> Result<Option<Config>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -667,10 +697,37 @@ fn load_file(path: &Path) -> Result<Option<Config>, String> {
             return Err(format!("cannot read config {}: {e}", path.display()));
         }
     };
-    let cfg: Config =
+    let value: toml::Value =
         toml::from_str(&text).map_err(|e| format!("invalid config {}: {e}", path.display()))?;
+    warn_unknown_config_keys(path, &value);
+    let cfg: Config = value
+        .try_into()
+        .map_err(|e| format!("invalid config {}: {e}", path.display()))?;
     validate_config_enums(&cfg, path)?;
     Ok(Some(cfg))
+}
+
+/// Collect top-level keys in `value` that are not recognized [`Config`] fields.
+fn unknown_config_keys(value: &toml::Value) -> Vec<&str> {
+    let Some(table) = value.as_table() else {
+        return Vec::new();
+    };
+    table
+        .keys()
+        .map(|k| k.as_str())
+        .filter(|k| !KNOWN_CONFIG_KEYS.contains(k))
+        .collect()
+}
+
+/// Warn on stderr for each unknown top-level key (typos like `higlight`).
+/// Does not fail — keeps forward-compat for future keys while surfacing typos.
+fn warn_unknown_config_keys(path: &Path, value: &toml::Value) {
+    for key in unknown_config_keys(value) {
+        eprintln!(
+            "warning: {}: unknown config key '{key}' (ignored)",
+            path.display()
+        );
+    }
 }
 
 /// Fail fast on illegal string-enum fields so a typo never becomes a silent
@@ -682,6 +739,9 @@ fn validate_config_enums(cfg: &Config, path: &Path) -> Result<(), String> {
     }
     if let Some(ref s) = cfg.scope {
         DiffScope::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref s) = cfg.strategy {
+        DiffStrategy::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
     }
     if let Some(ref s) = cfg.export_on_quit {
         ExportOnQuit::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
@@ -994,11 +1054,78 @@ theme = \"dark\"
     }
 
     #[test]
-    fn parse_unknown_field_is_ignored() {
-        // Unknown keys shouldn't break parsing (forward-compat).
-        let (dir, _path) = write_tmp_config("highlight = true\nfuture_field = 42\n");
+    fn parse_unknown_field_is_ignored_but_detected() {
+        // Unknown keys still parse (forward-compat) but are reported as unknown
+        // so typos like `higlight` surface instead of silent no-ops.
+        let text = "highlight = true\nfuture_field = 42\nhiglight = true\n";
+        let value: toml::Value = toml::from_str(text).unwrap();
+        let unknown = unknown_config_keys(&value);
+        assert!(
+            unknown.contains(&"future_field") && unknown.contains(&"higlight"),
+            "expected unknown keys, got: {unknown:?}"
+        );
+        assert!(!unknown.contains(&"highlight"));
+
+        let (dir, _path) = write_tmp_config(text);
+        // Load still succeeds — warning only, not hard error.
         let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.highlight, Some(true));
+    }
+
+    #[test]
+    fn illegal_strategy_returns_error() {
+        let (dir, _path) = write_tmp_config("strategy = \"wat\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("strategy") && err.contains("worktree"),
+            "illegal strategy must name field + allowed values, got: {err}"
+        );
+    }
+
+    #[test]
+    fn strategy_try_parse_accepts_known_values() {
+        assert_eq!(
+            DiffStrategy::try_parse("upstream-ahead").unwrap(),
+            DiffStrategy::UpstreamAhead
+        );
+        assert_eq!(
+            DiffStrategy::try_parse("merge_base").unwrap(),
+            DiffStrategy::MergeBase
+        );
+        assert!(DiffStrategy::try_parse("wat").is_err());
+        assert!(DiffStrategy::parse_str("wat").is_none());
+    }
+
+    #[test]
+    fn known_config_keys_cover_struct_fields() {
+        // Guard: adding a Config field without updating KNOWN_CONFIG_KEYS
+        // would re-introduce silent typo drops for that field's name only
+        // when mis-typed — but more importantly, a real field not listed
+        // would be warned as "unknown". Keep the lists in lockstep.
+        let text = "\
+staged = true
+scope = \"worktree\"
+strategy = \"worktree\"
+base = \"origin/main\"
+highlight = true
+watch = false
+line_numbers = true
+include_untracked = false
+theme = \"dark\"
+layout = \"unified\"
+wrap = false
+export_on_quit = \"none\"
+vcs = \"auto\"
+persist_review = true
+auto_forward = true
+";
+        let value: toml::Value = toml::from_str(text).unwrap();
+        assert!(
+            unknown_config_keys(&value).is_empty(),
+            "every Config field must be in KNOWN_CONFIG_KEYS"
+        );
+        let cfg: Config = value.try_into().unwrap();
+        assert_eq!(cfg.strategy.as_deref(), Some("worktree"));
     }
 
     #[test]
