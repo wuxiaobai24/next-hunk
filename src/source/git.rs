@@ -201,7 +201,7 @@ pub fn git_file_diff(repo: &Repository, old_path: &Path, new_path: &Path) -> Res
 /// Prefer [`git_diff_produced`] when the caller needs file-rail origin marks
 /// (`S` / `M` / `?`).
 ///
-/// `pathspecs` filters by path prefix (best-effort); empty means all.
+/// `pathspecs` filters with git-style pathspecs (globs + magic); empty means all.
 /// `include_untracked` includes untracked files in the worktree half (and in
 /// working-set mode).
 pub fn git_diff(
@@ -1278,10 +1278,49 @@ fn is_tool_state_path(path: &str) -> bool {
         .any(|c| c.as_os_str() == ".next-hunk")
 }
 
+/// Match `path` (repo-relative) against git pathspecs.
+///
+/// Uses [`gix::pathspec`] so wildcards (`*`, `?`, `[…]`), `**`, and magic
+/// signatures (`:(glob)`, `:(exclude)`, `:/`, …) behave like `git diff
+/// <pathspec>`. Empty `pathspecs` matches everything.
 fn pathspec_match(path: &BStr, pathspecs: &[String]) -> bool {
     if pathspecs.is_empty() {
         return true;
     }
+    match pathspec_search(pathspecs) {
+        Ok(mut search) => pathspec_is_included(&mut search, path),
+        // Unparseable pathspec → fall back to the historical literal/prefix
+        // match so we never silently drop every file when a single bad spec
+        // is present alongside valid ones.
+        Err(_) => pathspec_match_literal(path, pathspecs),
+    }
+}
+
+/// Build a [`gix::pathspec::Search`] from CLI pathspec strings.
+fn pathspec_search(pathspecs: &[String]) -> Result<gix::pathspec::Search, PathspecBuildError> {
+    let patterns = pathspecs
+        .iter()
+        .map(|spec| {
+            gix::pathspec::parse(spec.as_bytes(), gix::pathspec::Defaults::default())
+                .map_err(PathspecBuildError::Parse)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    // `prefix=None`, `root=""`: pathspecs are already repo-relative as given
+    // on the CLI (same contract as before). No CWD re-rooting.
+    gix::pathspec::Search::from_specs(patterns, None, Path::new(""))
+        .map_err(PathspecBuildError::Normalize)
+}
+
+fn pathspec_is_included(search: &mut gix::pathspec::Search, path: &BStr) -> bool {
+    // Attribute filters (`:(attr:…)`) are not evaluated here — we never load
+    // gitattributes for pathspec matching. Specs without attrs still match.
+    search
+        .pattern_matching_relative_path(path, Some(false), &mut |_, _, _, _| false)
+        .is_some_and(|m| !m.is_excluded())
+}
+
+/// Pre-glob literal / directory-prefix matching (the original behaviour).
+fn pathspec_match_literal(path: &BStr, pathspecs: &[String]) -> bool {
     let p = path.to_str_lossy();
     pathspecs.iter().any(|spec| {
         p == *spec
@@ -1289,6 +1328,23 @@ fn pathspec_match(path: &BStr, pathspecs: &[String]) -> bool {
             || Path::new(p.as_ref()).starts_with(spec)
     })
 }
+
+#[derive(Debug)]
+enum PathspecBuildError {
+    Parse(gix::pathspec::parse::Error),
+    Normalize(gix::pathspec::normalize::Error),
+}
+
+impl std::fmt::Display for PathspecBuildError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathspecBuildError::Parse(e) => write!(f, "parse pathspec: {e}"),
+            PathspecBuildError::Normalize(e) => write!(f, "normalize pathspec: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for PathspecBuildError {}
 
 #[cfg(test)]
 mod tool_state_path_tests {
@@ -1303,5 +1359,81 @@ mod tool_state_path_tests {
         assert!(!is_tool_state_path("next-hunk/config.toml"));
         assert!(!is_tool_state_path("src/main.rs"));
         assert!(!is_tool_state_path(".next-hunk-backup"));
+    }
+}
+
+#[cfg(test)]
+mod pathspec_match_tests {
+    use gix::bstr::ByteSlice;
+
+    use super::pathspec_match;
+
+    fn matches(path: &str, specs: &[&str]) -> bool {
+        let owned: Vec<String> = specs.iter().map(|s| (*s).to_string()).collect();
+        pathspec_match(path.as_bytes().as_bstr(), &owned)
+    }
+
+    #[test]
+    fn empty_pathspecs_match_everything() {
+        assert!(matches("a.rs", &[]));
+        assert!(matches("src/lib.rs", &[]));
+    }
+
+    #[test]
+    fn literal_path_still_matches() {
+        assert!(matches("b.rs", &["b.rs"]));
+        assert!(!matches("a.py", &["b.rs"]));
+    }
+
+    #[test]
+    fn directory_prefix_still_matches() {
+        assert!(matches("src/lib.rs", &["src/"]));
+        assert!(matches("src/lib.rs", &["src"]));
+        assert!(!matches("README.md", &["src/"]));
+    }
+
+    #[test]
+    fn shell_glob_star_matches_any_depth() {
+        // Default git pathspec mode (ShellGlob): `*` matches `/`, so `*.rs`
+        // hits both top-level and nested files — same as `git diff -- '*.rs'`.
+        assert!(matches("b.rs", &["*.rs"]));
+        assert!(matches("src/b.rs", &["*.rs"]));
+        assert!(!matches("a.py", &["*.rs"]));
+        assert!(!matches("src/a.py", &["*.rs"]));
+    }
+
+    #[test]
+    fn question_mark_and_char_class() {
+        assert!(matches("b.rs", &["?.rs"]));
+        assert!(!matches("bb.rs", &["?.rs"]));
+        // `[rp]` is a single-character class; `*.[rp]s` matches `.rs` and `.ps`.
+        assert!(matches("a.rs", &["*.[rp]s"]));
+        assert!(matches("a.ps", &["*.[rp]s"]));
+        assert!(!matches("a.py", &["*.[rp]s"]));
+    }
+
+    #[test]
+    fn path_aware_glob_magic_does_not_cross_slash() {
+        // `:(glob)*.rs` is FNM_PATHNAME-style: only one path component.
+        assert!(matches("b.rs", &[":(glob)*.rs"]));
+        assert!(!matches("src/b.rs", &[":(glob)*.rs"]));
+        assert!(matches("src/b.rs", &[":(glob)src/*.rs"]));
+    }
+
+    #[test]
+    fn double_star_and_basename_patterns() {
+        assert!(matches("src/b.rs", &["**/*.rs"]));
+        assert!(matches("src/nested/b.rs", &["**/b.rs"]));
+        assert!(!matches("src/a.py", &["**/*.rs"]));
+    }
+
+    #[test]
+    fn exclude_magic() {
+        // Positive + exclude: keep *.rs except under generated/
+        assert!(matches("src/lib.rs", &["*.rs", ":!generated/*"]));
+        assert!(!matches(
+            "generated/out.rs",
+            &["*.rs", ":(exclude)generated/*"]
+        ));
     }
 }

@@ -214,6 +214,15 @@ pub enum FocusTarget {
     FileHunk(String, usize),
 }
 
+impl FocusTarget {
+    /// Repo-relative path component shared by every focus variant.
+    pub fn path(&self) -> &str {
+        match self {
+            FocusTarget::File(p) | FocusTarget::FileLine(p, _) | FocusTarget::FileHunk(p, _) => p,
+        }
+    }
+}
+
 /// `--note` target: where an agent annotation attaches.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NoteTarget {

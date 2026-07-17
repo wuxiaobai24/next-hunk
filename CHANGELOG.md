@@ -17,11 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when export-on-quit will carry them in the report. Alone (no export),
   `--note` still errors on non-TTY rather than being dropped.
 - **Docs** — README + agent skill state the non-TTY export contract explicitly.
+- **`navigate` / `comment add` reject unknown paths** (WXB-33) — both commands
+  now validate the target file against the live review's file set and return
+  `error: '<path>' is not in the current review (files: …)` instead of a silent
+  `ok`. Stops agent scripts from treating a bad path as confirmation that the
+  human TUI moved or stored a comment.
 - **`pager` / parse: non-empty non-diff input no longer reports `empty diff input`**
   (WXB-34). Zero-length input still yields `empty diff input`; non-empty input
   with no recognisable `@@` hunk now says
   `no valid '@@ ... @@' hunk header found` (with the first line as a debug
   hint). Genuine empty stdin in pager mode remains exit 0 silent no-op.
+- **`diff` pathspecs honor git-style globs** (WXB-29) — `next-hunk diff '*.rs'`,
+  `b.*`, `src/*.rs`, `**/*.rs`, and magic signatures (`:(glob)`, `:(exclude)`,
+  …) now match the same files as `git diff <pathspec>`. Previously only
+  literal paths / directory prefixes worked; wildcards were compared as
+  literal filenames and silently returned an empty diff. Matching is
+  implemented via `gix::pathspec` (ShellGlob by default, same as git).
 
 ### Added — Jujutsu (jj) first-class support
 - **VCS auto-detect** — walk for `.jj` / `.git`; `vcs = "auto" | "git" | "jj"`
