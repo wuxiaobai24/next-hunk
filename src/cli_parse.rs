@@ -140,8 +140,11 @@ pub fn runtime_socket_hash(repo_root: &Path) -> String {
 /// `$XDG_RUNTIME_DIR/next-hunk-<hash>.sock` (fallback `/tmp/next-hunk-<hash>.sock`
 /// when `XDG_RUNTIME_DIR` is unset).
 ///
-/// `<hash>` is a stable `DefaultHasher` of the canonical worktree root — good
-/// enough to disambiguate worktrees without pulling in a hashing crate.
+/// `<hash>` is a stable `DefaultHasher` of the **canonical** worktree root
+/// (via [`runtime_socket_hash`]) — good enough to disambiguate worktrees
+/// without pulling in a hashing crate. Canonicalization matters on macOS
+/// where `/var/folders` vs `/private/var/folders` would otherwise break
+/// auto-forward socket matching for headless `diff --focus`.
 pub fn runtime_socket_path(repo_root: &Path) -> PathBuf {
     let hash = runtime_socket_hash(repo_root);
     let name = format!("next-hunk-{hash}.sock");
@@ -386,6 +389,26 @@ mod tests {
             name.starts_with("next-hunk-") && name.ends_with(".sock"),
             "expected next-hunk-*.sock filename, got {name}"
         );
+    }
+
+    #[test]
+    fn socket_path_collapses_symlink_aliases() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Existing dir: raw path and its canonicalize() form must map to the
+        // same socket (macOS /var ↔ /private/var, and any symlink worktree).
+        let dir = std::env::temp_dir().join(format!(
+            "nh-sock-canon-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let raw = runtime_socket_path(&dir);
+        let canon = runtime_socket_path(&dir.canonicalize().expect("canonicalize temp dir"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(raw, canon, "socket path must be stable under path aliasing");
     }
 
     #[cfg(all(feature = "serve", unix))]

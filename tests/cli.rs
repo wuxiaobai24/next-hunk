@@ -695,3 +695,204 @@ fn inspect_json_empty_is_zeroed_object() {
         "empty json should have empty files: {stdout}"
     );
 }
+
+// ─── auto-forward (serve live → diff --focus becomes push) ───────────────────
+
+/// Tiny git repo with one worktree change, for auto-forward CLI tests.
+#[cfg(all(unix, feature = "serve"))]
+fn make_git_repo_with_change() -> Option<std::path::PathBuf> {
+    let git_ok = Command::new("git")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !git_ok {
+        eprintln!("warning: git binary not found; skipping auto-forward test");
+        return None;
+    }
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "nh-autofwd-{}-{}-{}",
+        std::process::id(),
+        n,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .expect("git");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q"]);
+    git(&["config", "user.email", "test@next-hunk"]);
+    git(&["config", "user.name", "Test"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(dir.join("src.rs"), "fn a() {}\n").unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "init"]);
+    std::fs::write(dir.join("src.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+    Some(dir)
+}
+
+#[cfg(all(unix, feature = "serve"))]
+#[test]
+fn diff_focus_forwards_to_live_serve_without_tty() {
+    // WXB-9: agent runs `diff --focus` headless while human has serve open →
+    // auto-forward as push (no second TUI, no TTY required).
+    let Some(dir) = make_git_repo_with_change() else {
+        return;
+    };
+    let _guard = DirGuard(dir.clone());
+    let repo = next_hunk::source::find_repo(&dir).expect("find_repo");
+    let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
+
+    let listener = next_hunk::tui::server::ServerListener::spawn(socket.clone())
+        .expect("spawn mock serve listener");
+    let got_push = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let got_push_t = got_push.clone();
+    let drainer = std::thread::spawn(move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let reqs = listener.drain();
+            for r in reqs {
+                if matches!(
+                    r.command,
+                    next_hunk::tui::server::ServerCommand::Push { .. }
+                ) {
+                    got_push_t.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                let _ = r.reply.send(next_hunk::tui::server::ServerReply::Ok);
+            }
+            if got_push_t.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    });
+
+    let out = Command::new(bin())
+        .args([
+            "diff",
+            "--focus",
+            "src.rs",
+            "--note",
+            "banner=please review",
+        ])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run next-hunk diff");
+
+    assert!(
+        out.status.success(),
+        "diff --focus with live serve should succeed headless: stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("forwarded") || stdout.contains("pushed"),
+        "expected forward confirmation, got: {stdout}"
+    );
+    drainer.join().unwrap();
+    assert!(
+        got_push.load(std::sync::atomic::Ordering::SeqCst),
+        "mock serve should have received a Push command"
+    );
+}
+
+#[cfg(all(unix, feature = "serve"))]
+#[test]
+fn diff_focus_no_forward_keeps_non_tty_error() {
+    // --no-forward disables auto-forward; non-TTY + --focus must still error
+    // (same as when no serve is running).
+    let Some(dir) = make_git_repo_with_change() else {
+        return;
+    };
+    let _guard = DirGuard(dir.clone());
+    let repo = next_hunk::source::find_repo(&dir).expect("find_repo");
+    let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
+    // Live serve present, but --no-forward must not use it.
+    let listener = next_hunk::tui::server::ServerListener::spawn(socket).expect("spawn mock serve");
+    let drainer = std::thread::spawn(move || {
+        // Drain so a mistaken push does not hang the client.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            for r in listener.drain() {
+                let _ = r.reply.send(next_hunk::tui::server::ServerReply::Ok);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    });
+
+    let out = Command::new(bin())
+        .args(["diff", "--no-forward", "--focus", "src.rs"])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run next-hunk diff");
+
+    assert!(
+        !out.status.success(),
+        "--no-forward + non-tty --focus should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive") || stderr.contains("tty"),
+        "expected TTY error, got: {stderr}"
+    );
+    let _ = drainer.join();
+}
+
+#[cfg(all(unix, feature = "serve"))]
+#[test]
+fn diff_focus_without_serve_errors_non_tty() {
+    // No live serve → same headless failure as before (one-shot needs TTY).
+    let Some(dir) = make_git_repo_with_change() else {
+        return;
+    };
+    let _guard = DirGuard(dir.clone());
+    let out = Command::new(bin())
+        .args(["diff", "--focus", "src.rs"])
+        .current_dir(&dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run next-hunk diff");
+    assert!(
+        !out.status.success(),
+        "no serve + non-tty --focus should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("interactive") || stderr.contains("tty"),
+        "expected TTY error, got: {stderr}"
+    );
+}
+
+#[cfg(all(unix, feature = "serve"))]
+struct DirGuard(std::path::PathBuf);
+#[cfg(all(unix, feature = "serve"))]
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}

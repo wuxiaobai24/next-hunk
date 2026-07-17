@@ -280,6 +280,10 @@ pub struct Config {
     /// Persist per-hunk accept/reject decisions across sessions (default true).
     /// Stored under `.git/next-hunk/decisions-<scope>.json`.
     pub persist_review: Option<bool>,
+    /// When a live `serve` exists for this repo, `diff --focus` / `--note`
+    /// forwards as `push` instead of opening a second TUI. Default: true.
+    /// Set `false` (or pass `--no-forward`) to always open a one-shot TUI.
+    pub auto_forward: Option<bool>,
 }
 
 impl Config {
@@ -327,6 +331,9 @@ impl Config {
         }
         if other.persist_review.is_some() {
             self.persist_review = other.persist_review;
+        }
+        if other.auto_forward.is_some() {
+            self.auto_forward = other.auto_forward;
         }
         self
     }
@@ -386,11 +393,14 @@ pub struct ResolvedConfig {
     pub vcs: VcsPreference,
     /// Persist per-hunk decisions across sessions. ON by default.
     pub persist_review: bool,
+    /// When true (default), `diff --focus`/`--note` forwards into a live serve.
+    pub auto_forward: bool,
 }
 
 impl Default for ResolvedConfig {
     fn default() -> Self {
         // Defaults: highlight on (matches existing TUI behavior), worktree/watch off.
+        // auto_forward on so agents need not list/push when a human already has serve.
         Self {
             scope: DiffScope::Worktree,
             request: DiffRequest::Local(DiffScope::Worktree),
@@ -404,6 +414,7 @@ impl Default for ResolvedConfig {
             export_on_quit: ExportOnQuit::None,
             vcs: VcsPreference::Auto,
             persist_review: true,
+            auto_forward: true,
         }
     }
 }
@@ -439,6 +450,8 @@ pub struct CliFlags {
     pub vcs: Option<VcsPreference>,
     /// `--no-persist` → `Some(false)`; absent → `None` (use config/default).
     pub persist_review: Option<bool>,
+    /// `--no-forward` → `Some(false)`; absent → `None` (use config/default).
+    pub auto_forward: Option<bool>,
 }
 
 impl ResolvedConfig {
@@ -494,6 +507,10 @@ impl ResolvedConfig {
                 .persist_review
                 .or(cfg.persist_review)
                 .unwrap_or(d.persist_review),
+            auto_forward: cli
+                .auto_forward
+                .or(cfg.auto_forward)
+                .unwrap_or(d.auto_forward),
         })
     }
 
@@ -807,6 +824,31 @@ mod tests {
         assert!(r.highlight); // default on
         assert!(!r.watch);
         assert!(r.line_numbers); // default on
+        assert!(r.auto_forward); // default on
+    }
+
+    #[test]
+    fn resolve_auto_forward_false_from_config() {
+        let cfg = Config {
+            auto_forward: Some(false),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
+        assert!(!r.auto_forward);
+    }
+
+    #[test]
+    fn resolve_no_forward_cli_overrides_config() {
+        let cfg = Config {
+            auto_forward: Some(true),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            auto_forward: Some(false), // --no-forward
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert!(!r.auto_forward);
     }
 
     #[test]

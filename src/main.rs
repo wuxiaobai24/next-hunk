@@ -99,6 +99,15 @@ enum Commands {
         /// `persist_review` in config; default is on).
         #[arg(long)]
         no_persist: bool,
+        /// Do not forward into a live `serve` session.
+        ///
+        /// By default, when a `next-hunk serve` is already running for this
+        /// worktree and `--focus` / `--note` is set (without `--select` /
+        /// `--watch`), `diff` pushes into that session instead of opening a
+        /// second TUI. Pass this flag (or set `auto_forward = false` in
+        /// config) to always open a one-shot review.
+        #[arg(long)]
+        no_forward: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -414,6 +423,7 @@ fn run() -> Result<()> {
         layout: None,
         vcs: None,
         no_persist: false,
+        no_forward: false,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -432,13 +442,27 @@ fn run() -> Result<()> {
             layout,
             vcs,
             no_persist,
+            no_forward,
             extra,
         } => {
-            // Parse the agent-bridge specs and check the interactive-tty
-            // requirement BEFORE touching the repo, so a bad spec or a
-            // non-interactive agent-bridge flag fails fast with a clear
-            // message (not a git error).
-            let options = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
+            // --select never auto-forwards (needs its own interactive gate).
+            // Fail the TTY requirement before touching git so agents get a
+            // clear signal even outside a repo.
+            if select && !std::io::stdout().is_terminal() {
+                bail!("--select requires an interactive terminal (stdout is not a tty)");
+            }
+
+            // Parse focus/note syntax early (bad specs fail before git/socket).
+            // TTY gate for focus/note is deferred until after the auto-forward
+            // attempt: a live serve can accept them headless.
+            let focus_target = focus
+                .as_deref()
+                .map(next_hunk::cli_parse::parse_focus)
+                .transpose()?;
+            let notes = note
+                .iter()
+                .map(|s| next_hunk::cli_parse::parse_note(s))
+                .collect::<Result<Vec<_>>>()?;
 
             let cwd = std::env::current_dir()?;
 
@@ -457,15 +481,42 @@ fn run() -> Result<()> {
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
                     layout,
-                    export_on_quit: options.export_on_quit_override,
+                    export_on_quit,
                     vcs,
                     persist_review: if no_persist { Some(false) } else { None },
+                    auto_forward: if no_forward { Some(false) } else { None },
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
 
             let ws = detect_workspace(&cwd, resolved.vcs)?;
             validate_and_finalize_request(&mut resolved, &ws, strategy)?;
+
+            // Auto-forward: when a live serve exists and the agent is only
+            // pointing/annotating (focus/note, no select/watch), push into
+            // that TUI instead of opening a second one-shot review. Works
+            // headless (no TTY required) so skills can prefer `diff --focus`.
+            if try_auto_forward_diff(
+                &ws.root,
+                resolved.auto_forward,
+                select,
+                watch,
+                &focus_target,
+                &notes,
+            )? {
+                return Ok(());
+            }
+
+            // No live serve (or forward disabled): focus/note/select need a TTY
+            // for a one-shot TUI — never silently drop agent annotations.
+            if !std::io::stdout().is_terminal() {
+                if focus_target.is_some() {
+                    bail!("--focus requires an interactive terminal (stdout is not a tty)");
+                }
+                if !notes.is_empty() {
+                    bail!("--note requires an interactive terminal (stdout is not a tty)");
+                }
+            }
 
             if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
                 eprintln!(
@@ -495,9 +546,9 @@ fn run() -> Result<()> {
                 resolved.layout,
                 Some(ws.root.clone()),
                 ReviewOptions {
-                    focus: options.focus,
-                    notes: options.notes,
-                    select_mode: options.select,
+                    focus: focus_target,
+                    notes,
+                    select_mode: select,
                     export_on_quit: resolved.export_on_quit,
                     persist_review: resolved.persist_review,
                     persist_scope: resolved.scope.as_str().to_string(),
@@ -824,6 +875,7 @@ fn parse_agent_bridge_options(
 
     // Interactive agent-bridge flags cannot run headless. Fail fast so agents
     // never see an exit-0 inspect summary that discarded their annotations.
+    // (Exception: `diff` auto-forward into a live serve, handled before this.)
     if !std::io::stdout().is_terminal() {
         if select {
             bail!("--select requires an interactive terminal (stdout is not a tty)");
@@ -842,6 +894,75 @@ fn parse_agent_bridge_options(
         select,
         export_on_quit_override: export_on_quit,
     })
+}
+
+/// When a live `serve` owns this repo, turn `diff --focus`/`--note` into a
+/// `push` instead of opening another TUI.
+///
+/// Returns `Ok(true)` if the command was fully handled (forwarded). Returns
+/// `Ok(false)` when the caller should continue with the normal one-shot path
+/// (no live serve, disabled, or nothing to push).
+///
+/// Eligibility (all must hold):
+/// - `auto_forward` is enabled (config default true; off via `--no-forward`
+///   or `auto_forward = false`)
+/// - not `--select` / not `--watch` (those need their own interactive session)
+/// - at least one of `--focus` / `--note` is present
+/// - a live serve socket exists for `repo`
+#[cfg(all(feature = "serve", unix))]
+fn try_auto_forward_diff(
+    repo: &std::path::Path,
+    auto_forward: bool,
+    select: bool,
+    watch: bool,
+    focus: &Option<next_hunk::tui::app::FocusTarget>,
+    notes: &[next_hunk::tui::app::Note],
+) -> Result<bool> {
+    if !auto_forward || select || watch {
+        return Ok(false);
+    }
+    if focus.is_none() && notes.is_empty() {
+        return Ok(false);
+    }
+
+    let socket = next_hunk::cli_parse::runtime_socket_path(repo);
+    let command = next_hunk::tui::server::ServerCommand::Push {
+        focus: focus.clone(),
+        notes: notes.to_vec(),
+    };
+    // No separate connect probe: a bare connect without a command makes the
+    // serve accept thread log a parse EOF. `send_command` is the single
+    // round-trip; connect failure means no live serve → one-shot path.
+    match next_hunk::tui::server::send_command(&socket, &command) {
+        Ok(next_hunk::tui::server::ServerReply::Ok) => {
+            println!("ok: forwarded to running serve");
+            Ok(true)
+        }
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error while forwarding: {message}")
+        }
+        Ok(other) => bail!("unexpected server reply while forwarding: {other:?}"),
+        Err(e) => {
+            let msg = format!("{e:#}");
+            if msg.contains("connect to server socket") {
+                Ok(false)
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn try_auto_forward_diff(
+    _repo: &std::path::Path,
+    _auto_forward: bool,
+    _select: bool,
+    _watch: bool,
+    _focus: &Option<next_hunk::tui::app::FocusTarget>,
+    _notes: &[next_hunk::tui::app::Note],
+) -> Result<bool> {
+    Ok(false)
 }
 
 /// Build the live-reload closure for `--watch`: re-runs the same VCS diff.
@@ -964,6 +1085,7 @@ fn run_serve(
             export_on_quit: bridge.export_on_quit_override,
             vcs,
             persist_review: if no_persist { Some(false) } else { None },
+            auto_forward: None,
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
