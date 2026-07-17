@@ -129,6 +129,41 @@ fn no_subcommand_defaults_to_diff() {
 }
 
 #[test]
+fn list_all_worktrees_outside_repo_matches_diff_phrasing() {
+    // Outside a workspace, repo-aware commands share one clean message.
+    // `list --all-worktrees` must not leak gix discovery text.
+    let tmp = std::env::temp_dir();
+    let list = Command::new(bin())
+        .args(["list", "--all-worktrees"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk list");
+    let diff = Command::new(bin())
+        .args(["diff"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk diff");
+    assert!(
+        !list.status.success(),
+        "list --all-worktrees should fail outside a repo"
+    );
+    let list_err = String::from_utf8_lossy(&list.stderr);
+    let diff_err = String::from_utf8_lossy(&diff.stderr);
+    assert!(
+        list_err.contains("not a git or jj workspace"),
+        "list --all-worktrees should use the shared workspace message, stderr: {list_err}"
+    );
+    assert!(
+        !list_err.contains("Could not find a git repository"),
+        "list --all-worktrees must not leak gix phrasing, stderr: {list_err}"
+    );
+    assert!(
+        diff_err.contains("not a git or jj workspace"),
+        "diff baseline should use the shared message, stderr: {diff_err}"
+    );
+}
+
+#[test]
 fn watch_flag_is_recognized() {
     // `--watch` must be a valid flag (clap parses it). In a non-git dir it
     // should fail with the repo error, not an "unknown argument" error —

@@ -1226,7 +1226,24 @@ fn run_list_all_worktrees(
     current_hash: Option<&str>,
 ) -> Result<()> {
     let cwd = std::env::current_dir()?;
-    let worktree_roots = next_hunk::source::list_repo_worktree_roots(&cwd)?;
+    // Same VCS discovery as diff/inspect so missing-repo errors match
+    // ("not a git or jj workspace") and pure jj workspaces are accepted.
+    let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let pref = cfg
+        .vcs
+        .as_deref()
+        .map(VcsPreference::parse_str)
+        .unwrap_or_default();
+    let ws = detect_workspace(&cwd, pref)?;
+    let worktree_roots = match ws.kind {
+        VcsKind::Git => next_hunk::source::list_repo_worktree_roots(&ws.root)?,
+        VcsKind::Jj => {
+            // Pure jj has no linked git worktrees; the workspace root is the
+            // only session key (matches serve socket hashing).
+            let root = std::fs::canonicalize(&ws.root).unwrap_or_else(|_| ws.root.clone());
+            vec![root]
+        }
+    };
 
     // Expected socket hash → worktree root for this logical repo.
     let mut expected: Vec<(String, PathBuf)> = worktree_roots
