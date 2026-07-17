@@ -283,7 +283,7 @@ Fields:
 | `include_untracked` | bool | `false` | include untracked files in worktree / working-set diff (`--include-untracked`) |
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
-| `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
+| `export_on_quit` | string | `"none"` (pager/diff); **serve defaults to `"json"`** when unset | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`). Serve uses `json` unless config/CLI overrides so agents get comments+notes; pager stays `none` so `core.pager` is clean |
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
 | `persist_review` | bool | `true` | save accept/reject decisions under `.git/next-hunk/decisions-<scope>.json` and restore on reopen (`--no-persist` disables) |
 | `auto_forward` | bool | `true` | when a live `serve` exists, `diff --focus`/`--note` push into it (`--no-forward` disables) |
@@ -353,12 +353,22 @@ next-hunk diff --export-on-quit markdown
 
 # Both formats
 next-hunk diff --select --export-on-quit both
+
+# Serve: full JSON on quit by default (no flag needed)
+next-hunk serve --all --include-untracked
+
+# Recover the last full report if you missed the human's terminal stdout:
+next-hunk last-export
 ```
 
-Default is `none` so using next-hunk as `git core.pager` does not pollute
-stdout. With `export_on_quit = "json"|"markdown"|"both"`, quit emits the report
-even without `--select` (notes/comments included; hunks stay `undecided` until
-decided in select/serve).
+Pager / plain `diff` default to `none` so `git core.pager` does not pollute
+stdout. **`serve` defaults to `json`** when unset so quit always yields a
+parseable full report (decisions + comments + notes + banner, with
+`schema_version`). Explicit config/CLI `none` still wins. With
+`export_on_quit = "json"|"markdown"|"both"`, quit emits the report even without
+`--select` (notes/comments included; hunks stay `undecided` until decided in
+select/serve). Select/export quits also cache the full report under
+`.git/next-hunk/last-export.json` for `next-hunk last-export`.
 
 **Non-TTY / agent contract:** when stdout is not a terminal (piped, CI, agent
 tool call), there is no TUI to quit. With `--export-on-quit json|markdown|both`
@@ -383,7 +393,7 @@ persistent TUI and read the human's decisions in real time, without
 re-launching:
 
 ```bash
-# Human opens the persistent review TUI (runs with select mode on):
+# Human opens the persistent review TUI (select on; quit → full JSON export):
 next-hunk serve
 
 # Agent pushes a new focus/note into the live TUI (returns immediately):
@@ -392,6 +402,10 @@ next-hunk push --focus src/auth.rs:88 --note banner="please check the token expi
 # Agent reads the human's accumulated decisions (one JSON line, returns immediately):
 next-hunk decision
 # {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+
+# After the human quits serve (stdout was on their terminal), recover the full report:
+next-hunk last-export
+# {"schema_version":1,"accepted":[...],"rejected":[...],"undecided":[...],"comments":[...],...}
 ```
 
 `serve` binds a Unix socket derived from the **worktree root path** (not the
@@ -414,7 +428,8 @@ TTY so agents can prefer the CLI. Disable with `--no-forward` or
 
 Requires the `serve` feature (on by default) and a Unix OS; on other builds the
 subcommands report that they're unavailable. The `decision` output matches the
-`--select` quit shape, so an agent parses both identically.
+`--select` quit shape (three buckets only), so an agent parses both identically.
+Full post-quit reports (with comments) use `export_on_quit` / `last-export`.
 
 ## Testing & benchmarks
 

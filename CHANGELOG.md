@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Post-review agent feedback loop (WXB-20)
+- **`serve` defaults to `export_on_quit=json`** when neither CLI nor config sets
+  a value, so quitting a serve session always emits a full agent-parseable
+  report (decisions + comments + notes + banner). Pager / plain `diff` still
+  default to `none` so `git core.pager` does not pollute stdout. Explicit
+  config/CLI `none` still wins on serve.
+- **`schema_version` on full export JSON** — quit / `last-export` documents
+  include `"schema_version": 1`. Legacy `--select` (export none) and
+  `decision` remain three-bucket only (backward compatible).
+- **`next-hunk last-export`** — prints the cached full report from the last
+  select/export quit (`.git/next-hunk/last-export.json`, XDG fallback). Lets
+  agents recover comments when they miss the human's terminal stdout.
+- **Skill "After review" playbook** — parse export → process only
+  rejected/commented files → re-present with `diff --focus`. README (EN/ZH)
+  document serve default + last-export.
+
 ### Added — TUI visual range select + line/range comments (WXB-19)
 - **Visual range select** — press `v` to enter select mode at the top code row
   of the viewport; `j`/`k` (and half-page `J`/`K`) extend the selection;

@@ -244,7 +244,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `include_untracked` | bool | `false` | 在 worktree / working-set diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
-| `export_on_quit` | string | `"none"` | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`）。非 TTY 时立即输出报告（全部 `undecided` + notes），不回退到 inspect 摘要 |
+| `export_on_quit` | string | `"none"`（pager/diff）；**serve 未设置时默认 `"json"`** | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`）。serve 默认 json 以便 agent 拿到 comments+notes；pager 保持 none 以免污染 `core.pager`。非 TTY 时立即输出报告（全部 `undecided` + notes），不回退到 inspect 摘要 |
 | `vcs` | string | `"auto"` | `"auto"`（有 `.jj` 时优先 jj）/ `"git"` / `"jj"`，见 [`docs/VCS.md`](./docs/VCS.md) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
@@ -304,9 +304,12 @@ next-hunk push --focus src/auth.rs:88 --note banner="请检查 token 过期"
 # agent 读取人累积的逐 hunk 决策（一行 JSON，立即返回）：
 next-hunk decision
 # {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+
+# 人类在自己的终端 quit 后，agent 可从缓存取回完整报告（含 comments）：
+next-hunk last-export
 ```
 
-`serve` 绑定一个由 **worktree 根路径**（不是共享的 `.git` common dir）派生的 Unix socket，所以 `push`/`decision` 在同一 worktree 任意位置运行都能自动找到它 —— 无需 `--socket` 参数。每个 linked `git worktree` 有独立 session，可并行 `serve` 而互不抢 socket。
+`serve` 绑定一个由 **worktree 根路径**（不是共享的 `.git` common dir）派生的 Unix socket，所以 `push`/`decision` 在同一 worktree 任意位置运行都能自动找到它 —— 无需 `--socket` 参数。每个 linked `git worktree` 有独立 session，可并行 `serve` 而互不抢 socket。`serve` 退出默认导出完整 JSON（`export_on_quit=json`）；pager / 普通 `diff` 仍默认 `none`。
 
 ```bash
 # 发现存活 session（repo= 是绝对 worktree 根路径）：

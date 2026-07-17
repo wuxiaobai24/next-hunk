@@ -385,11 +385,27 @@ pub struct Selections {
     pub undecided: Vec<String>,
 }
 
+/// Schema version for the full quit / `last-export` JSON document.
+///
+/// Bump when adding incompatible fields. Agents should tolerate unknown
+/// extra keys; older documents without this field deserialize as `1`.
+pub const REVIEW_REPORT_SCHEMA_VERSION: u32 = 1;
+
+fn default_schema_version() -> u32 {
+    REVIEW_REPORT_SCHEMA_VERSION
+}
+
 /// Full quit-time report for agents: decisions (same shape as [`Selections`])
 /// plus comments and notes. Extra fields use `skip_serializing_if` so a pure
-/// `--select` consumer still sees a compatible JSON object.
+/// `--select` consumer that only reads the three buckets still works.
+///
+/// Stable schema (`schema_version`):
+/// - always: `schema_version`, `accepted`, `rejected`, `undecided`
+/// - optional (omitted when empty): `comments`, `notes`, `banner`
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct ReviewReport {
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     pub accepted: Vec<String>,
     pub rejected: Vec<String>,
     pub undecided: Vec<String>,
@@ -463,6 +479,7 @@ impl ReviewReport {
             }
         }
         Self {
+            schema_version: REVIEW_REPORT_SCHEMA_VERSION,
             accepted: Vec::new(),
             rejected: Vec::new(),
             undecided,
@@ -1121,6 +1138,7 @@ impl App {
         }
 
         ReviewReport {
+            schema_version: REVIEW_REPORT_SCHEMA_VERSION,
             accepted,
             rejected,
             undecided,
@@ -3794,13 +3812,16 @@ diff --git a/b.rs b/b.rs
 
         // Extended JSON still carries the decision keys agents already parse.
         let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"accepted\""));
         assert!(json.contains("\"comments\""));
         assert!(json.contains("auth refactor"));
+        assert_eq!(r.schema_version, REVIEW_REPORT_SCHEMA_VERSION);
 
-        // Empty optional fields omitted when absent.
+        // Empty optional fields omitted when absent; version always present.
         let bare = multi_hunk_app().report();
         let bare_json = serde_json::to_string(&bare).unwrap();
+        assert!(bare_json.contains("\"schema_version\":1"));
         assert!(!bare_json.contains("\"comments\""));
         assert!(!bare_json.contains("\"banner\""));
 
