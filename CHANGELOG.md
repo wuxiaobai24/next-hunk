@@ -20,6 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Docs** — `docs/VCS.md` (behaviour vs git / hunk); PLAN + ARCHITECTURE + skill
   notes. Integration tests skip when `jj` is not on `PATH`.
 
+### Added — Review state persistence (WXB-6)
+- **Persist per-hunk decisions across sessions** — accept/reject (`a`/`r`/`u`)
+  state is saved by default under `.git/next-hunk/decisions-<scope>.json`
+  (scope: `worktree` / `staged` / `working-set`). Reopening the same worktree
+  diff restores decisions; watch/reload still remaps by `path:hN`. Disable with
+  `persist_review = false` in config or `--no-persist` on `diff` / `serve`.
+  Keys match `--select` / `decision` JSON (`accepted` / `rejected` / `undecided`).
+- **Status bar progress** — when review tracking is active:
+  `reviewed 12/40 files · 80/210 hunks` (a file is reviewed when every hunk is
+  decided).
+- **Review hotkeys** — with tracking on (persist or `--select`): `a`/`r`/`u`
+  decide the current hunk; outside `--select`, `A` accepts all hunks in the
+  current file and jumps to the next unreviewed file; `]u`/`[u` next/previous
+  unreviewed hunk; `]U`/`[U` next/previous unreviewed file. `--select` still
+  controls quit JSON and its bulk keys (`A`/`R` rest of file, `Ctrl-A`/`Ctrl-R`
+  all remaining).
+
 ### Added — Multi-worktree session discovery (dogfood P2)
 - **`next-hunk list --all-worktrees`** — filter live sessions to worktrees of
   the **current** repository (main + linked `git worktree` checkouts) and list

@@ -29,6 +29,7 @@ use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
 pub mod input;
+pub mod persist;
 pub mod server;
 pub mod theme;
 pub mod view;
@@ -56,6 +57,10 @@ pub struct ReviewOptions {
     pub select_mode: bool,
     /// `export_on_quit` config / `--export-on-quit`: emit a structured report.
     pub export_on_quit: crate::config::ExportOnQuit,
+    /// Persist/restore per-hunk decisions across sessions (default on).
+    pub persist_review: bool,
+    /// Diff scope label for the store filename (`worktree` / `staged` / …).
+    pub persist_scope: String,
 }
 
 /// The server-listener handle threaded into the run loop, or `()` on builds
@@ -167,18 +172,62 @@ pub fn run_review_tui(
     app.focus_target = options.focus;
     app.notes = options.notes;
     app.select_mode = options.select_mode;
+    // Review tracking: on with --select, or when persistence is enabled so
+    // humans can continue a multi-session review without the agent flag.
+    app.review_tracking = options.persist_review || options.select_mode;
+
+    // Restore decisions from disk (path:hN best-effort) before focus so a
+    // restored session can still honor --focus.
+    let persist_path = if options.persist_review {
+        let scope = if options.persist_scope.is_empty() {
+            "worktree"
+        } else {
+            options.persist_scope.as_str()
+        };
+        persist::resolve_store_path(None, workdir.as_deref(), scope)
+    } else {
+        None
+    };
+    if let Some(ref path) = persist_path {
+        let state = persist::load(path);
+        let keyed = state.as_decisions();
+        if !keyed.is_empty() {
+            app.apply_persisted_decisions(&keyed);
+            // Restored state is not "dirty" until the human changes something.
+            app.decisions_dirty = false;
+        }
+    }
+
     let _ = app.apply_focus();
     // Background highlight worker: viewport misses enqueue; main loop drains.
     let hl_worker = crate::highlight::HighlightWorker::spawn();
     app.hl_job_tx = Some(hl_worker.job_sender());
-    run_loop(
+    let report = run_loop(
         &mut terminal,
         &mut app,
         reloader,
         workdir,
         server.as_ref(),
         Some(hl_worker),
-    )
+    )?;
+
+    // Persist decisions on clean quit when enabled and something changed (or
+    // we have decisions worth storing — also rewrites after reload remap).
+    if let Some(path) = persist_path {
+        if app.decisions_dirty || !app.decisions.is_empty() {
+            let mut state = persist::PersistedState::new(if options.persist_scope.is_empty() {
+                "worktree"
+            } else {
+                options.persist_scope.as_str()
+            });
+            state.set_from_decisions(&app.decisions_by_key());
+            if let Err(e) = persist::save(&path, &state) {
+                eprintln!("warning: cannot save review state {}: {e}", path.display());
+            }
+        }
+    }
+
+    Ok(report)
 }
 
 fn run_loop(

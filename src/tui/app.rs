@@ -176,7 +176,10 @@ pub struct App {
     /// `--select`: when true, `a`/`r`/`?` set per-hunk decisions and the run
     /// loop emits [`Selections`] JSON on quit.
     pub select_mode: bool,
-    /// `--select`: per-hunk decisions keyed by [`HunkId`].
+    /// When true, decision keys (`a`/`r`/`u`/`A`) and review progress are
+    /// active even without `--select`. Default on when persistence is enabled.
+    pub review_tracking: bool,
+    /// `--select` / review tracking: per-hunk decisions keyed by [`HunkId`].
     pub decisions: std::collections::HashMap<HunkId, Decision>,
     /// Set of file indices whose bodies are folded (collapsed).
     pub folded: HashSet<usize>,
@@ -184,6 +187,8 @@ pub struct App {
     pub layout_mode: LayoutMode,
     /// Agent comments (separate from --note annotations).
     pub comments: Vec<CommentEntry>,
+    /// True after any decision mutation this session (drives persist save).
+    pub decisions_dirty: bool,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -249,7 +254,7 @@ pub struct HunkId {
     pub hunk_idx: usize,
 }
 
-/// A per-hunk review decision set by the human in `--select` mode.
+/// A per-hunk review decision set by the human in `--select` / review tracking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Decision {
     /// Not yet reviewed (the default).
@@ -257,6 +262,25 @@ pub enum Decision {
     Undecided,
     Accept,
     Reject,
+}
+
+/// Snapshot of file/hunk review progress for the status bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ReviewProgress {
+    pub files_reviewed: usize,
+    pub files_total: usize,
+    pub hunks_decided: usize,
+    pub hunks_total: usize,
+}
+
+/// Parse a `path:hN` hunk key (1-based). Returns `(path, n)`.
+fn parse_hunk_key(key: &str) -> Option<(&str, usize)> {
+    let (path, rest) = key.rsplit_once(":h")?;
+    let n: usize = rest.parse().ok()?;
+    if path.is_empty() || n == 0 {
+        return None;
+    }
+    Some((path, n))
 }
 
 /// `--select` output: the human's per-hunk decisions, grouped for the agent to
@@ -432,11 +456,139 @@ impl App {
             focus_target: None,
             notes: Vec::new(),
             select_mode: false,
+            review_tracking: false,
             decisions: std::collections::HashMap::new(),
             comments: Vec::new(),
             folded: HashSet::new(),
             layout_mode: LayoutMode::Unified,
+            decisions_dirty: false,
         }
+    }
+
+    /// Whether accept/reject UI and keys are live (`--select` or review tracking).
+    pub fn decisions_active(&self) -> bool {
+        self.select_mode || self.review_tracking
+    }
+
+    /// Whether to paint decision markers on hunk headers.
+    ///
+    /// Always on in select mode; otherwise only when at least one decision has
+    /// been made/restored so casual pager use stays uncluttered.
+    pub fn show_decision_markers(&self) -> bool {
+        self.select_mode || !self.decisions.is_empty()
+    }
+
+    /// Progress counters for the status bar: reviewed files (all hunks decided)
+    /// and decided hunks (accept or reject).
+    pub fn review_progress(&self) -> ReviewProgress {
+        let mut files_total = 0usize;
+        let mut files_reviewed = 0usize;
+        let mut hunks_total = 0usize;
+        let mut hunks_decided = 0usize;
+        for (file_idx, file) in self.review.files.iter().enumerate() {
+            if file.hunks.is_empty() {
+                // Empty-file entries still count as files with nothing to decide.
+                files_total += 1;
+                files_reviewed += 1;
+                continue;
+            }
+            files_total += 1;
+            let mut all_decided = true;
+            for hunk_idx in 0..file.hunks.len() {
+                hunks_total += 1;
+                match self
+                    .decisions
+                    .get(&HunkId { file_idx, hunk_idx })
+                    .copied()
+                    .unwrap_or_default()
+                {
+                    Decision::Undecided => all_decided = false,
+                    Decision::Accept | Decision::Reject => hunks_decided += 1,
+                }
+            }
+            if all_decided {
+                files_reviewed += 1;
+            }
+        }
+        ReviewProgress {
+            files_reviewed,
+            files_total,
+            hunks_decided,
+            hunks_total,
+        }
+    }
+
+    /// Compact progress string: `reviewed 12/40 files · 80/210 hunks`.
+    pub fn review_progress_label(&self) -> String {
+        let p = self.review_progress();
+        format!(
+            "reviewed {}/{} files · {}/{} hunks",
+            p.files_reviewed, p.files_total, p.hunks_decided, p.hunks_total
+        )
+    }
+
+    /// Apply path-keyed decisions (from disk) onto the current review by
+    /// `display_path:hN` (1-based). Unknown paths/hunks are dropped.
+    pub fn apply_persisted_decisions(
+        &mut self,
+        keyed: &std::collections::HashMap<String, Decision>,
+    ) {
+        if keyed.is_empty() {
+            return;
+        }
+        let path_idx: std::collections::HashMap<&str, usize> = self
+            .review
+            .files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (f.display_path.as_str(), i))
+            .collect();
+        let mut applied = 0usize;
+        for (key, decision) in keyed {
+            if matches!(decision, Decision::Undecided) {
+                continue;
+            }
+            let Some((path, hunk_ord)) = parse_hunk_key(key) else {
+                continue;
+            };
+            let Some(&file_idx) = path_idx.get(path) else {
+                continue;
+            };
+            let Some(file) = self.review.files.get(file_idx) else {
+                continue;
+            };
+            if hunk_ord == 0 || hunk_ord > file.hunks.len() {
+                continue;
+            }
+            self.decisions.insert(
+                HunkId {
+                    file_idx,
+                    hunk_idx: hunk_ord - 1,
+                },
+                *decision,
+            );
+            applied += 1;
+        }
+        if applied > 0 {
+            self.review_tracking = true;
+            self.status = format!("restored {applied} decision(s)");
+        }
+    }
+
+    /// Export current decisions as path-keyed map for persistence / agents.
+    pub fn decisions_by_key(&self) -> std::collections::HashMap<String, Decision> {
+        let mut out = std::collections::HashMap::new();
+        for (id, d) in &self.decisions {
+            if matches!(d, Decision::Undecided) {
+                continue;
+            }
+            let Some(file) = self.review.files.get(id.file_idx) else {
+                continue;
+            };
+            let key = format!("{}:h{}", file.display_path, id.hunk_idx + 1);
+            out.insert(key, *d);
+        }
+        out
     }
 
     /// Maximum valid top-row so the last row remains visible.
@@ -517,29 +669,44 @@ impl App {
             .map(|(file_idx, hunk_idx)| HunkId { file_idx, hunk_idx })
     }
 
-    /// Record a decision for the current hunk, then advance to the next hunk so
-    /// the human can keep reviewing. No-op (besides status) when there is no
-    /// hunk in view.
+    /// Record a decision for the current hunk, then prefer the next unreviewed
+    /// hunk so resume flows skip already-done work. No-op (besides status) when
+    /// there is no hunk in view.
     fn decide_current(&mut self, decision: Decision) {
         if let Some(id) = self.current_hunk_id() {
-            self.decisions.insert(id, decision);
-            self.jump_hunk(true);
-            self.status = format!(
-                "{:?} — {}",
-                decision,
-                self.review
-                    .files
-                    .get(id.file_idx)
-                    .map(|f| f.display_path.as_str())
-                    .unwrap_or("?")
-            );
+            self.set_decision(id, decision);
+            let path = self
+                .review
+                .files
+                .get(id.file_idx)
+                .map(|f| f.display_path.as_str())
+                .unwrap_or("?")
+                .to_string();
+            // Prefer the next *unreviewed* hunk so resume flows skip already-done.
+            if !self.jump_unreviewed_hunk(true) {
+                self.jump_hunk(true);
+            }
+            self.status = format!("{decision:?} — {path}");
         } else {
             self.status = "no hunk in view".into();
         }
     }
 
+    /// Insert or clear a decision and mark dirty for persistence.
+    fn set_decision(&mut self, id: HunkId, decision: Decision) {
+        match decision {
+            Decision::Undecided => {
+                self.decisions.remove(&id);
+            }
+            other => {
+                self.decisions.insert(id, other);
+            }
+        }
+        self.decisions_dirty = true;
+    }
+
     /// Accept/reject the current hunk and every later hunk in the same file
-    /// (git add -p style `a`/`d` bulk), then jump to the next file if any.
+    /// (git add -p style bulk; `--select` `A`/`R`), then jump to the next file.
     fn decide_rest_of_file(&mut self, decision: Decision) {
         let Some(id) = self.current_hunk_id() else {
             self.status = "no hunk in view".into();
@@ -549,13 +716,13 @@ impl App {
         let Some(file) = self.review.files.get(file_idx) else {
             return;
         };
+        let path = file.display_path.clone();
+        let hunk_end = file.hunks.len();
         let mut n = 0usize;
-        for hunk_idx in id.hunk_idx..file.hunks.len() {
-            self.decisions
-                .insert(HunkId { file_idx, hunk_idx }, decision);
+        for hunk_idx in id.hunk_idx..hunk_end {
+            self.set_decision(HunkId { file_idx, hunk_idx }, decision);
             n += 1;
         }
-        let path = file.display_path.clone();
         // Land on the next file's start when one exists; otherwise stay put.
         if file_idx + 1 < self.review.file_count() {
             let next = file_idx + 1;
@@ -571,23 +738,176 @@ impl App {
             self.status = "no hunk in view".into();
             return;
         };
-        let mut n = 0usize;
-        for (file_idx, file) in self.review.files.iter().enumerate() {
-            if file_idx < id.file_idx {
-                continue;
-            }
-            let start = if file_idx == id.file_idx {
-                id.hunk_idx
-            } else {
-                0
-            };
-            for hunk_idx in start..file.hunks.len() {
-                self.decisions
-                    .insert(HunkId { file_idx, hunk_idx }, decision);
-                n += 1;
-            }
+        // Collect targets first so set_decision can mutably borrow self.
+        let targets: Vec<HunkId> = self
+            .review
+            .files
+            .iter()
+            .enumerate()
+            .filter(|(file_idx, _)| *file_idx >= id.file_idx)
+            .flat_map(|(file_idx, file)| {
+                let start = if file_idx == id.file_idx {
+                    id.hunk_idx
+                } else {
+                    0
+                };
+                (start..file.hunks.len()).map(move |hunk_idx| HunkId { file_idx, hunk_idx })
+            })
+            .collect();
+        let n = targets.len();
+        for tid in targets {
+            self.set_decision(tid, decision);
         }
         self.status = format!("{decision:?} all remaining ({n} hunks)");
+    }
+
+    /// Mark every hunk in the currently selected file with `decision`, then
+    /// jump to the next file that still has undecided hunks.
+    fn decide_current_file(&mut self, decision: Decision) {
+        let fi = self.selected_file;
+        let (path, n) = match self.review.files.get(fi) {
+            Some(file) => (file.display_path.clone(), file.hunks.len()),
+            None => {
+                self.status = "no file selected".into();
+                return;
+            }
+        };
+        if n == 0 {
+            self.status = format!("no hunks in {path}");
+            return;
+        }
+        for hunk_idx in 0..n {
+            self.set_decision(
+                HunkId {
+                    file_idx: fi,
+                    hunk_idx,
+                },
+                decision,
+            );
+        }
+        let jumped = self.jump_unreviewed_file(true);
+        self.status = if jumped {
+            format!("{decision:?} all {n} hunk(s) in {path} → next unreviewed")
+        } else {
+            format!("{decision:?} all {n} hunk(s) in {path}")
+        };
+    }
+
+    /// Jump to the next/previous hunk that is still undecided.
+    /// Returns `true` if the viewport moved.
+    fn jump_unreviewed_hunk(&mut self, forward: bool) -> bool {
+        let Some(start_id) = self.current_hunk_id().or_else(|| {
+            // If no hunk header is visible, start from the first/last hunk.
+            if forward {
+                self.first_hunk_id()
+            } else {
+                self.last_hunk_id()
+            }
+        }) else {
+            self.status = "no hunks to jump to".into();
+            return false;
+        };
+
+        let order = self.hunk_order();
+        if order.is_empty() {
+            self.status = "no hunks to jump to".into();
+            return false;
+        }
+        let Some(pos) = order.iter().position(|id| *id == start_id) else {
+            return false;
+        };
+        let n = order.len();
+        for step in 1..=n {
+            let idx = if forward {
+                (pos + step) % n
+            } else {
+                (pos + n - step) % n
+            };
+            let id = order[idx];
+            if matches!(
+                self.decisions.get(&id).copied().unwrap_or_default(),
+                Decision::Undecided
+            ) {
+                if let Some(row) =
+                    ViewportQuery::hunk_start_row(&self.review, id.file_idx, id.hunk_idx)
+                {
+                    self.scroll_y = row.min(self.max_scroll());
+                    self.sync_selected_file();
+                    let path = self.current_path();
+                    let dir = if forward { "→" } else { "←" };
+                    self.status = format!("{dir} unreviewed @ {path}:h{}", id.hunk_idx + 1);
+                    return true;
+                }
+            }
+        }
+        self.status = "all hunks reviewed".into();
+        false
+    }
+
+    /// Jump to the next/previous file that still has at least one undecided hunk.
+    /// Returns `true` if the selection moved.
+    fn jump_unreviewed_file(&mut self, forward: bool) -> bool {
+        let n = self.review.files.len();
+        if n == 0 {
+            return false;
+        }
+        let start = self.selected_file;
+        for step in 1..=n {
+            let idx = if forward {
+                (start + step) % n
+            } else {
+                (start + n - step) % n
+            };
+            if !self.file_is_reviewed(idx) {
+                let row = ViewportQuery::file_start_row(&self.review, idx);
+                self.scroll_y = row.min(self.max_scroll());
+                self.selected_file = idx;
+                self.status = format!(
+                    "{} unreviewed file {}",
+                    if forward { "→" } else { "←" },
+                    self.current_path()
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// A file is "reviewed" when every hunk is accept or reject (or it has none).
+    fn file_is_reviewed(&self, file_idx: usize) -> bool {
+        let Some(file) = self.review.files.get(file_idx) else {
+            return true;
+        };
+        if file.hunks.is_empty() {
+            return true;
+        }
+        (0..file.hunks.len()).all(|hunk_idx| {
+            !matches!(
+                self.decisions
+                    .get(&HunkId { file_idx, hunk_idx })
+                    .copied()
+                    .unwrap_or_default(),
+                Decision::Undecided
+            )
+        })
+    }
+
+    fn hunk_order(&self) -> Vec<HunkId> {
+        let mut out = Vec::new();
+        for (file_idx, file) in self.review.files.iter().enumerate() {
+            for hunk_idx in 0..file.hunks.len() {
+                out.push(HunkId { file_idx, hunk_idx });
+            }
+        }
+        out
+    }
+
+    fn first_hunk_id(&self) -> Option<HunkId> {
+        self.hunk_order().into_iter().next()
+    }
+
+    fn last_hunk_id(&self) -> Option<HunkId> {
+        self.hunk_order().into_iter().last()
     }
 
     /// Build the `--select` output from the current decision map. Every hunk in
@@ -823,6 +1143,22 @@ impl App {
                     self.jump_hunk(false);
                     return;
                 }
+                (']', KeyCode::Char('u')) if self.decisions_active() => {
+                    self.jump_unreviewed_hunk(true);
+                    return;
+                }
+                ('[', KeyCode::Char('u')) if self.decisions_active() => {
+                    self.jump_unreviewed_hunk(false);
+                    return;
+                }
+                (']', KeyCode::Char('U')) if self.decisions_active() => {
+                    self.jump_unreviewed_file(true);
+                    return;
+                }
+                ('[', KeyCode::Char('U')) if self.decisions_active() => {
+                    self.jump_unreviewed_file(false);
+                    return;
+                }
                 ('z', KeyCode::Char('c')) => {
                     self.fold_current();
                     return;
@@ -1020,16 +1356,18 @@ impl App {
             KeyCode::Char('?') => {
                 self.show_help = !self.show_help;
             }
-            // --select mode: accept / reject / mark undecided on the current
-            // hunk, then jump to the next. `A`/`R` accept/reject the rest of
-            // the current file. These keys are inert outside select mode.
-            KeyCode::Char('a') if self.select_mode => {
+            // Decision keys: active in `--select` or when review tracking is on
+            // (default with persist_review). `a`/`r`/`u` decide the current
+            // hunk then prefer the next unreviewed. In `--select`, `A`/`R`
+            // accept/reject the rest of the current file (dogfood bulk);
+            // outside select, `A` accepts every hunk in the current file.
+            KeyCode::Char('a') if self.decisions_active() => {
                 self.decide_current(Decision::Accept);
             }
-            KeyCode::Char('r') if self.select_mode => {
+            KeyCode::Char('r') if self.decisions_active() => {
                 self.decide_current(Decision::Reject);
             }
-            KeyCode::Char('u') if self.select_mode => {
+            KeyCode::Char('u') if self.decisions_active() => {
                 self.decide_current(Decision::Undecided);
             }
             KeyCode::Char('A') if self.select_mode => {
@@ -1037,6 +1375,9 @@ impl App {
             }
             KeyCode::Char('R') if self.select_mode => {
                 self.decide_rest_of_file(Decision::Reject);
+            }
+            KeyCode::Char('A') if self.decisions_active() => {
+                self.decide_current_file(Decision::Accept);
             }
             _ => {}
         }
@@ -2702,13 +3043,135 @@ diff --git a/b.rs b/b.rs
     fn select_keys_inert_outside_select_mode() {
         let mut app = multi_hunk_app();
         app.scroll_y = 1; // a.rs hunk0 header
-                          // select_mode is false → 'a'/'r'/'u' are no-ops, no decision recorded.
+                          // select_mode and review_tracking both false → 'a'/'r'/'u' no-ops.
         let before_scroll = app.scroll_y;
         app.handle_key(char_key('a'));
         app.handle_key(char_key('r'));
         app.handle_key(char_key('u'));
         assert!(app.decisions.is_empty());
-        assert_eq!(app.scroll_y, before_scroll, "no jump outside select mode");
+        assert_eq!(app.scroll_y, before_scroll, "no jump outside tracking");
+    }
+
+    #[test]
+    fn review_tracking_enables_decision_keys_without_select() {
+        let mut app = multi_hunk_app();
+        app.review_tracking = true;
+        app.scroll_y = 1;
+        app.handle_key(char_key('a'));
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            Some(&Decision::Accept)
+        );
+        assert!(app.decisions_dirty);
+    }
+
+    #[test]
+    fn accept_all_hunks_in_file_with_capital_a() {
+        let mut app = multi_hunk_app();
+        app.review_tracking = true;
+        app.selected_file = 0;
+        app.scroll_y = 0;
+        app.handle_key(char_key('A'));
+        let s = app.selections();
+        assert!(s.accepted.contains(&"a.rs:h1".to_string()));
+        assert!(s.accepted.contains(&"a.rs:h2".to_string()));
+        // Should jump toward the next unreviewed file (b.rs).
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn review_progress_counts_files_and_hunks() {
+        let mut app = multi_hunk_app();
+        // 2 files × 2 hunks = 0 reviewed initially.
+        let p = app.review_progress();
+        assert_eq!(p.files_total, 2);
+        assert_eq!(p.files_reviewed, 0);
+        assert_eq!(p.hunks_total, 4);
+        assert_eq!(p.hunks_decided, 0);
+
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 1,
+            },
+            Decision::Reject,
+        );
+        let p = app.review_progress();
+        assert_eq!(p.files_reviewed, 1);
+        assert_eq!(p.hunks_decided, 2);
+        assert!(app
+            .review_progress_label()
+            .contains("reviewed 1/2 files · 2/4 hunks"));
+    }
+
+    #[test]
+    fn apply_persisted_decisions_by_path_hunk() {
+        let mut app = multi_hunk_app();
+        let mut keyed = std::collections::HashMap::new();
+        keyed.insert("a.rs:h1".into(), Decision::Accept);
+        keyed.insert("b.rs:h2".into(), Decision::Reject);
+        keyed.insert("missing.rs:h1".into(), Decision::Accept);
+        app.apply_persisted_decisions(&keyed);
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            Some(&Decision::Accept)
+        );
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 1,
+                hunk_idx: 1
+            }),
+            Some(&Decision::Reject)
+        );
+        assert_eq!(app.decisions.len(), 2);
+        assert!(app.review_tracking);
+
+        let export = app.decisions_by_key();
+        assert_eq!(export.get("a.rs:h1"), Some(&Decision::Accept));
+        assert_eq!(export.get("b.rs:h2"), Some(&Decision::Reject));
+    }
+
+    #[test]
+    fn jump_unreviewed_hunk_skips_decided() {
+        let mut app = multi_hunk_app();
+        app.review_tracking = true;
+        app.viewport_height = 4;
+        // Decide a.rs:h1 and a.rs:h2.
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 1,
+            },
+            Decision::Accept,
+        );
+        app.scroll_y = 1; // a.rs hunk0
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('u'));
+        // Next unreviewed should be b.rs:h1.
+        assert_eq!(app.selected_file, 1);
+        let id = app.current_hunk_id().unwrap();
+        assert_eq!(id.file_idx, 1);
+        assert_eq!(id.hunk_idx, 0);
     }
 
     #[test]

@@ -208,6 +208,9 @@ pub struct Config {
     /// VCS backend: `"auto"` | `"git"` | `"jj"`. Default auto prefers jj when a
     /// `.jj` workspace is present (including colocated git+jj repos).
     pub vcs: Option<String>,
+    /// Persist per-hunk accept/reject decisions across sessions (default true).
+    /// Stored under `.git/next-hunk/decisions-<scope>.json`.
+    pub persist_review: Option<bool>,
 }
 
 impl Config {
@@ -246,6 +249,9 @@ impl Config {
         }
         if other.vcs.is_some() {
             self.vcs = other.vcs;
+        }
+        if other.persist_review.is_some() {
+            self.persist_review = other.persist_review;
         }
         self
     }
@@ -301,6 +307,8 @@ pub struct ResolvedConfig {
     pub export_on_quit: ExportOnQuit,
     /// Which VCS backend to use for `diff` / `show` / `serve` / `inspect`.
     pub vcs: VcsPreference,
+    /// Persist per-hunk decisions across sessions. ON by default.
+    pub persist_review: bool,
 }
 
 impl Default for ResolvedConfig {
@@ -317,6 +325,7 @@ impl Default for ResolvedConfig {
             wrap: false,
             export_on_quit: ExportOnQuit::None,
             vcs: VcsPreference::Auto,
+            persist_review: true,
         }
     }
 }
@@ -344,6 +353,8 @@ pub struct CliFlags {
     pub export_on_quit: Option<ExportOnQuit>,
     /// `--vcs <auto|git|jj>` → `Some(VcsPreference)`; absent → `None`.
     pub vcs: Option<VcsPreference>,
+    /// `--no-persist` → `Some(false)`; absent → `None` (use config/default).
+    pub persist_review: Option<bool>,
 }
 
 impl ResolvedConfig {
@@ -389,6 +400,10 @@ impl ResolvedConfig {
                     None => d.vcs,
                 },
             },
+            persist_review: cli
+                .persist_review
+                .or(cfg.persist_review)
+                .unwrap_or(d.persist_review),
         })
     }
 }
@@ -959,5 +974,36 @@ theme = \"dark\"
     fn vcs_defaults_to_auto() {
         let r = ResolvedConfig::resolve(&Config::default(), &CliFlags::default()).unwrap();
         assert_eq!(r.vcs, VcsPreference::Auto);
+    }
+
+    #[test]
+    fn persist_review_defaults_to_true() {
+        let cfg = Config::default();
+        let cli = CliFlags::default();
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert!(r.persist_review);
+    }
+
+    #[test]
+    fn persist_review_cli_no_persist_disables() {
+        let cfg = Config {
+            persist_review: Some(true),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            persist_review: Some(false),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert!(!r.persist_review);
+    }
+
+    #[test]
+    fn persist_review_from_config() {
+        let (dir, _path) = write_tmp_config("persist_review = false\n");
+        let cfg = Config::load_project(&dir.0).unwrap();
+        assert_eq!(cfg.persist_review, Some(false));
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
+        assert!(!r.persist_review);
     }
 }
