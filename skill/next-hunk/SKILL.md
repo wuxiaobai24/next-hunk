@@ -59,6 +59,33 @@ In the file rail, origins are marked **`S`** staged / **`M`** modified /
 
 Default remains worktree-only so everyday `git diff` muscle memory is unchanged.
 
+## Git vs Jujutsu (jj)
+
+next-hunk auto-detects the VCS: if a `.jj` workspace is present (including
+colocated git+jj), it uses **jj** (`jj diff --git` → same IR). Pure git repos
+still use gix. Override with config or CLI:
+
+```toml
+# .next-hunk/config.toml
+vcs = "auto"   # auto | git | jj
+```
+
+```bash
+next-hunk diff --vcs jj
+next-hunk show @ --vcs jj
+```
+
+**jj differences agents should know:**
+
+- No staging area — plain `next-hunk diff` is enough; `--staged` is empty;
+  `--all` / `--include-untracked` are largely git-oriented (untracked is
+  ignored under jj with a note).
+- Revisions use jj revsets (`@`, `@-`, bookmarks) as well as `A..B` ranges.
+- `serve` / `list` / `review` / `navigate` / `comment` / `decision` work the
+  same once the workspace is detected.
+
+Details: repository `docs/VCS.md`.
+
 ## Quick start: one-shot review (no approval needed)
 
 When you want the human informed but don't need a decision:

@@ -27,6 +27,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Viewport query with binary search on file spans
 - [x] Virtualized multi-file TUI (ratatui)
 - [x] gix-backed worktree / staged / show (+ patch stdin)
+- [x] Jujutsu (jj) first-class: auto-detect, `vcs` config / `--vcs`, `jj diff --git` → same IR (`docs/VCS.md`)
 - [x] Robust unified parse (rename, binary placeholder, no-newline, CRLF)
 - [x] Benchmarks: parse + viewport materialization
 - [x] Syntax highlight (syntect, viewport-only + cached, default on)
@@ -215,6 +216,7 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
+| `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -224,7 +226,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`.
+CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`.
 
 When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail
 tags each path with its git bucket: **`S`** staged, **`M`** modified (unstaged),

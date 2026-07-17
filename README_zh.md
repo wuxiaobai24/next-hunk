@@ -39,6 +39,7 @@
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
 - [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
+- [x] Jujutsu (jj) 一等支持：自动探测、`vcs` / `--vcs`、`jj diff --git` → 同一 IR（`docs/VCS.md`）
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
 - [x] Working-set 全量审查：`diff --all` / `scope = "working-set"`（staged+unstaged；文件栏 `S`/`M`/`?`）
@@ -178,6 +179,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `export_on_quit` | string | `"none"` | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`） |
+| `vcs` | string | `"auto"` | `"auto"`（有 `.jj` 时优先 jj）/ `"git"` / `"jj"`，见 [`docs/VCS.md`](./docs/VCS.md) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 
 示例 `~/.config/next-hunk/config.toml`:

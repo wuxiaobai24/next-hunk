@@ -262,7 +262,7 @@ Principle: **capability and hot-path performance first**. Do not treat “few de
 
 - [ ] Side-by-side (own perf design; never default hot path without gates)
 - [x] Watch / incremental IR refresh (`--watch`, preserve state on reload)
-- [ ] jj adapter
+- [x] jj adapter (`docs/VCS.md`; `jj` CLI → unified IR; Sapling later)
 - [x] Themes, help overlay
 - [ ] Fuzz parse; more real-repo regressions
 
