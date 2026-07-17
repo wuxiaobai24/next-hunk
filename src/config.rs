@@ -13,6 +13,41 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+/// Which VCS backend to use for repository-backed commands.
+///
+/// Default [`VcsPreference::Auto`] prefers Jujutsu when a `.jj` workspace is
+/// present (including colocated git+jj trees); otherwise git via gix.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VcsPreference {
+    /// Prefer jj when `.jj` is present; otherwise git.
+    #[default]
+    Auto,
+    /// Force the gix (gitoxide) adapter.
+    Git,
+    /// Force the `jj` CLI adapter (no git compatibility layer required).
+    Jj,
+}
+
+impl VcsPreference {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VcsPreference::Auto => "auto",
+            VcsPreference::Git => "git",
+            VcsPreference::Jj => "jj",
+        }
+    }
+
+    /// Parse config/CLI values. Unknown → `Auto`.
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "git" => VcsPreference::Git,
+            "jj" | "jujutsu" => VcsPreference::Jj,
+            "auto" | "" => VcsPreference::Auto,
+            _ => VcsPreference::Auto,
+        }
+    }
+}
+
 /// Which local git buckets to include in a `diff` / `serve` / `inspect` review.
 ///
 /// Default stays [`DiffScope::Worktree`] (unstaged only) so existing muscle
@@ -141,6 +176,9 @@ pub struct Config {
     pub wrap: Option<bool>,
     /// On quit, emit an agent-readable report: "none" | "json" | "markdown" | "both".
     pub export_on_quit: Option<String>,
+    /// VCS backend: `"auto"` | `"git"` | `"jj"`. Default auto prefers jj when a
+    /// `.jj` workspace is present (including colocated git+jj repos).
+    pub vcs: Option<String>,
 }
 
 impl Config {
@@ -176,6 +214,9 @@ impl Config {
         }
         if other.export_on_quit.is_some() {
             self.export_on_quit = other.export_on_quit;
+        }
+        if other.vcs.is_some() {
+            self.vcs = other.vcs;
         }
         self
     }
@@ -222,6 +263,8 @@ pub struct ResolvedConfig {
     pub wrap: bool,
     /// Emit a structured review report when the TUI quits.
     pub export_on_quit: ExportOnQuit,
+    /// Which VCS backend to use for `diff` / `show` / `serve` / `inspect`.
+    pub vcs: VcsPreference,
 }
 
 impl Default for ResolvedConfig {
@@ -237,6 +280,7 @@ impl Default for ResolvedConfig {
             layout: LayoutMode::Unified,
             wrap: false,
             export_on_quit: ExportOnQuit::None,
+            vcs: VcsPreference::Auto,
         }
     }
 }
@@ -262,6 +306,8 @@ pub struct CliFlags {
     pub layout: Option<LayoutMode>,
     /// `--export-on-quit <mode>` → `Some(ExportOnQuit)`; absent → `None`.
     pub export_on_quit: Option<ExportOnQuit>,
+    /// `--vcs <auto|git|jj>` → `Some(VcsPreference)`; absent → `None`.
+    pub vcs: Option<VcsPreference>,
 }
 
 impl ResolvedConfig {
@@ -289,6 +335,10 @@ impl ResolvedConfig {
                 .export_on_quit
                 .or_else(|| cfg.export_on_quit.as_deref().map(ExportOnQuit::parse_str))
                 .unwrap_or(d.export_on_quit),
+            vcs: cli
+                .vcs
+                .or_else(|| cfg.vcs.as_deref().map(VcsPreference::parse_str))
+                .unwrap_or(d.vcs),
         }
     }
 }
@@ -765,5 +815,37 @@ theme = \"dark\"
         assert_eq!(ExportOnQuit::parse_str("markdown"), ExportOnQuit::Markdown);
         assert_eq!(ExportOnQuit::parse_str("md"), ExportOnQuit::Markdown);
         assert_eq!(ExportOnQuit::parse_str("weird"), ExportOnQuit::None);
+    }
+
+    #[test]
+    fn vcs_preference_parse_str() {
+        assert_eq!(VcsPreference::parse_str("auto"), VcsPreference::Auto);
+        assert_eq!(VcsPreference::parse_str("git"), VcsPreference::Git);
+        assert_eq!(VcsPreference::parse_str("jj"), VcsPreference::Jj);
+        assert_eq!(VcsPreference::parse_str("jujutsu"), VcsPreference::Jj);
+        assert_eq!(VcsPreference::parse_str("weird"), VcsPreference::Auto);
+    }
+
+    #[test]
+    fn vcs_from_config_and_cli() {
+        let cfg = Config {
+            vcs: Some("jj".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        assert_eq!(r.vcs, VcsPreference::Jj);
+
+        let cli = CliFlags {
+            vcs: Some(VcsPreference::Git),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.vcs, VcsPreference::Git); // CLI wins
+    }
+
+    #[test]
+    fn vcs_defaults_to_auto() {
+        let r = ResolvedConfig::resolve(&Config::default(), &CliFlags::default());
+        assert_eq!(r.vcs, VcsPreference::Auto);
     }
 }

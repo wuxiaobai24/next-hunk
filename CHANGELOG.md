@@ -6,6 +6,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Jujutsu (jj) first-class support
+- **VCS auto-detect** — walk for `.jj` / `.git`; `vcs = "auto" | "git" | "jj"`
+  in config and `--vcs` on `diff` / `show` / `serve` / `inspect` / `filediff`.
+  Colocated workspaces default to **jj** under auto (override with `vcs = "git"`).
+- **jj adapter** — `diff` / `show` / `serve` / `inspect` use `jj diff --git`
+  (and revset ranges) without requiring the gix/git index path. Output re-enters
+  the same unified-diff IR (parse + viewport gates unchanged).
+- **Scope mapping** — worktree / working-set → `jj diff --git`; `--staged` is
+  empty under jj (no index) with a stderr note; `--include-untracked` ignored
+  with a note (WC snapshot usually already includes new files).
+- **filediff in jj workspaces** — system `diff -u` (no gix object store).
+- **Docs** — `docs/VCS.md` (behaviour vs git / hunk); PLAN + ARCHITECTURE + skill
+  notes. Integration tests skip when `jj` is not on `PATH`.
+
 ### Fixed — Agent bridge consistency (dogfood P1)
 - **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
   (and `--export-on-quit`), matching `diff`. Agents can point humans at a

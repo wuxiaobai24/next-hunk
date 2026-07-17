@@ -6,9 +6,13 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, DiffScope, ExportOnQuit, LayoutMode, ResolvedConfig};
+use next_hunk::config::{
+    CliFlags, Config, DiffScope, ExportOnQuit, LayoutMode, ResolvedConfig, VcsPreference,
+};
 use next_hunk::ir::{parse_unified_diff, FileOrigin, Review};
-use next_hunk::source::{find_repo, git_diff_produced, git_file_diff, git_show, open_repo};
+use next_hunk::source::{
+    detect_workspace, produce_diff, produce_file_diff, produce_show, Workspace,
+};
 use next_hunk::tui::app::ReviewReport;
 use next_hunk::tui::{run_review_tui, ReviewOptions};
 
@@ -72,13 +76,16 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// VCS backend: `auto` (default), `git`, or `jj`. Overrides `vcs` in config.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
     },
-    /// Review a commit or range (`git show` / `git diff A..B`).
+    /// Review a commit or range (`git show` / `jj diff -r` / range `A..B`).
     Show {
-        /// Revision or range (e.g. HEAD, main..HEAD).
+        /// Revision or range (e.g. HEAD, main..HEAD, `@`, `@-`).
         rev: String,
         /// Scroll to this location on startup (same as `diff --focus`).
         #[arg(long)]
@@ -95,6 +102,9 @@ enum Commands {
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// VCS backend: `auto` (default), `git`, or `jj`.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
     },
     /// Diff two arbitrary files on disk.
     Filediff {
@@ -117,6 +127,9 @@ enum Commands {
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// VCS backend: `auto` (default), `git`, or `jj` (jj uses system `diff -u`).
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
     },
     /// Review a unified patch from a file or stdin (`-`).
     Patch {
@@ -158,6 +171,9 @@ enum Commands {
         /// Include untracked files when reviewing the worktree / working-set.
         #[arg(long)]
         include_untracked: bool,
+        /// VCS backend: `auto` (default), `git`, or `jj`.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
         /// Emit file/hunk structure as JSON (same shape as `next-hunk review`).
         /// Prefer this from agents/skills — no live `serve` required.
         #[arg(long)]
@@ -202,6 +218,9 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// VCS backend: `auto` (default), `git`, or `jj`.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -341,6 +360,7 @@ fn run() -> Result<()> {
         select: false,
         export_on_quit: None,
         layout: None,
+        vcs: None,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -354,6 +374,7 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            vcs,
             extra,
         } => {
             // Parse the agent-bridge specs and check the interactive-tty
@@ -363,7 +384,6 @@ fn run() -> Result<()> {
             let options = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
 
             let cwd = std::env::current_dir()?;
-            let repo = find_repo(&cwd)?;
 
             // Layered config: project (.next-hunk/config.toml) > user
             // (~/.config/next-hunk/config.toml). CLI flags override on top.
@@ -378,8 +398,11 @@ fn run() -> Result<()> {
                     include_untracked: if include_untracked { Some(true) } else { None },
                     layout,
                     export_on_quit: options.export_on_quit_override,
+                    vcs,
                 },
             );
+
+            let ws = detect_workspace(&cwd, resolved.vcs)?;
 
             if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
                 eprintln!(
@@ -387,11 +410,10 @@ fn run() -> Result<()> {
                 );
             }
 
-            let produced =
-                git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
+            let produced = produce_diff(&ws, resolved.scope, &extra, resolved.include_untracked)?;
             let reloader = if resolved.watch {
                 Some(make_diff_reloader(
-                    repo.clone(),
+                    ws.clone(),
                     resolved.scope,
                     extra,
                     resolved.include_untracked,
@@ -407,7 +429,7 @@ fn run() -> Result<()> {
                 resolved.wrap,
                 resolved.theme,
                 resolved.layout,
-                Some(repo),
+                Some(ws.root.clone()),
                 ReviewOptions {
                     focus: options.focus,
                     notes: options.notes,
@@ -424,14 +446,18 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            vcs,
         } => {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let cwd = std::env::current_dir()?;
-            let repo = find_repo(&cwd)?;
-            let text = git_show(&repo, &rev)?;
+            let cfg = Config::load(&cwd);
+            let pref = vcs
+                .or_else(|| cfg.vcs.as_deref().map(VcsPreference::parse_str))
+                .unwrap_or_default();
+            let ws = detect_workspace(&cwd, pref)?;
+            let text = produce_show(&ws, &rev)?;
             // `show` is a one-shot snapshot: no watch, highlight default on.
             // Honor the user/project theme/layout config even for `show`.
-            let cfg = Config::load(&cwd);
             let resolved_layout = layout
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(LayoutMode::Unified);
@@ -450,7 +476,7 @@ fn run() -> Result<()> {
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
                 resolved_layout,
-                Some(repo),
+                Some(ws.root),
                 ReviewOptions {
                     focus: bridge.focus,
                     notes: bridge.notes,
@@ -508,16 +534,36 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            vcs,
         } => {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let cwd = std::env::current_dir()?;
-            let repo = open_repo(&cwd)?;
-            let text = git_file_diff(&repo, &old, &new)?;
+            let cfg = Config::load(&cwd);
+            let pref = vcs
+                .or_else(|| cfg.vcs.as_deref().map(VcsPreference::parse_str))
+                .unwrap_or_default();
+            // Prefer a discovered workspace; if neither git nor jj is present,
+            // still allow absolute file paths via a synthetic jj-style system diff
+            // by treating cwd as the workdir with git forced only when available.
+            let (ws, workdir) = match detect_workspace(&cwd, pref) {
+                Ok(ws) => {
+                    let root = ws.root.clone();
+                    (ws, Some(root))
+                }
+                Err(_) => {
+                    // No VCS: fall back to system diff with cwd as label base.
+                    let ws = Workspace {
+                        root: cwd.clone(),
+                        kind: next_hunk::source::VcsKind::Jj, // uses system_file_diff path
+                    };
+                    (ws, Some(cwd.clone()))
+                }
+            };
+            let text = produce_file_diff(&ws, &old, &new)?;
             if text.trim().is_empty() {
                 eprintln!("(files are identical)");
                 return Ok(());
             }
-            let cfg = Config::load(&cwd);
             let resolved_layout = layout
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(LayoutMode::Unified);
@@ -536,7 +582,7 @@ fn run() -> Result<()> {
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
                 resolved_layout,
-                repo.workdir().map(|p| p.to_owned()),
+                workdir,
                 ReviewOptions {
                     focus: bridge.focus,
                     notes: bridge.notes,
@@ -551,13 +597,18 @@ fn run() -> Result<()> {
             staged,
             all,
             include_untracked,
+            vcs,
             json,
         } => {
             let (text, origins) = if let Some(path) = path {
                 (read_patch_input(&path)?, Vec::new())
             } else {
                 let cwd = std::env::current_dir()?;
-                let repo = find_repo(&cwd)?;
+                let cfg = Config::load(&cwd);
+                let pref = vcs
+                    .or_else(|| cfg.vcs.as_deref().map(VcsPreference::parse_str))
+                    .unwrap_or_default();
+                let ws = detect_workspace(&cwd, pref)?;
                 let scope = if all {
                     DiffScope::WorkingSet
                 } else if staged {
@@ -565,7 +616,7 @@ fn run() -> Result<()> {
                 } else {
                     DiffScope::Worktree
                 };
-                let produced = git_diff_produced(&repo, scope, &[], include_untracked)?;
+                let produced = produce_diff(&ws, scope, &[], include_untracked)?;
                 (produced.text, produced.origins)
             };
             if text.trim().is_empty() {
@@ -609,7 +660,12 @@ fn run() -> Result<()> {
             }
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
-            let workdir = find_repo(&cwd).ok();
+            let pref = cfg
+                .vcs
+                .as_deref()
+                .map(VcsPreference::parse_str)
+                .unwrap_or_default();
+            let workdir = detect_workspace(&cwd, pref).ok().map(|ws| ws.root);
             let resolved_layout = cfg
                 .layout
                 .as_deref()
@@ -646,6 +702,7 @@ fn run() -> Result<()> {
             note,
             export_on_quit,
             layout,
+            vcs,
             extra,
         } => run_serve(
             staged,
@@ -657,6 +714,7 @@ fn run() -> Result<()> {
             note,
             export_on_quit,
             layout,
+            vcs,
             extra,
         ),
         Commands::Push { focus, note } => run_push(focus, note),
@@ -717,18 +775,31 @@ fn parse_agent_bridge_options(
     })
 }
 
-/// Build the live-reload closure for `--watch`: re-runs the same git diff.
-/// Captures the repo path, scope, pathspecs, and untracked flag by value.
+/// Build the live-reload closure for `--watch`: re-runs the same VCS diff.
+/// Captures the workspace, scope, pathspecs, and untracked flag by value.
 fn make_diff_reloader(
-    repo: PathBuf,
+    ws: Workspace,
     scope: DiffScope,
     extra: Vec<String>,
     include_untracked: bool,
 ) -> next_hunk::tui::Reloader {
     Box::new(move || {
-        git_diff_produced(&repo, scope, &extra, include_untracked)
-            .context("re-run git diff for --watch")
+        produce_diff(&ws, scope, &extra, include_untracked).context("re-run VCS diff for --watch")
     })
+}
+
+/// Resolve the current workspace root for serve socket discovery.
+/// Honors project/user `vcs` config so git and jj workspaces share the same path.
+#[cfg(all(feature = "serve", unix))]
+fn workspace_root_for_socket() -> Result<PathBuf> {
+    let cwd = std::env::current_dir()?;
+    let cfg = Config::load(&cwd);
+    let pref = cfg
+        .vcs
+        .as_deref()
+        .map(VcsPreference::parse_str)
+        .unwrap_or_default();
+    Ok(detect_workspace(&cwd, pref)?.root)
 }
 
 /// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
@@ -748,6 +819,7 @@ fn run_serve(
     note: Vec<String>,
     export_on_quit: Option<ExportOnQuit>,
     layout: Option<LayoutMode>,
+    vcs: Option<VcsPreference>,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
@@ -760,7 +832,6 @@ fn run_serve(
     let bridge = parse_agent_bridge_options(focus, note, /*select=*/ true, export_on_quit)?;
 
     let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
 
     let cfg = Config::load(&cwd);
     let resolved = ResolvedConfig::resolve(
@@ -773,8 +844,11 @@ fn run_serve(
             include_untracked: if include_untracked { Some(true) } else { None },
             layout,
             export_on_quit: bridge.export_on_quit_override,
+            vcs,
         },
     );
+
+    let ws = detect_workspace(&cwd, resolved.vcs)?;
 
     if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
         eprintln!("note: `--watch` requires the `watch` feature (rebuild with --features watch)");
@@ -783,14 +857,14 @@ fn run_serve(
     // Bind the server socket before opening the TUI, so a `push`/`decision`
     // issued the instant the TUI appears finds a live socket. A bind failure
     // (e.g. another serve running) is fatal and leaves no half-open TUI.
-    let server = spawn_serve_listener(&repo)?;
+    let server = spawn_serve_listener(&ws.root)?;
 
-    let produced = git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
+    let produced = produce_diff(&ws, resolved.scope, &extra, resolved.include_untracked)?;
     // Reloader is installed only with `--watch` (also drives FS auto-reload).
     // Without it, `next-hunk reload` returns a clear server error rather than EOF.
     let reloader = if resolved.watch {
         Some(make_diff_reloader(
-            repo.clone(),
+            ws.clone(),
             resolved.scope,
             extra,
             resolved.include_untracked,
@@ -806,7 +880,7 @@ fn run_serve(
         resolved.wrap,
         resolved.theme,
         resolved.layout,
-        Some(repo),
+        Some(ws.root.clone()),
         ReviewOptions {
             focus: bridge.focus,
             notes: bridge.notes,
@@ -830,8 +904,7 @@ fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
         .map(|s| next_hunk::cli_parse::parse_note(s))
         .collect::<Result<Vec<_>>>()?;
 
-    let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
+    let repo = workspace_root_for_socket()?;
     let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
 
     let command = next_hunk::tui::server::ServerCommand::Push {
@@ -856,8 +929,7 @@ fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
 /// `--select` quit output, so an agent parses it identically).
 #[cfg(all(feature = "serve", unix))]
 fn run_decision() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
+    let repo = workspace_root_for_socket()?;
     let socket = next_hunk::cli_parse::runtime_socket_path(&repo);
 
     match next_hunk::tui::server::send_command(
@@ -1054,8 +1126,7 @@ fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
             None => bail!("no live session with hash {h}"),
         }
     } else {
-        let cwd = std::env::current_dir()?;
-        let repo = find_repo(&cwd)?;
+        let repo = workspace_root_for_socket()?;
         Ok(next_hunk::cli_parse::runtime_socket_path(&repo))
     }
 }
@@ -1147,12 +1218,22 @@ fn run_serve(
     _note: Vec<String>,
     _export_on_quit: Option<ExportOnQuit>,
     _layout: Option<LayoutMode>,
+    _vcs: Option<VcsPreference>,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
 }
 
 /// clap value_parser for `--layout`. Accepts unified|stack|split (case-insensitive).
+fn parse_vcs_arg(s: &str) -> Result<VcsPreference, String> {
+    match s.trim().to_lowercase().as_str() {
+        "auto" => Ok(VcsPreference::Auto),
+        "git" => Ok(VcsPreference::Git),
+        "jj" | "jujutsu" => Ok(VcsPreference::Jj),
+        other => Err(format!("unknown vcs '{other}', expected auto, git, or jj")),
+    }
+}
+
 fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
     match s.trim().to_lowercase().as_str() {
         "unified" => Ok(LayoutMode::Unified),

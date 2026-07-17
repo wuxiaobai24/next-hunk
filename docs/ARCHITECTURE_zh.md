@@ -262,7 +262,7 @@ next-hunk/
 
 - [ ] Side-by-side（独立性能设计；未过门禁不做默认）
 - [x] Watch / 增量 IR 刷新（`--watch`，reload 保状态）
-- [ ] jj 适配器
+- [x] jj 适配器（`docs/VCS.md`；`jj` CLI → 统一 IR；Sapling 后置）
 - [x] 主题、help overlay
 - [ ] Fuzz parse；更多真实仓库回归
 

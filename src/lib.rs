@@ -2,7 +2,7 @@
 //!
 //! Layers:
 //! - [`ir`] — compact runtime diff IR + viewport queries
-//! - [`source`] — load unified diffs (gix; no `git` CLI fallback)
+//! - [`source`] — load unified diffs (gix for git; `jj` CLI for Jujutsu)
 //! - [`highlight`] — syntax highlighting (syntect, feature-gated)
 //! - [`tui`] — interactive review UI
 //! - [`cli_parse`] — parsing for agent-bridge CLI specs (`--focus` / `--note`)
