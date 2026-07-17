@@ -451,6 +451,131 @@ fn focus_and_note_in_non_tty_error_not_silent() {
 }
 
 #[test]
+fn pager_garbage_input_exits_nonzero() {
+    // Dogfood P1: `echo hello | next-hunk pager` must not exit 0 after a
+    // parse failure (agents / scripts treat 0 as success).
+    let mut child = Command::new(bin())
+        .args(["pager"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(b"hello\n").unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        !out.status.success(),
+        "pager garbage input must exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("parse") || stderr.contains("empty diff") || stderr.contains("error"),
+        "pager should report parse/fatal on stderr, got: {stderr}"
+    );
+}
+
+#[test]
+fn illegal_project_config_fails_diff() {
+    // Dogfood P1: `layout = "sidebyside"` must fail startup with field + enums.
+    let tmp = std::env::temp_dir().join(format!(
+        "next-hunk-cli-badcfg-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(tmp.join(".next-hunk")).unwrap();
+    std::fs::write(
+        tmp.join(".next-hunk/config.toml"),
+        "layout = \"sidebyside\"\n",
+    )
+    .unwrap();
+    // init a git repo so `diff` gets past repo discovery after config load.
+    let git_ok = Command::new("git")
+        .args(["init"])
+        .current_dir(&tmp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !git_ok {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let _ = Command::new("git")
+        .args(["config", "user.email", "t@t.com"])
+        .current_dir(&tmp)
+        .status();
+    let _ = Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(&tmp)
+        .status();
+    std::fs::write(tmp.join("README"), "x\n").unwrap();
+    let _ = Command::new("git")
+        .args(["add", "README"])
+        .current_dir(&tmp)
+        .status();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "i"])
+        .current_dir(&tmp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let out = Command::new(bin())
+        .args(["diff"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "illegal layout must fail startup, stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("layout") && (stderr.contains("sidebyside") || stderr.contains("unified")),
+        "error must name field + allowed values, got: {stderr}"
+    );
+}
+
+#[test]
+fn focus_on_non_tty_exits_nonzero_with_focus_hint() {
+    // Non-TTY + --focus must exit non-zero with a clear message (never silent).
+    // Path resolution vs "requires tty" both qualify — the miss is not silent.
+    let patch = fixture("tiny_simple.patch");
+    let mut child = Command::new(bin())
+        .args(["patch", "-", "--focus", "does-not-exist.rs"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("focus")
+            && (stderr.contains("not found")
+                || stderr.contains("interactive")
+                || stderr.contains("tty")),
+        "non-tty focus miss must not be silent, got: {stderr}"
+    );
+}
+
+#[test]
 fn inspect_json_emits_review_shape() {
     let out = Command::new(bin())
         .args(["inspect", "--json", "fixtures/tiny_simple.patch"])

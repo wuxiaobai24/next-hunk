@@ -153,6 +153,9 @@ git show HEAD   # → 启动 review TUI
 | `f` | 按路径子串过滤文件栏 |
 | `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
 | `?` | 切换全屏快捷键帮助 |
+| `a` / `r` / `u` | `--select`：接受 / 拒绝 / 未决 当前 hunk（自动跳下一处） |
+| `A` / `R` | `--select`：接受 / 拒绝 当前文件剩余 hunk |
+| `Ctrl-A` / `Ctrl-R` | `--select`：接受 / 拒绝 从当前位置起全部剩余 hunk |
 | `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
 
 ## 配置

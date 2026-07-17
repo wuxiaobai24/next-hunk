@@ -39,11 +39,16 @@ impl VcsPreference {
 
     /// Parse config/CLI values. Unknown → `Auto`.
     pub fn parse_str(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(VcsPreference::Auto)
+    }
+
+    /// Parse config values. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
         match s.trim().to_lowercase().as_str() {
-            "git" => VcsPreference::Git,
-            "jj" | "jujutsu" => VcsPreference::Jj,
-            "auto" | "" => VcsPreference::Auto,
-            _ => VcsPreference::Auto,
+            "git" => Ok(VcsPreference::Git),
+            "jj" | "jujutsu" => Ok(VcsPreference::Jj),
+            "auto" | "" => Ok(VcsPreference::Auto),
+            other => Err(format!("unknown vcs '{other}' (expected auto, git, or jj)")),
         }
     }
 }
@@ -73,14 +78,21 @@ impl DiffScope {
         }
     }
 
-    /// Parse config values. Unknown → `Worktree` (safe default).
-    pub fn parse_str(s: &str) -> Self {
+    /// Parse config values. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
         match s.trim().to_lowercase().as_str() {
-            "staged" | "cached" | "index" => DiffScope::Staged,
-            "working-set" | "working_set" | "all" | "ws" => DiffScope::WorkingSet,
-            "worktree" | "unstaged" | "wt" => DiffScope::Worktree,
-            _ => DiffScope::Worktree,
+            "staged" | "cached" | "index" => Ok(DiffScope::Staged),
+            "working-set" | "working_set" | "all" | "ws" => Ok(DiffScope::WorkingSet),
+            "worktree" | "unstaged" | "wt" => Ok(DiffScope::Worktree),
+            other => Err(format!(
+                "unknown scope '{other}' (expected worktree, staged, or working-set)"
+            )),
         }
+    }
+
+    /// Parse config values. Unknown → `Worktree` (lenient default for tests).
+    pub fn parse_str(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(DiffScope::Worktree)
     }
 }
 
@@ -125,14 +137,22 @@ impl ExportOnQuit {
         }
     }
 
-    /// Parse config/CLI values. Unknown → `None` (safe default).
-    pub fn parse_str(s: &str) -> Self {
+    /// Parse config/CLI values. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
         match s.trim().to_lowercase().as_str() {
-            "json" => ExportOnQuit::Json,
-            "markdown" | "md" => ExportOnQuit::Markdown,
-            "both" => ExportOnQuit::Both,
-            _ => ExportOnQuit::None,
+            "none" => Ok(ExportOnQuit::None),
+            "json" => Ok(ExportOnQuit::Json),
+            "markdown" | "md" => Ok(ExportOnQuit::Markdown),
+            "both" => Ok(ExportOnQuit::Both),
+            other => Err(format!(
+                "unknown export_on_quit '{other}' (expected none, json, markdown, or both)"
+            )),
         }
+    }
+
+    /// Parse config/CLI values. Unknown → `None` (lenient default for tests).
+    pub fn parse_str(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(ExportOnQuit::None)
     }
 }
 
@@ -145,12 +165,21 @@ impl LayoutMode {
         }
     }
 
-    pub fn parse_str(s: &str) -> Self {
+    /// Parse layout mode. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
         match s.trim().to_lowercase().as_str() {
-            "stack" => LayoutMode::Stack,
-            "split" => LayoutMode::Split,
-            _ => LayoutMode::Unified,
+            "unified" => Ok(LayoutMode::Unified),
+            "stack" => Ok(LayoutMode::Stack),
+            "split" => Ok(LayoutMode::Split),
+            other => Err(format!(
+                "unknown layout '{other}' (expected unified, stack, or split)"
+            )),
         }
+    }
+
+    /// Parse layout mode. Unknown → `Unified` (lenient default for tests).
+    pub fn parse_str(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(LayoutMode::Unified)
     }
 }
 
@@ -223,23 +252,30 @@ impl Config {
 
     /// Load the user-level config from `~/.config/next-hunk/config.toml`
     /// (honoring `$XDG_CONFIG_HOME` and `$HOME`). Missing file = empty config.
-    pub fn load_user() -> Config {
-        user_config_path()
-            .and_then(|p| load_file(&p))
-            .unwrap_or_default()
+    ///
+    /// Returns `Err` when the file exists but is unreadable, not valid TOML, or
+    /// contains an illegal enum value (so startup fails loudly instead of
+    /// silently ignoring a typo).
+    pub fn load_user() -> Result<Config, String> {
+        match user_config_path() {
+            Some(p) => Ok(load_file(&p)?.unwrap_or_default()),
+            None => Ok(Config::default()),
+        }
     }
 
     /// Load the project-level config by walking up from `start` looking for a
-    /// `.next-hunk/config.toml`. Missing = empty config.
-    pub fn load_project(start: &Path) -> Config {
-        find_project_config(start)
-            .and_then(|p| load_file(&p))
-            .unwrap_or_default()
+    /// `.next-hunk/config.toml`. Missing = empty config. See [`Self::load_user`]
+    /// for error semantics on a present-but-invalid file.
+    pub fn load_project(start: &Path) -> Result<Config, String> {
+        match find_project_config(start) {
+            Some(p) => Ok(load_file(&p)?.unwrap_or_default()),
+            None => Ok(Config::default()),
+        }
     }
 
     /// Load the full layered config: user merged with project (project wins).
-    pub fn load(start: &Path) -> Config {
-        Config::load_user().merge(Config::load_project(start))
+    pub fn load(start: &Path) -> Result<Config, String> {
+        Ok(Config::load_user()?.merge(Config::load_project(start)?))
     }
 }
 
@@ -314,10 +350,15 @@ impl ResolvedConfig {
     /// Resolve the final config.
     ///
     /// CLI `Some` wins; otherwise the merged config; otherwise defaults.
-    pub fn resolve(cfg: &Config, cli: &CliFlags) -> Self {
+    /// Illegal enum strings in config (e.g. `layout = "sidebyside"`) return
+    /// `Err` with the field name and allowed values — never silent fallback.
+    pub fn resolve(cfg: &Config, cli: &CliFlags) -> Result<Self, String> {
         let d = Self::default();
-        Self {
-            scope: resolve_scope(cfg, cli),
+        if let Some(ref theme) = cfg.theme {
+            validate_theme(theme)?;
+        }
+        Ok(Self {
+            scope: resolve_scope(cfg, cli)?,
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
             line_numbers: cfg.line_numbers.unwrap_or(d.line_numbers),
@@ -326,20 +367,29 @@ impl ResolvedConfig {
                 .or(cfg.include_untracked)
                 .unwrap_or(d.include_untracked),
             theme: cfg.theme.clone(),
-            layout: cli
-                .layout
-                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
-                .unwrap_or(d.layout),
+            layout: match cli.layout {
+                Some(l) => l,
+                None => match cfg.layout.as_deref() {
+                    Some(s) => LayoutMode::try_parse(s)?,
+                    None => d.layout,
+                },
+            },
             wrap: cfg.wrap.unwrap_or(d.wrap),
-            export_on_quit: cli
-                .export_on_quit
-                .or_else(|| cfg.export_on_quit.as_deref().map(ExportOnQuit::parse_str))
-                .unwrap_or(d.export_on_quit),
-            vcs: cli
-                .vcs
-                .or_else(|| cfg.vcs.as_deref().map(VcsPreference::parse_str))
-                .unwrap_or(d.vcs),
-        }
+            export_on_quit: match cli.export_on_quit {
+                Some(e) => e,
+                None => match cfg.export_on_quit.as_deref() {
+                    Some(s) => ExportOnQuit::try_parse(s)?,
+                    None => d.export_on_quit,
+                },
+            },
+            vcs: match cli.vcs {
+                Some(v) => v,
+                None => match cfg.vcs.as_deref() {
+                    Some(s) => VcsPreference::try_parse(s)?,
+                    None => d.vcs,
+                },
+            },
+        })
     }
 }
 
@@ -351,21 +401,30 @@ impl ResolvedConfig {
 /// 3. Config `scope = "..."`
 /// 4. Config `staged = true` → `Staged` (legacy)
 /// 5. Default `Worktree`
-fn resolve_scope(cfg: &Config, cli: &CliFlags) -> DiffScope {
+fn resolve_scope(cfg: &Config, cli: &CliFlags) -> Result<DiffScope, String> {
     if cli.all == Some(true) {
-        return DiffScope::WorkingSet;
+        return Ok(DiffScope::WorkingSet);
     }
     if cli.staged == Some(true) {
-        return DiffScope::Staged;
+        return Ok(DiffScope::Staged);
     }
     // Explicit CLI staged=false (shouldn't happen with a pure flag) keeps config.
     if let Some(scope) = cfg.scope.as_deref() {
-        return DiffScope::parse_str(scope);
+        return DiffScope::try_parse(scope);
     }
     if cfg.staged == Some(true) {
-        return DiffScope::Staged;
+        return Ok(DiffScope::Staged);
     }
-    DiffScope::Worktree
+    Ok(DiffScope::Worktree)
+}
+
+fn validate_theme(theme: &str) -> Result<(), String> {
+    match theme.trim().to_lowercase().as_str() {
+        "dark" | "light" | "auto" => Ok(()),
+        other => Err(format!(
+            "unknown theme '{other}' (expected dark, light, or auto)"
+        )),
+    }
 }
 
 // ─── file discovery ───────────────────────────────────────────────────────────
@@ -397,31 +456,48 @@ fn find_project_config(start: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Read + parse a config file. Returns `None` on any I/O or parse error so a
-/// malformed config never crashes the app.
+/// Read + parse a config file.
 ///
-/// A missing file is normal (most users have no config) and is silent. We only
-/// warn when the file *exists* but can't be read or parsed — that's the case
-/// worth surfacing to the user.
-fn load_file(path: &Path) -> Option<Config> {
+/// * Missing file → `Ok(None)` (common case, silent).
+/// * Present but unreadable / invalid TOML / illegal enum → `Err` with a clear
+///   message so the process exits non-zero instead of silently ignoring typos
+///   like `layout = "sidebyside"`.
+fn load_file(path: &Path) -> Result<Option<Config>, String> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // No config file is the common case — stay quiet.
-            return None;
+            return Ok(None);
         }
         Err(e) => {
-            eprintln!("warning: cannot read config {}: {e}", path.display());
-            return None;
+            return Err(format!("cannot read config {}: {e}", path.display()));
         }
     };
-    match toml::from_str::<Config>(&text) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("warning: invalid config {}: {e}", path.display());
-            None
-        }
+    let cfg: Config =
+        toml::from_str(&text).map_err(|e| format!("invalid config {}: {e}", path.display()))?;
+    validate_config_enums(&cfg, path)?;
+    Ok(Some(cfg))
+}
+
+/// Fail fast on illegal string-enum fields so a typo never becomes a silent
+/// default (dogfood: `layout = "sidebyside"` used to be ignored with exit 0).
+fn validate_config_enums(cfg: &Config, path: &Path) -> Result<(), String> {
+    let loc = path.display();
+    if let Some(ref s) = cfg.layout {
+        LayoutMode::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
     }
+    if let Some(ref s) = cfg.scope {
+        DiffScope::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref s) = cfg.export_on_quit {
+        ExportOnQuit::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref s) = cfg.vcs {
+        VcsPreference::try_parse(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref s) = cfg.theme {
+        validate_theme(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -504,7 +580,7 @@ mod tests {
             all: Some(true),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.scope, DiffScope::WorkingSet);
         assert!(!r.highlight); // config wins (CLI None)
         assert!(r.watch); // config wins
@@ -520,7 +596,7 @@ mod tests {
             staged: Some(true),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.scope, DiffScope::Staged);
     }
 
@@ -530,7 +606,7 @@ mod tests {
             scope: Some("working-set".into()),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
         assert_eq!(r.scope, DiffScope::WorkingSet);
     }
 
@@ -540,14 +616,14 @@ mod tests {
             staged: Some(true),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
         assert_eq!(r.scope, DiffScope::Staged);
     }
 
     #[test]
     fn resolve_defaults_when_nothing_set() {
         let cfg = Config::default();
-        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
         assert_eq!(r.scope, DiffScope::Worktree);
         assert!(r.highlight); // default on
         assert!(!r.watch);
@@ -564,7 +640,7 @@ mod tests {
             highlight: Some(false), // --no-highlight
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(!r.highlight);
     }
 
@@ -575,7 +651,7 @@ mod tests {
             ..Default::default()
         };
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(!r.line_numbers); // config false wins
     }
 
@@ -583,7 +659,7 @@ mod tests {
     fn resolve_line_numbers_defaults_to_true() {
         let cfg = Config::default(); // line_numbers = None
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(r.line_numbers); // default on
     }
 
@@ -594,7 +670,7 @@ mod tests {
             ..Default::default()
         };
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.theme.as_deref(), Some("light"));
     }
 
@@ -602,7 +678,7 @@ mod tests {
     fn resolve_theme_none_when_unset() {
         let cfg = Config::default();
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(r.theme.is_none());
     }
 
@@ -617,7 +693,7 @@ line_numbers = true
 theme = \"dark\"
 ",
         );
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.staged, Some(true));
         assert_eq!(cfg.highlight, Some(false));
         assert_eq!(cfg.watch, Some(true));
@@ -628,7 +704,7 @@ theme = \"dark\"
     #[test]
     fn parse_partial_config() {
         let (dir, _path) = write_tmp_config("highlight = false\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.highlight, Some(false));
         assert_eq!(cfg.staged, None); // unset
     }
@@ -637,7 +713,7 @@ theme = \"dark\"
     fn parse_unknown_field_is_ignored() {
         // Unknown keys shouldn't break parsing (forward-compat).
         let (dir, _path) = write_tmp_config("highlight = true\nfuture_field = 42\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.highlight, Some(true));
     }
 
@@ -647,24 +723,56 @@ theme = \"dark\"
         // create a nested subdir; config is found by walking up
         let nested = dir.0.join("a/b/c");
         fs::create_dir_all(&nested).unwrap();
-        let cfg = Config::load_project(&nested);
+        let cfg = Config::load_project(&nested).unwrap();
         assert_eq!(cfg.highlight, Some(false));
     }
 
     #[test]
     fn missing_config_returns_empty() {
         let dir = TempDir::new();
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.staged, None);
         assert_eq!(cfg.highlight, None);
     }
 
     #[test]
-    fn malformed_config_returns_empty() {
+    fn malformed_config_returns_error() {
         let (dir, _path) = write_tmp_config("this is = = not valid toml {{{\n");
-        let cfg = Config::load_project(&dir.0);
-        // parse error → empty config (does not panic)
-        assert_eq!(cfg.highlight, None);
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("invalid config"),
+            "malformed TOML should fail loudly, got: {err}"
+        );
+    }
+
+    #[test]
+    fn illegal_layout_returns_error() {
+        let (dir, _path) = write_tmp_config("layout = \"sidebyside\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("layout") && err.contains("unified"),
+            "illegal layout must name field + allowed values, got: {err}"
+        );
+    }
+
+    #[test]
+    fn illegal_scope_returns_error() {
+        let (dir, _path) = write_tmp_config("scope = \"everything\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("scope") && err.contains("worktree"),
+            "illegal scope must name field + allowed values, got: {err}"
+        );
+    }
+
+    #[test]
+    fn illegal_vcs_returns_error() {
+        let (dir, _path) = write_tmp_config("vcs = \"fossil\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("vcs") && err.contains("auto"),
+            "illegal vcs must name field + allowed values, got: {err}"
+        );
     }
 
     #[test]
@@ -686,7 +794,7 @@ theme = \"dark\"
         std::env::set_var("HOME", &empty_home.0);
         std::env::remove_var("XDG_CONFIG_HOME");
 
-        let cfg = Config::load(&dir.0);
+        let cfg = Config::load(&dir.0).unwrap();
         assert_eq!(cfg.highlight, Some(false));
         assert_eq!(cfg.watch, Some(true));
 
@@ -703,17 +811,17 @@ theme = \"dark\"
     fn layout_mode_defaults_to_unified() {
         let cfg = Config::default();
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.layout, LayoutMode::Unified);
     }
 
     #[test]
     fn layout_mode_from_config() {
         let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.layout.as_deref(), Some("stack"));
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.layout, LayoutMode::Stack);
     }
 
@@ -725,6 +833,8 @@ theme = \"dark\"
         assert_eq!(LayoutMode::parse_str("SPLIT"), LayoutMode::Split);
         assert_eq!(LayoutMode::parse_str("unknown"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str(""), LayoutMode::Unified);
+        assert!(LayoutMode::try_parse("sidebyside").is_err());
+        assert!(LayoutMode::try_parse("stack").is_ok());
     }
 
     #[test]
@@ -737,22 +847,22 @@ theme = \"dark\"
     #[test]
     fn layout_mode_split_from_config() {
         let (dir, _path) = write_tmp_config("layout = \"split\"\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.layout.as_deref(), Some("split"));
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.layout, LayoutMode::Split);
     }
 
     #[test]
     fn layout_mode_cli_overrides_config() {
         let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         let cli = CliFlags {
             layout: Some(LayoutMode::Split),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.layout, LayoutMode::Split);
     }
 
@@ -760,27 +870,27 @@ theme = \"dark\"
     fn wrap_defaults_to_false() {
         let cfg = Config::default();
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(!r.wrap, "wrap should default to false");
     }
 
     #[test]
     fn wrap_from_config() {
         let (dir, _path) = write_tmp_config("wrap = true\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.wrap, Some(true));
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(r.wrap);
     }
 
     #[test]
     fn wrap_false_from_config() {
         let (dir, _path) = write_tmp_config("wrap = false\n");
-        let cfg = Config::load_project(&dir.0);
+        let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.wrap, Some(false));
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(!r.wrap);
     }
 
@@ -788,7 +898,7 @@ theme = \"dark\"
     fn export_on_quit_defaults_to_none() {
         let cfg = Config::default();
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.export_on_quit, ExportOnQuit::None);
     }
 
@@ -799,14 +909,14 @@ theme = \"dark\"
             ..Default::default()
         };
         let cli = CliFlags::default();
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.export_on_quit, ExportOnQuit::Json);
 
         let cli = CliFlags {
             export_on_quit: Some(ExportOnQuit::Both),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.export_on_quit, ExportOnQuit::Both); // CLI wins
     }
 
@@ -815,6 +925,8 @@ theme = \"dark\"
         assert_eq!(ExportOnQuit::parse_str("markdown"), ExportOnQuit::Markdown);
         assert_eq!(ExportOnQuit::parse_str("md"), ExportOnQuit::Markdown);
         assert_eq!(ExportOnQuit::parse_str("weird"), ExportOnQuit::None);
+        assert!(ExportOnQuit::try_parse("weird").is_err());
+        assert!(ExportOnQuit::try_parse("none").is_ok());
     }
 
     #[test]
@@ -832,20 +944,20 @@ theme = \"dark\"
             vcs: Some("jj".into()),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
         assert_eq!(r.vcs, VcsPreference::Jj);
 
         let cli = CliFlags {
             vcs: Some(VcsPreference::Git),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.vcs, VcsPreference::Git); // CLI wins
     }
 
     #[test]
     fn vcs_defaults_to_auto() {
-        let r = ResolvedConfig::resolve(&Config::default(), &CliFlags::default());
+        let r = ResolvedConfig::resolve(&Config::default(), &CliFlags::default()).unwrap();
         assert_eq!(r.vcs, VcsPreference::Auto);
     }
 }

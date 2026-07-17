@@ -19,11 +19,29 @@ use crate::ir::{Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
 
 /// Format a [`FocusTarget`] for status messages (compact, human-readable).
-fn focus_display(target: &FocusTarget) -> String {
+pub fn focus_display(target: &FocusTarget) -> String {
     match target {
         FocusTarget::File(p) => p.clone(),
         FocusTarget::FileLine(p, l) => format!("{p}:{l}"),
         FocusTarget::FileHunk(p, h) => format!("{p}:h{h}"),
+    }
+}
+
+/// Resolve a focus target to an absolute stream row, or `None` if the path /
+/// line / hunk is not present in `review`. Shared by [`App::apply_focus`] and
+/// the CLI pre-TTY warning path so both agree on "found vs miss".
+pub fn resolve_focus_row(review: &Review, target: &FocusTarget) -> Option<usize> {
+    match target {
+        FocusTarget::File(path) => ViewportQuery::file_index_for_path(review, path)
+            .map(|idx| ViewportQuery::file_start_row(review, idx)),
+        FocusTarget::FileLine(path, line) => ViewportQuery::file_index_for_path(review, path)
+            .and_then(|idx| ViewportQuery::row_for_new_line(review, idx, *line)),
+        FocusTarget::FileHunk(path, hunk) => {
+            // CLI hunk ordinals are 1-based; HunkId/storage is 0-based.
+            let hunk0 = hunk.saturating_sub(1);
+            ViewportQuery::file_index_for_path(review, path)
+                .and_then(|idx| ViewportQuery::hunk_start_row(review, idx, hunk0))
+        }
     }
 }
 
@@ -450,50 +468,41 @@ impl App {
 
     /// Consume `focus_target`: resolve it to an absolute stream row and move the
     /// viewport there. Called once by the run loop before the first draw. On an
-    /// unknown path/line/hunk the focus silently falls back to the top with a
-    /// status hint (the review still opens normally).
-    pub fn apply_focus(&mut self) {
+    /// unknown path/line/hunk the focus falls back to the top with a status
+    /// hint (the review still opens normally).
+    ///
+    /// Returns `true` when focus was applied (or no target was set); `false`
+    /// when the target could not be resolved (caller may also warn on stderr).
+    pub fn apply_focus(&mut self) -> bool {
         let Some(target) = self.focus_target.take() else {
-            return;
+            return true;
         };
-        let row = match &target {
-            FocusTarget::File(path) => {
-                match ViewportQuery::file_index_for_path(&self.review, path) {
-                    Some(idx) => Some(ViewportQuery::file_start_row(&self.review, idx)),
-                    None => None,
-                }
-            }
-            FocusTarget::FileLine(path, line) => {
-                ViewportQuery::file_index_for_path(&self.review, path)
-                    .and_then(|idx| ViewportQuery::row_for_new_line(&self.review, idx, *line))
-            }
-            FocusTarget::FileHunk(path, hunk) => {
-                // CLI hunk ordinals are 1-based; HunkId/storage is 0-based.
-                let hunk0 = hunk.saturating_sub(1);
-                ViewportQuery::file_index_for_path(&self.review, path)
-                    .and_then(|idx| ViewportQuery::hunk_start_row(&self.review, idx, hunk0))
-            }
-        };
+        let row = resolve_focus_row(&self.review, &target);
         match row {
             Some(row) => {
                 self.scroll_y = row.min(self.max_scroll());
                 self.sync_selected_file();
                 self.status = format!("📍 focus: {}", focus_display(&target));
+                true
             }
             None => {
                 self.status = format!("focus not found: {}", focus_display(&target));
+                false
             }
         }
     }
 
-    /// The [`HunkId`] of the first hunk header within the current viewport, if
-    /// any. Used by `--select` keys to decide which hunk `a`/`r`/`?` act on.
+    /// The [`HunkId`] of the hunk the user is currently reviewing.
+    ///
+    /// Prefer the first hunk header visible in the viewport; if the header has
+    /// scrolled off, fall back to the hunk that owns `scroll_y` so `a`/`r`
+    /// still work mid-body.
     fn current_hunk_id(&self) -> Option<HunkId> {
         let viewport = Viewport {
             start: self.scroll_y,
             height: self.viewport_height.max(1),
         };
-        ViewportQuery::rows(&self.review, viewport, &self.folded)
+        if let Some(id) = ViewportQuery::rows(&self.review, viewport, &self.folded)
             .into_iter()
             .find_map(|row| match row {
                 crate::ir::StreamRow::HunkHeader {
@@ -501,11 +510,16 @@ impl App {
                 } => Some(HunkId { file_idx, hunk_idx }),
                 _ => None,
             })
+        {
+            return Some(id);
+        }
+        ViewportQuery::hunk_id_at_row(&self.review, self.scroll_y)
+            .map(|(file_idx, hunk_idx)| HunkId { file_idx, hunk_idx })
     }
 
-    /// Record a decision for the current viewport's first hunk, then advance to
-    /// the next hunk so the human can keep reviewing. No-op (besides status)
-    /// when there is no hunk in view.
+    /// Record a decision for the current hunk, then advance to the next hunk so
+    /// the human can keep reviewing. No-op (besides status) when there is no
+    /// hunk in view.
     fn decide_current(&mut self, decision: Decision) {
         if let Some(id) = self.current_hunk_id() {
             self.decisions.insert(id, decision);
@@ -522,6 +536,58 @@ impl App {
         } else {
             self.status = "no hunk in view".into();
         }
+    }
+
+    /// Accept/reject the current hunk and every later hunk in the same file
+    /// (git add -p style `a`/`d` bulk), then jump to the next file if any.
+    fn decide_rest_of_file(&mut self, decision: Decision) {
+        let Some(id) = self.current_hunk_id() else {
+            self.status = "no hunk in view".into();
+            return;
+        };
+        let file_idx = id.file_idx;
+        let Some(file) = self.review.files.get(file_idx) else {
+            return;
+        };
+        let mut n = 0usize;
+        for hunk_idx in id.hunk_idx..file.hunks.len() {
+            self.decisions
+                .insert(HunkId { file_idx, hunk_idx }, decision);
+            n += 1;
+        }
+        let path = file.display_path.clone();
+        // Land on the next file's start when one exists; otherwise stay put.
+        if file_idx + 1 < self.review.file_count() {
+            let next = file_idx + 1;
+            self.selected_file = next;
+            self.scroll_y = ViewportQuery::file_start_row(&self.review, next);
+        }
+        self.status = format!("{decision:?} rest of {path} ({n} hunks)");
+    }
+
+    /// Accept/reject the current hunk and every later hunk in the whole review.
+    fn decide_all_remaining(&mut self, decision: Decision) {
+        let Some(id) = self.current_hunk_id() else {
+            self.status = "no hunk in view".into();
+            return;
+        };
+        let mut n = 0usize;
+        for (file_idx, file) in self.review.files.iter().enumerate() {
+            if file_idx < id.file_idx {
+                continue;
+            }
+            let start = if file_idx == id.file_idx {
+                id.hunk_idx
+            } else {
+                0
+            };
+            for hunk_idx in start..file.hunks.len() {
+                self.decisions
+                    .insert(HunkId { file_idx, hunk_idx }, decision);
+                n += 1;
+            }
+        }
+        self.status = format!("{decision:?} all remaining ({n} hunks)");
     }
 
     /// Build the `--select` output from the current decision map. Every hunk in
@@ -712,6 +778,8 @@ impl App {
         // Vim/less-style page navigation on Ctrl-modified keys. Checked
         // before the `match key.code` below so the modifier is honored.
         // (Ctrl+C is handled earlier in `handle_key`.)
+        // In --select mode, Ctrl-A / Ctrl-R accept/reject all remaining hunks
+        // from the current position (bulk counterpart of single-hunk a/r).
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('d') => {
@@ -728,6 +796,14 @@ impl App {
                 }
                 KeyCode::Char('b') => {
                     self.scroll_by(-(full as i64));
+                    return;
+                }
+                KeyCode::Char('a') if self.select_mode => {
+                    self.decide_all_remaining(Decision::Accept);
+                    return;
+                }
+                KeyCode::Char('r') if self.select_mode => {
+                    self.decide_all_remaining(Decision::Reject);
                     return;
                 }
                 _ => {}
@@ -945,8 +1021,8 @@ impl App {
                 self.show_help = !self.show_help;
             }
             // --select mode: accept / reject / mark undecided on the current
-            // hunk, then jump to the next. These keys are inert outside select
-            // mode (a/r/u fall through to the no-op catch-all).
+            // hunk, then jump to the next. `A`/`R` accept/reject the rest of
+            // the current file. These keys are inert outside select mode.
             KeyCode::Char('a') if self.select_mode => {
                 self.decide_current(Decision::Accept);
             }
@@ -955,6 +1031,12 @@ impl App {
             }
             KeyCode::Char('u') if self.select_mode => {
                 self.decide_current(Decision::Undecided);
+            }
+            KeyCode::Char('A') if self.select_mode => {
+                self.decide_rest_of_file(Decision::Accept);
+            }
+            KeyCode::Char('R') if self.select_mode => {
+                self.decide_rest_of_file(Decision::Reject);
             }
             _ => {}
         }
@@ -2650,6 +2732,60 @@ diff --git a/b.rs b/b.rs
         let s = app.selections();
         assert!(s.accepted.is_empty());
         assert!(s.undecided.contains(&"a.rs:h1".to_string()));
+    }
+
+    #[test]
+    fn select_shift_a_accepts_rest_of_file() {
+        // multi_hunk_app: a.rs has 2 hunks, b.rs has 2. From a.rs hunk0, `A`
+        // accepts both a.rs hunks and leaves b.rs undecided.
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1; // a.rs hunk0
+        app.handle_key(char_key('A'));
+        let s = app.selections();
+        assert_eq!(
+            s.accepted,
+            vec!["a.rs:h1".to_string(), "a.rs:h2".to_string()]
+        );
+        assert!(s.rejected.is_empty());
+        assert_eq!(s.undecided.len(), 2);
+        assert!(s.undecided.iter().all(|k| k.starts_with("b.rs:")));
+        // Lands on the next file.
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
+    fn select_ctrl_a_accepts_all_remaining() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1; // a.rs hunk0 — all 4 hunks remaining
+        app.handle_key(ctrl('a'));
+        let s = app.selections();
+        assert_eq!(s.accepted.len(), 4);
+        assert!(s.rejected.is_empty());
+        assert!(s.undecided.is_empty());
+    }
+
+    #[test]
+    fn select_ctrl_r_from_mid_rejects_tail_only() {
+        // Decide a.rs hunk0 already accepted; then from a.rs hunk1 reject all remaining.
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1;
+        app.handle_key(char_key('a')); // accept a.rs:h1, jump to h2
+        app.handle_key(ctrl('r')); // reject rest: a.rs:h2 + b.rs:h1 + b.rs:h2
+        let s = app.selections();
+        assert_eq!(s.accepted, vec!["a.rs:h1".to_string()]);
+        assert_eq!(s.rejected.len(), 3);
+        assert!(s.undecided.is_empty());
+    }
+
+    #[test]
+    fn apply_focus_returns_false_on_miss() {
+        let mut app = multi_hunk_app();
+        app.focus_target = Some(FocusTarget::File("missing.rs".into()));
+        assert!(!app.apply_focus());
+        assert!(app.status.contains("not found"));
     }
 
     // ---- export_on_quit: ReviewReport ----
