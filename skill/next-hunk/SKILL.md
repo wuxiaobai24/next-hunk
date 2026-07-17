@@ -140,21 +140,37 @@ next-hunk serve --all --include-untracked
 ```
 
 The TUI runs with selection mode on (`a`/`r`/`u` per hunk). It binds a Unix
-socket derived from the repo root, so all subsequent commands find it
-automatically — no `--socket` flag needed.
+socket derived from the **worktree root path** (not the shared `.git` common
+dir), so all subsequent commands find it automatically — no `--socket` flag
+needed. **Each `git worktree` checkout gets its own session** — two agents in
+two linked worktrees can `serve` in parallel without stealing each other's
+socket.
 
 ### 2. Agent: discover the session
 
 ```bash
 next-hunk list
-# c0ffee...  /run/user/1000/next-hunk-c0ffee....sock  files=3  repo=/home/you/project
+# c0ffee...  /run/user/1000/next-hunk-c0ffee....sock  files=3  repo=/home/you/project  (current)
+# ab12cd...  /run/user/1000/next-hunk-ab12cd....sock  files=1  repo=/home/you/project-feature
 ```
 
 `list` scans `$XDG_RUNTIME_DIR` and `/tmp` for live next-hunk sockets, probes
 each, and prints hash/path/files/repo. `repo` is the **absolute worktree root**
 known at `serve` startup (not a file path from the diff) — use it to pick the
-right session when multiple worktrees are live. `get` shows details for a
-specific hash or the current repo.
+right session when multiple worktrees are live. The `(current)` marker flags
+the session whose worktree matches your cwd.
+
+When several agents work on the **same** repo via linked worktrees:
+
+```bash
+# Only sessions (and idle worktree roots) for *this* repository:
+next-hunk list --all-worktrees
+# worktrees of this repo: 2 total, 1 with live serve
+# c0ffee...  ...  files=3  repo=/home/you/project  (current)
+# ab12cd...  —  files=-  repo=/home/you/project-feature  (no serve)
+```
+
+`get` shows details for a specific hash or the current worktree's socket.
 
 ```bash
 next-hunk get
@@ -162,6 +178,48 @@ next-hunk get
 # repo:   /home/you/project
 # files:  3
 ```
+
+### Multi-agent / multi-worktree layout (recommended)
+
+For parallel agents (one task per worktree), give each worktree its own
+`serve` and session:
+
+```text
+┌─ tmux ─────────────────────────────────────────────────────────┐
+│ pane 0: human review          │ pane 1: agent A (feature-a)    │
+│   cd ~/project-a &&           │   cd ~/project-a && …edits…    │
+│   next-hunk serve --all       │   next-hunk list               │
+│                               │   next-hunk navigate …         │
+├───────────────────────────────┼────────────────────────────────┤
+│ pane 2: human review          │ pane 3: agent B (feature-b)    │
+│   cd ~/project-b &&           │   cd ~/project-b && …edits…    │
+│   next-hunk serve --all       │   next-hunk list --all-worktrees│
+└───────────────────────────────┴────────────────────────────────┘
+```
+
+Setup sketch:
+
+```bash
+# From the main checkout:
+git worktree add ../project-a -b agent/a
+git worktree add ../project-b -b agent/b
+
+# Human: one serve per worktree (separate tmux panes / terminals):
+cd ../project-a && next-hunk serve --all --include-untracked
+cd ../project-b && next-hunk serve --all --include-untracked
+```
+
+**How the agent should choose a session:**
+
+| Situation | What to do |
+|-----------|------------|
+| You are already `cd`'d into the worktree you edit | Prefer bare `next-hunk review` / `navigate` / `decision` (auto-resolves **this** worktree's socket). |
+| Multiple `serve` processes may be live | `next-hunk list` — match `repo=` to your worktree path; use the hash with `--hash` on navigate/comment/etc. |
+| You only care about worktrees of **this** repo | `next-hunk list --all-worktrees` — ignores unrelated projects' sessions. |
+| Wrong worktree / no `(current)` session | `cd` into the correct worktree, or pass the hash from `list`. Do **not** drive another agent's TUI. |
+
+Session commands that accept an optional hash (`get`, `review`, `navigate --hash`,
+`comment … --hash`, `reload --hash`) target a non-cwd worktree when needed.
 
 ### 3. Agent: inspect the review structure
 

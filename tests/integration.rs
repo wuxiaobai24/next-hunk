@@ -12,11 +12,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use next_hunk::cli_parse::{runtime_socket_hash, runtime_socket_path};
 use next_hunk::config::DiffScope;
 use next_hunk::ir::FileOrigin;
 use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
 use next_hunk::source::{
-    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, open_repo,
+    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, list_repo_worktree_roots,
+    open_repo,
 };
 
 /// Skip the test if `git` is unavailable.
@@ -528,4 +530,104 @@ fn filediff_with_relative_paths() {
     assert!(!text.trim().is_empty());
     let review = parse_unified_diff(&text).unwrap();
     assert_eq!(review.file_count(), 1);
+}
+
+/// Linked worktrees must list as separate roots and bind distinct sockets.
+#[test]
+fn linked_worktrees_have_independent_session_sockets() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    let main = repo.workdir();
+
+    // Need at least one commit for `git worktree add`.
+    // setup_repo already committed; add a second worktree next to the main dir.
+    let linked = repo.path().parent().unwrap().join(format!(
+        "next-hunk-wt-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    git_in(
+        &main,
+        &["worktree", "add", "-q", linked.to_str().unwrap(), "HEAD"],
+    );
+    let _cleanup = LinkedWorktreeGuard {
+        main: main.clone(),
+        linked: linked.clone(),
+    };
+
+    // Discovery from main and from the linked worktree must both see both roots.
+    let from_main = list_repo_worktree_roots(&main).unwrap();
+    let from_linked = list_repo_worktree_roots(&linked).unwrap();
+    assert!(
+        from_main.len() >= 2,
+        "expected main + linked worktree, got {from_main:?}"
+    );
+    assert_eq!(
+        from_main.len(),
+        from_linked.len(),
+        "main and linked discovery should agree: {from_main:?} vs {from_linked:?}"
+    );
+
+    let main_abs = fs::canonicalize(&main).unwrap_or(main.clone());
+    let linked_abs = fs::canonicalize(&linked).unwrap_or(linked.clone());
+    assert!(
+        from_main
+            .iter()
+            .any(|p| { fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == main_abs }),
+        "main worktree missing from list: {from_main:?}"
+    );
+    assert!(
+        from_main
+            .iter()
+            .any(|p| { fs::canonicalize(p).unwrap_or_else(|_| p.clone()) == linked_abs }),
+        "linked worktree missing from list: {from_main:?}"
+    );
+
+    // Socket paths / hashes must differ so two `serve` processes do not collide.
+    let sock_main = runtime_socket_path(&main_abs);
+    let sock_linked = runtime_socket_path(&linked_abs);
+    assert_ne!(
+        sock_main, sock_linked,
+        "linked worktrees must not share a serve socket"
+    );
+    assert_ne!(
+        runtime_socket_hash(&main_abs),
+        runtime_socket_hash(&linked_abs)
+    );
+
+    // On Unix, both sockets must be bindable at once (acceptance: no socket steal).
+    #[cfg(unix)]
+    {
+        use std::os::unix::net::UnixListener;
+        let _ = fs::remove_file(&sock_main);
+        let _ = fs::remove_file(&sock_linked);
+        let a = UnixListener::bind(&sock_main)
+            .unwrap_or_else(|e| panic!("bind main socket {}: {e}", sock_main.display()));
+        let b = UnixListener::bind(&sock_linked)
+            .unwrap_or_else(|e| panic!("bind linked socket {}: {e}", sock_linked.display()));
+        drop(a);
+        drop(b);
+        let _ = fs::remove_file(&sock_main);
+        let _ = fs::remove_file(&sock_linked);
+    }
+}
+
+/// Best-effort cleanup for a linked worktree created in tests.
+struct LinkedWorktreeGuard {
+    main: PathBuf,
+    linked: PathBuf,
+}
+
+impl Drop for LinkedWorktreeGuard {
+    fn drop(&mut self) {
+        let _ = Command::new("git")
+            .args(["worktree", "remove", "--force"])
+            .arg(&self.linked)
+            .current_dir(&self.main)
+            .output();
+        let _ = fs::remove_dir_all(&self.linked);
+    }
 }

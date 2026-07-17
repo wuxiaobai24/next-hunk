@@ -44,6 +44,66 @@ pub fn find_repo(start: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Absolute paths of every checkout (main + linked worktrees) for the
+/// repository containing `start`.
+///
+/// Used by `next-hunk list --all-worktrees` to aggregate live sessions that
+/// belong to the same logical repo even when agents sit in different
+/// `git worktree` directories. Paths are absolute when possible; order is main
+/// worktree first (if any), then linked worktrees sorted by path.
+pub fn list_repo_worktree_roots(start: &Path) -> Result<Vec<PathBuf>> {
+    let repo = open_repo(start)?;
+    let mut roots: Vec<PathBuf> = Vec::new();
+
+    // Main worktree: available via main_repo().workdir() even when `start`
+    // itself is a linked worktree (repo.workdir() would only be the linked
+    // checkout). Bare repos have no main worktree.
+    if let Ok(main) = repo.main_repo() {
+        if let Some(wt) = main.workdir() {
+            roots.push(abs_path(wt));
+        }
+    }
+
+    // Linked worktrees under .git/worktrees/<id>/ (never includes main).
+    for proxy in repo.worktrees().context("list linked worktrees")? {
+        match proxy.base() {
+            Ok(base) => {
+                let abs = abs_path(&base);
+                if !roots.iter().any(|r| r == &abs) {
+                    roots.push(abs);
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: skip worktree {}: {e}", proxy.git_dir().display());
+            }
+        }
+    }
+
+    // If we somehow found nothing (unusual), fall back to the current checkout
+    // so callers still have a path to key sessions on.
+    if roots.is_empty() {
+        if let Some(wt) = repo.workdir() {
+            roots.push(abs_path(wt));
+        } else {
+            roots.push(abs_path(repo.git_dir()));
+        }
+    }
+
+    Ok(roots)
+}
+
+/// Prefer an absolute path so socket hashes and `list` output stay stable.
+fn abs_path(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+            .unwrap_or_else(|_| path.to_path_buf())
+    }
+}
+
 /// Open a repository discovered from `start`.
 pub fn open_repo(start: &Path) -> Result<Repository> {
     gix::discover(start)
