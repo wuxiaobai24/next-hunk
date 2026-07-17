@@ -885,17 +885,22 @@ mod tests {
     }
 
     /// Minimal temp-dir helper (avoids pulling in the `tempfile` crate).
+    ///
+    /// Uses a process-wide atomic counter so parallel tests never collide.
+    /// `pid + SystemTime::now().as_nanos()` is not unique enough: macOS
+    /// `SystemTime` can share a tick across threads, so two tests in the same
+    /// nanos window would share a directory and pollute each other (e.g.
+    /// `missing_config_returns_empty` reading a sibling's `staged = true`).
     struct TempDir(PathBuf);
 
     impl TempDir {
         fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "next-hunk-cfg-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+                COUNTER.fetch_add(1, Ordering::Relaxed),
             ));
             fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
@@ -1320,9 +1325,15 @@ add = \"#a6e3a1\"
     #[test]
     fn missing_config_returns_empty() {
         let dir = TempDir::new();
+        // No `.next-hunk/config.toml` under `dir`; walk-up must not invent values.
+        // (Parallel tests use unique temp dirs — see TempDir — so ambient
+        // sibling configs cannot leak in.)
         let cfg = Config::load_project(&dir.0).unwrap();
         assert_eq!(cfg.staged, None);
         assert_eq!(cfg.highlight, None);
+        assert_eq!(cfg.theme, None);
+        assert_eq!(cfg.theme_preset, None);
+        assert_eq!(cfg.theme_colors, None);
     }
 
     #[test]
