@@ -239,9 +239,24 @@ fn call_tool(params: Option<&Value>) -> Result<Value> {
     }
     #[cfg(not(all(feature = "serve", unix)))]
     {
-        let _ = (name, args);
-        // Same matrix as CLI session stubs (`docs/PLATFORMS.md`).
-        bail!("{}", crate::platform::live_session_unavailable("mcp"));
+        let _ = args;
+        // Still validate tool names so hosts get a clear "unknown tool" rather
+        // than a blanket OS error. Known session tools share the platform matrix
+        // message (docs/PLATFORMS.md).
+        match name {
+            "list_sessions"
+            | "review_structure"
+            | "navigate"
+            | "add_comment"
+            | "get_decision"
+            | "push_focus_note"
+            | "reload" => {
+                bail!("{}", crate::platform::live_session_unavailable(name));
+            }
+            _ => bail!(
+                "unknown tool '{name}' (live MCP session tools need serve+Unix; see docs/PLATFORMS.md)"
+            ),
+        }
     }
 }
 
@@ -473,7 +488,10 @@ mod tests {
         assert_eq!(result["isError"], true);
         let text = result["content"][0]["text"].as_str().unwrap();
         assert!(
-            text.contains("unknown tool") || text.contains("require"),
+            text.contains("unknown tool")
+                || text.contains("require")
+                || text.contains("unavailable")
+                || text.contains("PLATFORMS"),
             "{text}"
         );
     }
@@ -493,8 +511,15 @@ mod tests {
         let result = resp.result.expect("result");
         assert_eq!(result["isError"], true);
         let text = result["content"][0]["text"].as_str().unwrap();
+        // Unix+serve: missing `target` arg. Non-Unix: live session unavailable
+        // (docs/PLATFORMS.md) — still an isError tool result.
         assert!(
-            text.contains("target") || text.contains("require") || text.contains("server"),
+            text.contains("target")
+                || text.contains("require")
+                || text.contains("server")
+                || text.contains("unavailable")
+                || text.contains("Unix")
+                || text.contains("PLATFORMS"),
             "{text}"
         );
     }

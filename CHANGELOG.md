@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/PLATFORMS.md`, and suggest `--select` / `overlay` / `last-export`.
 - **`platform` module** — `live_session_supported` /
   `live_session_unavailable` shared by CLI + MCP; unit tests lock message shape.
+- **MCP on non-Unix** — `tools/call` still reports `unknown tool` for bad
+  names; known session tools return the platform matrix error (Windows CI green).
 - **CI** — existing `windows-latest` job remains the gate that pager/parse/
   inspect/one-shot paths stay green; live-session integration tests stay
   `cfg(unix)`.
