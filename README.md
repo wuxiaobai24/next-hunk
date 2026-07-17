@@ -74,6 +74,16 @@ binary-searched index in **nanoseconds**, independent of total diff size, and
 the viewport materializes only what's on screen. Full numbers live in
 [CHANGELOG.md](./CHANGELOG.md).
 
+## Platform support
+
+| | Linux | macOS | Windows |
+|---|:---:|:---:|:---:|
+| One-shot TUI / pager / inspect / `--select` | ✅ | ✅ | ✅ (CI) |
+| Live `serve` + session CLI / MCP tools | ✅ | ✅ | ❌ → **0.9** |
+
+Full matrix, Windows agent playbook, and the 0.9 transport plan:
+**[`docs/PLATFORMS.md`](./docs/PLATFORMS.md)**.
+
 ## Install
 
 Maintainers: cut tags with [docs/RELEASE.md](./docs/RELEASE.md) (tag-only
@@ -451,8 +461,10 @@ into that TUI instead of opening a second one-shot review. Works without a
 TTY so agents can prefer the CLI. Disable with `--no-forward` or
 `auto_forward = false` in config.
 
-Requires the `serve` feature (on by default) and a Unix OS; on other builds the
-subcommands report that they're unavailable. The `decision` output matches the
+Requires the `serve` feature (on by default) and a **Unix OS** (Linux/macOS). On
+Windows the subcommands exit with a clear error and point at one-shot alternatives
+(`diff --select`, `overlay`, `last-export`). Full matrix:
+**[`docs/PLATFORMS.md`](./docs/PLATFORMS.md)**. The `decision` output matches the
 `--select` quit shape (three buckets only), so an agent parses both identically.
 Full post-quit reports (with comments) use `export_on_quit` / `last-export`.
 

@@ -579,8 +579,11 @@ Agent:  next-hunk last-export                   # if stdout was missed
 | Human isn't at a terminal / you can't run `serve` first | `decision` errors: "no server running" — fall back to `--select` |
 
 `serve` and all session commands (`list`, `get`, `review`, `navigate`,
-`comment`, `reload`, `push`, `decision`) require a Unix OS and the `serve`
-feature (on by default). Auto-forward on `diff` uses the same socket.
+`comment`, `reload`, `push`, `decision`) require a **Unix OS** (Linux/macOS) and
+the `serve` feature (on by default). Auto-forward on `diff` uses the same
+socket. **Windows:** live serve is deferred to 0.9 — use one-shot
+`diff --select` / `overlay` / `last-export` / `inspect --json` instead (matrix:
+repository `docs/PLATFORMS.md`).
 
 ## Decision guide
 

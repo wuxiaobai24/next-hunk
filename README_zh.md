@@ -53,6 +53,16 @@
 - [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
 - [x] 对常见工具（如 delta）的公开性能说明（设计对比 + bench 见 `docs/PERF.md`）
 
+## 平台支持
+
+| | Linux | macOS | Windows |
+|---|:---:|:---:|:---:|
+| One-shot TUI / pager / inspect / `--select` | ✅ | ✅ | ✅（CI） |
+| Live `serve` + session CLI / MCP 工具 | ✅ | ✅ | ❌ → **0.9** |
+
+完整矩阵、Windows agent 剧本与 0.9 传输方案见
+**[`docs/PLATFORMS.md`](./docs/PLATFORMS.md)**。
+
 ## 安装
 
 **官方推荐路径**（任选其一）：
@@ -340,7 +350,7 @@ next-hunk list --all-worktrees
 
 **无感转发：** 当前 worktree 已有 live `serve` 时，`next-hunk diff --focus … --note …`（不含 `--select` / `--watch`）会自动推入该 TUI，而不是再开一个 one-shot。无需 TTY，agent 可直接调 CLI。关闭：`--no-forward` 或配置 `auto_forward = false`。
 
-需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
+需要 `serve` 特性（默认开启）和 **Unix 系统**（Linux/macOS）。Windows 上这些子命令会以明确错误退出，并指向 one-shot 替代（`diff --select` / `overlay` / `last-export`）。完整矩阵见 **[`docs/PLATFORMS.md`](./docs/PLATFORMS.md)**。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
 
 ### MCP 控制面（可选 host 集成）
 

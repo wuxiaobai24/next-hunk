@@ -240,7 +240,8 @@ fn call_tool(params: Option<&Value>) -> Result<Value> {
     #[cfg(not(all(feature = "serve", unix)))]
     {
         let _ = (name, args);
-        bail!("MCP session tools require the `serve` feature on a Unix OS");
+        // Same matrix as CLI session stubs (`docs/PLATFORMS.md`).
+        bail!("{}", crate::platform::live_session_unavailable("mcp"));
     }
 }
 
