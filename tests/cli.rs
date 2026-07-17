@@ -128,6 +128,9 @@ fn no_subcommand_defaults_to_diff() {
     );
 }
 
+// `list` is only implemented under serve+unix; elsewhere it stubs with a
+// feature message and never reaches workspace discovery.
+#[cfg(all(unix, feature = "serve"))]
 #[test]
 fn list_all_worktrees_outside_repo_matches_diff_phrasing() {
     // Outside a workspace, repo-aware commands share one clean message.
