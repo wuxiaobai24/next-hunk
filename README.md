@@ -50,6 +50,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Stack layout: `layout = "stack"` config (unified default)
 - [x] Split layout: `layout = "split"` / `--layout split` side-by-side panes
 - [x] Auto layout: `layout = "auto"` / `--layout auto` responsive — picks split (≥120 cols), stack (≥40), or unified on resize without rebuilding the IR
+- [x] Optional structural backend: `--structural` / `structural = true` via external `difft` (difftastic); default off
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
@@ -299,6 +300,7 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40), or `"auto"` (responsive: split ≥120 cols, stack ≥40, else unified; **recommended for wide terminals**) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `export_on_quit` | string | `"none"` (pager/diff); **serve defaults to `"json"`** when unset | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`). Serve uses `json` unless config/CLI overrides so agents get comments+notes; pager stays `none` so `core.pager` is clean |
+| `structural` | bool | `false` | rewrite baseline unified through external `difft` (difftastic); requires `difft` on PATH (`--structural` / `NEXT_HUNK_DIFFT`). Opt-in only — not under default PERF gates |
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
 | `persist_review` | bool | `true` | save accept/reject decisions under `.git/next-hunk/decisions-<scope>.json` and restore on reopen (`--no-persist` disables) |
 | `auto_forward` | bool | `true` | when a live `serve` exists, `diff --focus`/`--note` push into it (`--no-forward` disables) |
@@ -332,7 +334,7 @@ theme_preset = "catppuccin-mocha"
 
 CLI overrides: `--all` / `--staged` / `--base` / `--range` (mutually exclusive modes),
 `--strategy <worktree|staged|working-set|upstream-ahead|merge-base>`,
-`--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split|auto>`,
+`--watch`, `--no-highlight`, `--include-untracked`, `--structural` (optional difftastic), `--layout <unified|stack|split|auto>`,
 `--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`,
 `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`, `--no-forward`.
 

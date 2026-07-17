@@ -112,6 +112,11 @@ enum Commands {
         /// config) to always open a one-shot review.
         #[arg(long)]
         no_forward: bool,
+        /// Optional structural rewrite via external `difft` (difftastic).
+        /// Default off. Requires `difft` on PATH (or `NEXT_HUNK_DIFFT`).
+        /// Overrides `structural` in config.toml. See skill / docs/PERF.md.
+        #[arg(long)]
+        structural: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -229,6 +234,9 @@ enum Commands {
         /// Prefer this from agents/skills — no live `serve` required.
         #[arg(long)]
         json: bool,
+        /// Optional structural rewrite via external `difft` (see `diff --structural`).
+        #[arg(long)]
+        structural: bool,
     },
     /// Open a persistent review TUI that also listens for agent pushes.
     ///
@@ -291,6 +299,9 @@ enum Commands {
         /// Disable persisting review decisions across sessions.
         #[arg(long)]
         no_persist: bool,
+        /// Optional structural rewrite via external `difft` (see `diff --structural`).
+        #[arg(long)]
+        structural: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -521,6 +532,7 @@ fn run() -> Result<()> {
         vcs: None,
         no_persist: false,
         no_forward: false,
+        structural: false,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -541,6 +553,7 @@ fn run() -> Result<()> {
             vcs,
             no_persist,
             no_forward,
+            structural,
             extra,
         } => {
             // --select never auto-forwards (needs its own interactive gate).
@@ -584,6 +597,7 @@ fn run() -> Result<()> {
                     persist_review: if no_persist { Some(false) } else { None },
                     auto_forward: if no_forward { Some(false) } else { None },
                     theme_preset,
+                    structural: if structural { Some(true) } else { None },
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -625,14 +639,17 @@ fn run() -> Result<()> {
                 );
             }
 
-            let produced =
-                produce_diff_request(&ws, &resolved.request, &extra, resolved.include_untracked)?;
+            let produced = maybe_structural(
+                produce_diff_request(&ws, &resolved.request, &extra, resolved.include_untracked)?,
+                resolved.structural,
+            )?;
             let reloader = if resolved.watch {
                 Some(make_diff_reloader(
                     ws.clone(),
                     resolved.request.clone(),
                     extra,
                     resolved.include_untracked,
+                    resolved.structural,
                 ))
             } else {
                 None
@@ -823,13 +840,26 @@ fn run() -> Result<()> {
             include_untracked,
             vcs,
             json,
+            structural,
         } => {
             // Validate layered config even when inspect does not consume layout/
             // theme — illegal enums must fail every subcommand (dogfood P1).
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
             let (text, origins) = if let Some(path) = path {
-                (read_patch_input(&path)?, Vec::new())
+                let text = read_patch_input(&path)?;
+                if structural || cfg.structural.unwrap_or(false) {
+                    let produced = maybe_structural(
+                        next_hunk::source::ProducedDiff {
+                            text,
+                            origins: Vec::new(),
+                        },
+                        true,
+                    )?;
+                    (produced.text, produced.origins)
+                } else {
+                    (text, Vec::new())
+                }
             } else {
                 let mut resolved = ResolvedConfig::resolve(
                     &cfg,
@@ -841,14 +871,17 @@ fn run() -> Result<()> {
                         strategy,
                         include_untracked: if include_untracked { Some(true) } else { None },
                         vcs,
+                        structural: if structural { Some(true) } else { None },
                         ..Default::default()
                     },
                 )
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
                 let ws = detect_workspace(&cwd, resolved.vcs)?;
                 validate_and_finalize_request(&mut resolved, &ws, strategy)?;
-                let produced =
-                    produce_diff_request(&ws, &resolved.request, &[], resolved.include_untracked)?;
+                let produced = maybe_structural(
+                    produce_diff_request(&ws, &resolved.request, &[], resolved.include_untracked)?,
+                    resolved.structural,
+                )?;
                 (produced.text, produced.origins)
             };
             if text.trim().is_empty() {
@@ -937,6 +970,7 @@ fn run() -> Result<()> {
             theme_preset,
             vcs,
             no_persist,
+            structural,
             extra,
         } => run_serve(
             staged,
@@ -954,6 +988,7 @@ fn run() -> Result<()> {
             theme_preset,
             vcs,
             no_persist,
+            structural,
             extra,
         ),
         Commands::Push { focus, note } => run_push(focus, note),
@@ -1186,17 +1221,34 @@ fn try_auto_forward_diff(
 }
 
 /// Build the live-reload closure for `--watch`: re-runs the same VCS diff.
-/// Captures the workspace, request, pathspecs, and untracked flag by value.
+/// Captures the workspace, request, pathspecs, untracked flag, and optional
+/// structural rewrite by value.
 fn make_diff_reloader(
     ws: Workspace,
     request: DiffRequest,
     extra: Vec<String>,
     include_untracked: bool,
+    structural: bool,
 ) -> next_hunk::tui::Reloader {
     Box::new(move || {
-        produce_diff_request(&ws, &request, &extra, include_untracked)
-            .context("re-run VCS diff for --watch")
+        let produced = produce_diff_request(&ws, &request, &extra, include_untracked)
+            .context("re-run VCS diff for --watch")?;
+        maybe_structural(produced, structural).context("structural rewrite on --watch reload")
     })
+}
+
+/// Optionally rewrite a produced unified diff through external `difft`.
+///
+/// No-op when `structural` is false (default path — zero overhead).
+fn maybe_structural(
+    produced: next_hunk::source::ProducedDiff,
+    structural: bool,
+) -> Result<next_hunk::source::ProducedDiff> {
+    if structural {
+        next_hunk::source::enhance_with_structural(produced)
+    } else {
+        Ok(produced)
+    }
 }
 
 /// Resolve the current workspace root for serve socket discovery.
@@ -1277,6 +1329,7 @@ fn run_serve(
     theme_preset: Option<String>,
     vcs: Option<VcsPreference>,
     no_persist: bool,
+    structural: bool,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
@@ -1308,6 +1361,7 @@ fn run_serve(
             persist_review: if no_persist { Some(false) } else { None },
             auto_forward: None,
             theme_preset,
+            structural: if structural { Some(true) } else { None },
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1324,8 +1378,10 @@ fn run_serve(
     // (e.g. another serve running) is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&ws.root)?;
 
-    let produced =
-        produce_diff_request(&ws, &resolved.request, &extra, resolved.include_untracked)?;
+    let produced = maybe_structural(
+        produce_diff_request(&ws, &resolved.request, &extra, resolved.include_untracked)?,
+        resolved.structural,
+    )?;
     // Reloader is installed only with `--watch` (also drives FS auto-reload).
     // Without it, `next-hunk reload` returns a clear server error rather than EOF.
     let reloader = if resolved.watch {
@@ -1334,6 +1390,7 @@ fn run_serve(
             resolved.request.clone(),
             extra,
             resolved.include_untracked,
+            resolved.structural,
         ))
     } else {
         None
@@ -1800,6 +1857,7 @@ fn run_serve(
     _theme_preset: Option<String>,
     _vcs: Option<VcsPreference>,
     _no_persist: bool,
+    _structural: bool,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("{}", next_hunk::platform::live_session_unavailable("serve"));

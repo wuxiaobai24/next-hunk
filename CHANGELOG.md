@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — optional structural diff via difftastic (WXB-28)
+- **`--structural` / `structural = true`** — optional backend that rewrites the
+  baseline unified diff through external [`difft`](https://github.com/Wilfred/difftastic)
+  (per changed file), then re-enters the normal File/Hunk IR path. Default
+  **off**; default gix/jj unified path is unchanged (zero regression).
+- **Clear error when `difft` is missing** — hard fail with install link and
+  `NEXT_HUNK_DIFFT` override; not a silent no-op.
+- **Per-file fallback** — if structural rewrite fails for one file, that file
+  keeps its original unified section and a stderr warning is printed.
+- **CLI** — `diff --structural`, `inspect --structural`, `serve --structural`
+  (plus config key). Watch reload re-applies structural when enabled.
+- **PERF** — structural path is **not** under the default parse/viewport bench
+  gate; docs note latency tradeoff (one subprocess per file).
+- **Skill** — when to enable structural vs when to stay on unified.
+
 ### Added — Windows / platform support matrix (WXB-27)
 - **`docs/PLATFORMS.md`** — canonical matrix: Linux/macOS full (incl. live
   `serve` + session CLI + MCP); Windows first-class for one-shot review

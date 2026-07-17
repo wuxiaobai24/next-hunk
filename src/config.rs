@@ -328,6 +328,10 @@ pub struct Config {
     /// forwards as `push` instead of opening a second TUI. Default: true.
     /// Set `false` (or pass `--no-forward`) to always open a one-shot TUI.
     pub auto_forward: Option<bool>,
+    /// Optional structural diff via external `difft` (difftastic). Default off.
+    /// When true, baseline unified text is rewritten per-file through difft
+    /// (see `docs/PERF.md` tradeoffs). Missing `difft` is a hard error.
+    pub structural: Option<bool>,
 }
 
 impl Config {
@@ -385,6 +389,9 @@ impl Config {
         }
         if other.auto_forward.is_some() {
             self.auto_forward = other.auto_forward;
+        }
+        if other.structural.is_some() {
+            self.structural = other.structural;
         }
         self
     }
@@ -451,12 +458,15 @@ pub struct ResolvedConfig {
     pub persist_review: bool,
     /// When true (default), `diff --focus`/`--note` forwards into a live serve.
     pub auto_forward: bool,
+    /// Rewrite baseline unified through external `difft` (default false).
+    pub structural: bool,
 }
 
 impl Default for ResolvedConfig {
     fn default() -> Self {
         // Defaults: highlight on (matches existing TUI behavior), worktree/watch off.
         // auto_forward on so agents need not list/push when a human already has serve.
+        // structural off — optional difft path, not under default PERF gate.
         Self {
             scope: DiffScope::Worktree,
             request: DiffRequest::Local(DiffScope::Worktree),
@@ -473,6 +483,7 @@ impl Default for ResolvedConfig {
             vcs: VcsPreference::Auto,
             persist_review: true,
             auto_forward: true,
+            structural: false,
         }
     }
 }
@@ -512,6 +523,8 @@ pub struct CliFlags {
     pub auto_forward: Option<bool>,
     /// `--theme-preset <name>` → `Some(String)`; absent → `None`.
     pub theme_preset: Option<String>,
+    /// `--structural` → `Some(true)`; absent → `None` (use config/default).
+    pub structural: Option<bool>,
 }
 
 impl ResolvedConfig {
@@ -583,6 +596,7 @@ impl ResolvedConfig {
                 .auto_forward
                 .or(cfg.auto_forward)
                 .unwrap_or(d.auto_forward),
+            structural: cli.structural.or(cfg.structural).unwrap_or(d.structural),
         })
     }
 
@@ -800,6 +814,7 @@ const KNOWN_CONFIG_KEYS: &[&str] = &[
     "vcs",
     "persist_review",
     "auto_forward",
+    "structural",
 ];
 
 /// Read + parse a config file.
@@ -1018,6 +1033,27 @@ mod tests {
         assert!(!r.watch);
         assert!(r.line_numbers); // default on
         assert!(r.auto_forward); // default on
+        assert!(!r.structural); // default off (optional difft path)
+    }
+
+    #[test]
+    fn resolve_structural_from_config_and_cli() {
+        let cfg = Config {
+            structural: Some(true),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
+        assert!(r.structural);
+
+        let r = ResolvedConfig::resolve(
+            &cfg,
+            &CliFlags {
+                structural: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(!r.structural); // CLI wins
     }
 
     #[test]
@@ -1306,6 +1342,7 @@ export_on_quit = \"none\"
 vcs = \"auto\"
 persist_review = true
 auto_forward = true
+structural = false
 
 [theme_colors]
 add = \"#a6e3a1\"

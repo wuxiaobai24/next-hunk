@@ -3,6 +3,9 @@
 //! - **Git** is accessed via **gix** (gitoxide) — no `git` CLI subprocess.
 //! - **Jujutsu** is accessed via the **`jj` CLI**, emitting `--git` unified
 //!   diffs that re-enter the same IR parse path (performance gate preserved).
+//! - **Structural** (optional): external `difft` (difftastic) rewrites the
+//!   baseline unified text into a structural view, still as unified for IR.
+//!   Off by default; not under the default PERF bench gate.
 //!
 //! Prefer the VCS-agnostic entry points ([`detect_workspace`], [`produce_diff`],
 //! [`produce_diff_request`], [`produce_show`], [`produce_file_diff`]) from the
@@ -12,6 +15,7 @@
 mod detect;
 mod git;
 mod jj;
+mod structural;
 
 pub use detect::{detect_workspace, find_workspace, VcsKind, Workspace};
 pub use git::{
@@ -19,6 +23,10 @@ pub use git::{
     list_repo_worktree_roots, open_repo, resolve_upstream_rev, ProducedDiff,
 };
 pub use jj::{jj_available, jj_diff_produced, jj_diff_request, jj_show};
+pub use structural::{
+    difft_available, difft_bin, enhance_with_structural, reconstruct_sides, require_difft,
+    DIFFT_ENV,
+};
 
 // Re-export so callers can `use next_hunk::source::VcsPreference`.
 pub use crate::config::VcsPreference;

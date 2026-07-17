@@ -124,6 +124,22 @@ build). Replace with CI numbers when a bench harness is wired into CI.
 | `parse_ms` | medium | — | ~0.24 ms | observation |
 | `parse_ms` | small | — | ~8.2 µs | observation |
 
+#### Optional structural backend (WXB-28) — **not a default gate**
+
+`diff --structural` / `structural = true` rewrites the baseline unified text
+through external [`difft`](https://github.com/Wilfred/difftastic) (one subprocess
+per changed file), then re-enters `parse_unified_diff`. This path is:
+
+- **Opt-in only** — default gix/jj unified path is unchanged and remains the
+  sole subject of the parse/viewport benches above.
+- **Higher latency** — expect O(files) process spawns; suitable for human
+  readability on medium changesets, not for huge-fixture scroll gates.
+- **Not measured** in `cargo bench --bench parse` / viewport benches. Do not
+  treat structural mode as a PERF regression if it is slower than unified.
+
+Tradeoff: better AST-aware readability vs subprocess cost. Documented for
+agents in `skill/next-hunk/SKILL.md`.
+
 #### Incremental reload (WXB-26)
 
 Hot-reload (`--watch` / `next-hunk reload`) rebuilds IR by fingerprinting

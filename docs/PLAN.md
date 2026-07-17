@@ -143,5 +143,6 @@
 - parse fuzz  
 - [x] 增量 IR 编辑（非全量 reload；WXB-26：section fingerprint + transplant）  
 - ~~CLI「有 socket 就转发」无感切换~~ → done (WXB-9: `diff --focus/--note` auto-forward)
+- [x] **可选 structural 后端**（WXB-28）— `--structural` / `structural = true` 经外部 `difft`；默认 off，不进 PERF 门禁  
 - [x] **Windows 支持矩阵文档**（WXB-27）— 一等公民 = one-shot review；live serve 明确推 0.9  
 - [ ] **Windows live serve**（0.9）— named pipe 或 localhost TCP，帧协议与 UDS 共用；见 [`PLATFORMS.md`](./PLATFORMS.md)

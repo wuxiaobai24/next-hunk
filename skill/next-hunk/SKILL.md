@@ -113,6 +113,38 @@ next-hunk show @ --vcs jj
 
 Details: repository `docs/VCS.md`.
 
+## Optional structural diff (`difftastic`)
+
+next-hunk's default path is **unified text IR** (gix / `jj diff --git`) — that
+is the performance moat. For refactors, JSON/HTML nesting, or rename-heavy
+edits where line-oriented unified is noisy, you can opt into an external
+structural backend:
+
+```bash
+# Requires `difft` (difftastic) on PATH — https://github.com/Wilfred/difftastic
+next-hunk diff --structural
+next-hunk inspect --structural --json
+# or config:
+# structural = true
+# override binary: NEXT_HUNK_DIFFT=/path/to/difft
+```
+
+| When to use | When **not** to use |
+|-------------|---------------------|
+| Human asked for structural / AST-aware view | Everyday agent reviews (default unified is enough) |
+| JSON/HTML/config nesting is hard to read in unified | Huge multi-file diffs where latency matters (one `difft` subprocess **per file**) |
+| Spot-checking a single refactor file | CI / default benches — structural is **opt-in**, not under PERF gates |
+
+**Rules for agents:**
+
+- **Default stays off.** Do not pass `--structural` unless the human asked or
+  the change is clearly structural-noise heavy.
+- **Missing `difft` is a hard error** (install link + `NEXT_HUNK_DIFFT`), not a
+  silent fallback. If structural fails mid-file, that file keeps unified and
+  stderr warns.
+- Still the same File/Hunk IR after rewrite — rail / comments / export work.
+- See repository `docs/PERF.md` (structural tradeoffs).
+
 ## Quick start: prefer the CLI (auto-forward when serve is live)
 
 **You do not need to `list` first.** Call `diff --focus` / `--note` directly:
