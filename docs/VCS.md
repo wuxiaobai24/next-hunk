@@ -39,6 +39,11 @@ Walking ancestors of the cwd:
 | `diff --staged` | HEAD vs index | **empty** (jj has no index); stderr note |
 | `diff --all` | staged + unstaged | same as worktree |
 | `diff --include-untracked` | adds untracked files | **ignored** (stderr note); new files usually already in the WC snapshot |
+| `diff --base <rev>` | tree `rev` vs worktree (like `git diff <rev>`) | `jj diff --git --from <rev> --to @` |
+| `diff --strategy merge-base --base <b>` | left = merge-base(b, HEAD) | `--from 'heads(::b & ::@)' --to @` |
+| `diff --strategy upstream-ahead` | vs `@{upstream}` (merge-base style) | **error** (no git upstream); use `--base <bookmark>` |
+| `diff --range A..B` | tree diff A→B (same as `show`) | `jj diff --git --from A --to B` |
+| `diff --range A...B` | merge-base…B | `jj diff --git --from 'heads(::A & ::B)' --to B` |
 | `show <rev>` | commit vs parent | `jj diff --git -r <rev>` |
 | `show A..B` | tree diff A→B | `jj diff --git --from A --to B` |
 | `show A...B` | merge-base…B | `jj diff --git --from 'heads(::A & ::B)' --to B` |
@@ -66,6 +71,9 @@ All jj paths re-enter **`parse_unified_diff`** — the same compact IR as git an
    edge cases match jj, not gix.
 6. **Watch / reload** — re-runs the same adapter (`jj diff` again). Snapshot
    cost is jj’s, not next-hunk’s IR rebuild policy.
+7. **Upstream** — git’s `@{upstream}` / `--strategy upstream-ahead` has no
+   direct jj equivalent; next-hunk errors under jj and asks for an explicit
+   `--base <bookmark>`. Branch-level review under jj is `--base` / `--range`.
 
 Sapling (`sl`) is **not** implemented (optional later phase).
 
