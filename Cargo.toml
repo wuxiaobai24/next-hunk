@@ -1,15 +1,26 @@
 [package]
 name = "next-hunk"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "High-performance terminal review engine for large changesets"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/wuxiaobai24/next-hunk"
 homepage = "https://github.com/wuxiaobai24/next-hunk"
+documentation = "https://github.com/wuxiaobai24/next-hunk#readme"
 keywords = ["diff", "git", "tui", "review", "performance"]
 categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.85"
+# Keep the crates.io package lean: skip agent/runtime notes and the Homebrew
+# formula (distribution metadata, not needed to build or test the crate).
+exclude = [
+  "AGENTS.md",
+  "Formula/",
+  ".agent_context/",
+  ".grok/",
+  ".multica/",
+  ".spec-workflow/",
+]
 
 [lib]
 name = "next_hunk"
@@ -42,7 +53,7 @@ toml = "0.8"
 notify = { version = "6", optional = true }
 
 [features]
-default = ["highlight", "watch", "serve"]
+default = ["highlight", "watch", "serve", "mcp"]
 # Syntax highlighting via syntect. When disabled, the TUI renders plain text
 # (highlight toggle is inert).
 highlight = ["dep:syntect"]
@@ -52,8 +63,14 @@ highlight = ["dep:syntect"]
 watch = ["dep:notify"]
 # Optional server mode (`next-hunk serve` + `push`/`decision`) for live
 # agent→human streaming into a persistent TUI. Uses std Unix sockets (no new
-# crate), so on non-Unix the subcommands exist but error at runtime.
+# crate). Subcommands exist on all OSes; non-Unix builds error with a message
+# that points at docs/PLATFORMS.md (Windows live serve deferred to 0.9).
 serve = []
+# Lightweight MCP stdio server (`next-hunk mcp`) mapping serve session commands
+# to MCP tools. Zero extra crates (JSON-RPC over stdio via serde_json). Tools
+# still need `serve` + Unix at runtime (same matrix as CLI). Omit with
+# `--no-default-features --features serve` (or without `mcp`) for lean builds.
+mcp = []
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
