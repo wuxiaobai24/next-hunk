@@ -256,6 +256,21 @@ impl LayoutMode {
     }
 }
 
+/// Optional chrome color overrides from the `[theme_colors]` config table.
+///
+/// Values are hex strings (`#RRGGBB` / `RRGGBB` / `#RGB`). Keys map to TUI
+/// slots: `add`/`del` line prefixes, `rail` selection bg, `status` bar bg,
+/// `fg` selection fg, `bg` subdued chrome bg.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+pub struct ThemeColorsConfig {
+    pub bg: Option<String>,
+    pub fg: Option<String>,
+    pub add: Option<String>,
+    pub del: Option<String>,
+    pub rail: Option<String>,
+    pub status: Option<String>,
+}
+
 /// Raw user-configurable options. Every field optional: `None` = "not set".
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -278,7 +293,13 @@ pub struct Config {
     /// Include untracked files in worktree / working-set diff.
     pub include_untracked: Option<bool>,
     /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
+    /// Used when `theme_preset` is `"default"` (or unset).
     pub theme: Option<String>,
+    /// Named chrome palette: `"default"` | `"catppuccin-mocha"` |
+    /// `"catppuccin-latte"` | `"tokyonight"`. Independent of `theme`.
+    pub theme_preset: Option<String>,
+    /// Optional per-slot color overrides (`[theme_colors]` table).
+    pub theme_colors: Option<ThemeColorsConfig>,
     /// Layout mode: "unified" (default), "stack", or "split".
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
@@ -327,6 +348,13 @@ impl Config {
         }
         if other.theme.is_some() {
             self.theme = other.theme;
+        }
+        if other.theme_preset.is_some() {
+            self.theme_preset = other.theme_preset;
+        }
+        if other.theme_colors.is_some() {
+            // Table replace (higher layer wins wholesale), not deep-merge.
+            self.theme_colors = other.theme_colors;
         }
         if other.layout.is_some() {
             self.layout = other.layout;
@@ -392,8 +420,12 @@ pub struct ResolvedConfig {
     /// Include untracked files in worktree / working-set / base diff. OFF by default (safe).
     pub include_untracked: bool,
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
-    /// (dark). Config-only in this pass — no CLI flag yet.
+    /// (light). Combined with [`Self::theme_preset`].
     pub theme: Option<String>,
+    /// Named chrome palette preset. `None` = `"default"` (Flexoki via `theme`).
+    pub theme_preset: Option<String>,
+    /// Optional per-slot color overrides from `[theme_colors]`.
+    pub theme_colors: Option<ThemeColorsConfig>,
     /// Layout mode for the diff stream: "unified" (default), "stack", or "split".
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
@@ -420,6 +452,8 @@ impl Default for ResolvedConfig {
             line_numbers: true,
             include_untracked: false,
             theme: None,
+            theme_preset: None,
+            theme_colors: None,
             layout: LayoutMode::Unified,
             wrap: false,
             export_on_quit: ExportOnQuit::None,
@@ -463,6 +497,8 @@ pub struct CliFlags {
     pub persist_review: Option<bool>,
     /// `--no-forward` → `Some(false)`; absent → `None` (use config/default).
     pub auto_forward: Option<bool>,
+    /// `--theme-preset <name>` → `Some(String)`; absent → `None`.
+    pub theme_preset: Option<String>,
 }
 
 impl ResolvedConfig {
@@ -479,6 +515,16 @@ impl ResolvedConfig {
         if let Some(ref theme) = cfg.theme {
             validate_theme(theme)?;
         }
+        let theme_preset = match cli.theme_preset.as_deref().or(cfg.theme_preset.as_deref()) {
+            Some(s) => {
+                validate_theme_preset(s)?;
+                Some(s.to_string())
+            }
+            None => None,
+        };
+        if let Some(ref colors) = cfg.theme_colors {
+            validate_theme_colors(colors)?;
+        }
         let scope = resolve_scope(cfg, cli)?;
         let request = resolve_request_partial(cfg, cli, scope);
         Ok(Self {
@@ -492,6 +538,8 @@ impl ResolvedConfig {
                 .or(cfg.include_untracked)
                 .unwrap_or(d.include_untracked),
             theme: cfg.theme.clone(),
+            theme_preset,
+            theme_colors: cfg.theme_colors.clone(),
             layout: match cli.layout {
                 Some(l) => l,
                 None => match cfg.layout.as_deref() {
@@ -581,6 +629,62 @@ fn validate_theme(theme: &str) -> Result<(), String> {
         "dark" | "light" | "auto" => Ok(()),
         other => Err(format!(
             "unknown theme '{other}' (expected dark, light, or auto)"
+        )),
+    }
+}
+
+fn validate_theme_preset(preset: &str) -> Result<(), String> {
+    // Reuse the same allow-list as ThemePreset::try_parse without depending
+    // on the tui module from config (keeps config free of ratatui).
+    match preset.trim().to_ascii_lowercase().as_str() {
+        "default" | "catppuccin-mocha" | "catppuccin_mocha" | "mocha" | "catppuccin-latte"
+        | "catppuccin_latte" | "latte" | "tokyonight" | "tokyo-night" | "tokyo_night" => Ok(()),
+        other => Err(format!(
+            "unknown theme_preset '{other}' (expected default, catppuccin-mocha, \
+             catppuccin-latte, or tokyonight)"
+        )),
+    }
+}
+
+fn validate_theme_colors(colors: &ThemeColorsConfig) -> Result<(), String> {
+    for (name, val) in [
+        ("bg", colors.bg.as_deref()),
+        ("fg", colors.fg.as_deref()),
+        ("add", colors.add.as_deref()),
+        ("del", colors.del.as_deref()),
+        ("rail", colors.rail.as_deref()),
+        ("status", colors.status.as_deref()),
+    ] {
+        if let Some(s) = val {
+            if s.trim().is_empty() {
+                continue;
+            }
+            parse_hex_color_str(s).map_err(|e| format!("theme_colors.{name}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Parse `#RRGGBB` / `RRGGBB` / `#RGB` (shared with theme layer validation).
+fn parse_hex_color_str(s: &str) -> Result<(), String> {
+    let s = s.trim();
+    let hex_str = s.strip_prefix('#').unwrap_or(s);
+    match hex_str.len() {
+        6 => u32::from_str_radix(hex_str, 16)
+            .map(|_| ())
+            .map_err(|_| format!("invalid hex color '{s}' (expected #RRGGBB)")),
+        3 => {
+            let mut expanded = String::with_capacity(6);
+            for c in hex_str.chars() {
+                expanded.push(c);
+                expanded.push(c);
+            }
+            u32::from_str_radix(&expanded, 16)
+                .map(|_| ())
+                .map_err(|_| format!("invalid hex color '{s}' (expected #RGB or #RRGGBB)"))
+        }
+        _ => Err(format!(
+            "invalid hex color '{s}' (expected #RRGGBB or #RGB)"
         )),
     }
 }
@@ -675,6 +779,8 @@ const KNOWN_CONFIG_KEYS: &[&str] = &[
     "line_numbers",
     "include_untracked",
     "theme",
+    "theme_preset",
+    "theme_colors",
     "layout",
     "wrap",
     "export_on_quit",
@@ -754,6 +860,12 @@ fn validate_config_enums(cfg: &Config, path: &Path) -> Result<(), String> {
     }
     if let Some(ref s) = cfg.theme {
         validate_theme(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref s) = cfg.theme_preset {
+        validate_theme_preset(s).map_err(|e| format!("{loc}: {e}"))?;
+    }
+    if let Some(ref colors) = cfg.theme_colors {
+        validate_theme_colors(colors).map_err(|e| format!("{loc}: {e}"))?;
     }
     Ok(())
 }
@@ -1027,6 +1139,60 @@ mod tests {
         let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(r.theme.is_none());
+        assert!(r.theme_preset.is_none());
+        assert!(r.theme_colors.is_none());
+    }
+
+    #[test]
+    fn resolve_theme_preset_from_cli_overrides_config() {
+        let cfg = Config {
+            theme_preset: Some("tokyonight".into()),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            theme_preset: Some("catppuccin-latte".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert_eq!(r.theme_preset.as_deref(), Some("catppuccin-latte"));
+    }
+
+    #[test]
+    fn resolve_theme_preset_from_config() {
+        let cfg = Config {
+            theme_preset: Some("catppuccin-mocha".into()),
+            theme_colors: Some(ThemeColorsConfig {
+                add: Some("#a6e3a1".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
+        assert_eq!(r.theme_preset.as_deref(), Some("catppuccin-mocha"));
+        assert_eq!(
+            r.theme_colors.as_ref().and_then(|c| c.add.as_deref()),
+            Some("#a6e3a1")
+        );
+    }
+
+    #[test]
+    fn illegal_theme_preset_returns_error() {
+        let (dir, _path) = write_tmp_config("theme_preset = \"solarized\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("theme_preset") && err.contains("catppuccin"),
+            "illegal theme_preset must name field + allowed values, got: {err}"
+        );
+    }
+
+    #[test]
+    fn illegal_theme_color_returns_error() {
+        let (dir, _path) = write_tmp_config("[theme_colors]\nadd = \"not-a-color\"\n");
+        let err = Config::load_project(&dir.0).unwrap_err();
+        assert!(
+            err.contains("theme_colors") && err.contains("add"),
+            "illegal theme color must name field, got: {err}"
+        );
     }
 
     #[test]
@@ -1115,20 +1281,30 @@ watch = false
 line_numbers = true
 include_untracked = false
 theme = \"dark\"
+theme_preset = \"default\"
 layout = \"unified\"
 wrap = false
 export_on_quit = \"none\"
 vcs = \"auto\"
 persist_review = true
 auto_forward = true
+
+[theme_colors]
+add = \"#a6e3a1\"
 ";
         let value: toml::Value = toml::from_str(text).unwrap();
         assert!(
             unknown_config_keys(&value).is_empty(),
-            "every Config field must be in KNOWN_CONFIG_KEYS"
+            "every Config field must be in KNOWN_CONFIG_KEYS: {:?}",
+            unknown_config_keys(&value)
         );
         let cfg: Config = value.try_into().unwrap();
         assert_eq!(cfg.strategy.as_deref(), Some("worktree"));
+        assert_eq!(cfg.theme_preset.as_deref(), Some("default"));
+        assert_eq!(
+            cfg.theme_colors.as_ref().and_then(|c| c.add.as_deref()),
+            Some("#a6e3a1")
+        );
     }
 
     #[test]

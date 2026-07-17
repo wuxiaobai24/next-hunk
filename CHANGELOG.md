@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Theme presets + configurable palette (WXB-21)
+- **Named chrome presets** — `theme_preset` config key and
+  `--theme-preset` CLI flag (`diff` / `show` / `patch` / `filediff` /
+  `serve`): `default` (Flexoki via `theme`), `catppuccin-mocha`,
+  `catppuccin-latte`, `tokyonight`.
+- **Optional color overrides** — `[theme_colors]` table with hex slots
+  `bg` / `fg` / `add` / `del` / `rail` / `status` layered on any preset.
+- **TUI `t` cycle extended** — light → auto → dark → catppuccin-mocha →
+  catppuccin-latte → tokyonight → light (status shows the active name).
+- **Syntect stays light/dark ocean** — light presets (e.g. latte) always
+  pair with `base16-ocean.light`; dark presets with `base16-ocean.dark`.
+  Syntax is not reinvented per chrome preset.
+- **Docs** — README (EN/ZH), skill, and `?` help list presets and the
+  override table.
+
 ### Added — Post-review agent feedback loop (WXB-20)
 - **`serve` defaults to `export_on_quit=json`** when neither CLI nor config sets
   a value, so quitting a serve session always emits a full agent-parseable

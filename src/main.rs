@@ -92,6 +92,10 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// Chrome palette preset: `default` | `catppuccin-mocha` |
+        /// `catppuccin-latte` | `tokyonight`. Overrides `theme_preset` in config.
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
         /// VCS backend: `auto` (default), `git`, or `jj`. Overrides `vcs` in config.
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
@@ -131,6 +135,9 @@ enum Commands {
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
         /// VCS backend: `auto` (default), `git`, or `jj`.
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
@@ -156,6 +163,9 @@ enum Commands {
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
         /// VCS backend: `auto` (default), `git`, or `jj` (jj uses system `diff -u`).
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
@@ -179,6 +189,9 @@ enum Commands {
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
     },
     /// Git pager mode. Reads a unified diff from stdin and opens the TUI.
     ///
@@ -269,6 +282,9 @@ enum Commands {
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
         /// VCS backend: `auto` (default), `git`, or `jj`.
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
@@ -437,6 +453,7 @@ fn run() -> Result<()> {
         select: false,
         export_on_quit: None,
         layout: None,
+        theme_preset: None,
         vcs: None,
         no_persist: false,
         no_forward: false,
@@ -456,6 +473,7 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            theme_preset,
             vcs,
             no_persist,
             no_forward,
@@ -501,6 +519,7 @@ fn run() -> Result<()> {
                     vcs,
                     persist_review: if no_persist { Some(false) } else { None },
                     auto_forward: if no_forward { Some(false) } else { None },
+                    theme_preset,
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -561,6 +580,8 @@ fn run() -> Result<()> {
                 resolved.line_numbers,
                 resolved.wrap,
                 resolved.theme,
+                resolved.theme_preset,
+                resolved.theme_colors,
                 resolved.layout,
                 Some(ws.root.clone()),
                 ReviewOptions {
@@ -581,6 +602,7 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            theme_preset,
             vcs,
         } => {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
@@ -595,6 +617,7 @@ fn run() -> Result<()> {
             // Honor the user/project theme/layout config even for `show`.
             let resolved_layout = resolve_layout_opt(layout, &cfg)?;
             let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
+            let resolved_preset = resolve_theme_preset_opt(theme_preset, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -603,6 +626,8 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
+                resolved_preset,
+                cfg.theme_colors.clone(),
                 resolved_layout,
                 Some(ws.root),
                 ReviewOptions {
@@ -623,6 +648,7 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            theme_preset,
         } => {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let text = read_patch_input(&path)?;
@@ -630,6 +656,7 @@ fn run() -> Result<()> {
             let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
             let resolved_layout = resolve_layout_opt(layout, &cfg)?;
             let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
+            let resolved_preset = resolve_theme_preset_opt(theme_preset, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -638,6 +665,8 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
+                resolved_preset,
+                cfg.theme_colors.clone(),
                 resolved_layout,
                 None,
                 ReviewOptions {
@@ -663,6 +692,7 @@ fn run() -> Result<()> {
             select,
             export_on_quit,
             layout,
+            theme_preset,
             vcs,
         } => {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
@@ -695,6 +725,7 @@ fn run() -> Result<()> {
             }
             let resolved_layout = resolve_layout_opt(layout, &cfg)?;
             let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
+            let resolved_preset = resolve_theme_preset_opt(theme_preset, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -703,6 +734,8 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
+                resolved_preset,
+                cfg.theme_colors.clone(),
                 resolved_layout,
                 workdir,
                 ReviewOptions {
@@ -811,6 +844,8 @@ fn run() -> Result<()> {
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
                 cfg.theme,
+                cfg.theme_preset.clone(),
+                cfg.theme_colors.clone(),
                 resolved_layout,
                 workdir,
                 ReviewOptions {
@@ -835,6 +870,7 @@ fn run() -> Result<()> {
             note,
             export_on_quit,
             layout,
+            theme_preset,
             vcs,
             no_persist,
             extra,
@@ -851,6 +887,7 @@ fn run() -> Result<()> {
             note,
             export_on_quit,
             layout,
+            theme_preset,
             vcs,
             no_persist,
             extra,
@@ -1075,6 +1112,7 @@ fn run_serve(
     note: Vec<String>,
     export_on_quit: Option<ExportOnQuit>,
     layout: Option<LayoutMode>,
+    theme_preset: Option<String>,
     vcs: Option<VcsPreference>,
     no_persist: bool,
     extra: Vec<String>,
@@ -1107,6 +1145,7 @@ fn run_serve(
             vcs,
             persist_review: if no_persist { Some(false) } else { None },
             auto_forward: None,
+            theme_preset,
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -1153,6 +1192,8 @@ fn run_serve(
         resolved.line_numbers,
         resolved.wrap,
         resolved.theme,
+        resolved.theme_preset,
+        resolved.theme_colors,
         resolved.layout,
         Some(ws.root.clone()),
         ReviewOptions {
@@ -1594,6 +1635,7 @@ fn run_serve(
     _note: Vec<String>,
     _export_on_quit: Option<ExportOnQuit>,
     _layout: Option<LayoutMode>,
+    _theme_preset: Option<String>,
     _vcs: Option<VcsPreference>,
     _no_persist: bool,
     _extra: Vec<String>,
@@ -1640,6 +1682,28 @@ fn parse_strategy_arg(s: &str) -> Result<DiffStrategy, String> {
 /// clap value_parser for `--export-on-quit`. Accepts none|json|markdown|both.
 fn parse_export_on_quit_arg(s: &str) -> Result<ExportOnQuit, String> {
     ExportOnQuit::try_parse(s)
+}
+
+/// clap value_parser for `--theme-preset`.
+fn parse_theme_preset_arg(s: &str) -> Result<String, String> {
+    // Validate via the same allow-list as config; return the canonical name.
+    let preset = next_hunk::tui::theme::ThemePreset::try_parse(s)?;
+    Ok(preset.name().to_string())
+}
+
+/// CLI `--theme-preset` wins; otherwise config `theme_preset`.
+fn resolve_theme_preset_opt(cli: Option<String>, cfg: &Config) -> Result<Option<String>> {
+    if let Some(s) = cli {
+        return Ok(Some(s));
+    }
+    match cfg.theme_preset.as_deref() {
+        Some(s) => {
+            let preset = next_hunk::tui::theme::ThemePreset::try_parse(s)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok(Some(preset.name().to_string()))
+        }
+        None => Ok(None),
+    }
 }
 
 /// CLI layout flag (if any) wins; otherwise parse config strictly.
@@ -1729,6 +1793,8 @@ fn open_review_from_produced(
     line_numbers_on: bool,
     wrap_on: bool,
     theme: Option<String>,
+    theme_preset: Option<String>,
+    theme_colors: Option<next_hunk::config::ThemeColorsConfig>,
     layout: next_hunk::config::LayoutMode,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
@@ -1742,6 +1808,8 @@ fn open_review_from_produced(
         line_numbers_on,
         wrap_on,
         theme,
+        theme_preset,
+        theme_colors,
         layout,
         workdir,
         options,
@@ -1760,6 +1828,8 @@ fn open_review_from_text(
     line_numbers_on: bool,
     wrap_on: bool,
     theme: Option<String>,
+    theme_preset: Option<String>,
+    theme_colors: Option<next_hunk::config::ThemeColorsConfig>,
     layout: next_hunk::config::LayoutMode,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
@@ -1827,6 +1897,8 @@ fn open_review_from_text(
         line_numbers_on,
         wrap_on,
         theme,
+        theme_preset,
+        theme_colors,
         layout,
         workdir.clone(),
         options,

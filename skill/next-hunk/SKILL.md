@@ -523,7 +523,7 @@ Once the TUI is open, the human navigates with:
 - `#` — toggle line-number gutter
 - `w` — toggle word-level inline diff
 - `W` — toggle ignore-whitespace
-- `t` — cycle theme (light → auto → dark)
+- `t` — cycle theme (light → auto → dark → catppuccin-mocha → catppuccin-latte → tokyonight)
 - `/` — search; `n`/`N` next/prev match
 - `q` — quit (in `--select`/`serve` mode, emits decisions JSON on quit)
 
