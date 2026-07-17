@@ -381,6 +381,14 @@ enum Commands {
         #[arg(long)]
         hash: Option<String>,
     },
+    /// Run as an MCP server over stdio (session control plane → tools).
+    ///
+    /// Speaks Model Context Protocol JSON-RPC on stdin/stdout so Claude Code /
+    /// Codex / OpenCode can call `list_sessions`, `navigate`, `add_comment`,
+    /// `get_decision`, etc. without multi-step shell. Requires a live
+    /// `next-hunk serve` for tool calls. Feature-gated (`mcp`, on by default).
+    /// See `docs/MCP.md` for host config snippets.
+    Mcp,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -901,7 +909,19 @@ fn run() -> Result<()> {
         Commands::Navigate { target, hash } => run_navigate(target, hash),
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
+        Commands::Mcp => run_mcp(),
     }
+}
+
+/// `next-hunk mcp`: MCP stdio server (feature `mcp`).
+#[cfg(feature = "mcp")]
+fn run_mcp() -> Result<()> {
+    next_hunk::mcp::run_mcp_server()
+}
+
+#[cfg(not(feature = "mcp"))]
+fn run_mcp() -> Result<()> {
+    bail!("`mcp` requires the `mcp` feature (rebuild with --features mcp)");
 }
 
 /// Parsed agent-bridge flags shared by `diff` / `show` / `patch` / `filediff`.

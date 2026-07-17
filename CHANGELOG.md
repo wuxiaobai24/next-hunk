@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — MCP session control plane (WXB-23)
+- **`next-hunk mcp`** — stdio Model Context Protocol server that maps the live
+  `serve` control plane to first-class tools: `list_sessions`,
+  `review_structure`, `navigate`, `add_comment`, `get_decision`,
+  `push_focus_note`, `reload`. Same Unix-socket protocol as the CLI (no
+  separate broker).
+- **Feature `mcp`** — on by default; zero extra crates (JSON-RPC via
+  `serde_json`). Omit with cargo features for lean builds.
+- **`session_client` library module** — shared resolve/list/send helpers so
+  MCP and CLI stay aligned.
+- **Docs** — `docs/MCP.md` with Claude Code / generic host config snippets;
+  README + skill mention the MCP entry path.
+
 ## [0.4.0] - 2026-07-17
 
 First **official multi-path install** release: crates.io publish path (requires

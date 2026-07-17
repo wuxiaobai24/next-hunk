@@ -341,6 +341,21 @@ next-hunk list --all-worktrees
 
 需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
 
+### MCP 控制面（可选 host 集成）
+
+支持 [MCP](https://modelcontextprotocol.io/) 的 agent 可直接挂载会话工具，无需拼 shell：
+
+```bash
+# 人类仍持有 TUI：
+next-hunk serve --all
+
+# MCP host 拉起 stdio JSON-RPC：
+next-hunk mcp
+```
+
+工具与 session CLI 对齐：`list_sessions`、`review_structure`、`navigate`、
+`add_comment`、`get_decision`、`push_focus_note`、`reload`。`mcp` feature 默认开启（无额外 crate）。配置片段见 **[`docs/MCP.md`](./docs/MCP.md)**。
+
 ## 测试与基准
 
 ```bash

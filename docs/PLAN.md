@@ -19,7 +19,7 @@
 | 文件折叠 | 完整 HTTP/WS session-broker monorepo |
 | 至少一种 split **或** stack 布局（auto 可选） | STML 富文本 note、可嵌入组件库 |
 | 配置真接线（`line_numbers` 等，消灭 silent no-op） | Homebrew / 社区运营对标 |
-| 轻量 live session CLI：list / review / navigate / comment / reload | MCP 全套运维面 |
+| 轻量 live session CLI：list / review / navigate / comment / reload；轻量 MCP 映射（`next-hunk mcp`） | 完整 HTTP/WS session-broker monorepo |
 | skill 与 hunk-review **工作流同构** | 像素级 UI 抄袭 |
 | 保留并强化 `--select` + `decision` | Windows 完整 serve（可推 0.9） |
 

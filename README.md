@@ -454,6 +454,24 @@ subcommands report that they're unavailable. The `decision` output matches the
 `--select` quit shape (three buckets only), so an agent parses both identically.
 Full post-quit reports (with comments) use `export_on_quit` / `last-export`.
 
+### MCP control plane (optional host integration)
+
+Agents that speak [MCP](https://modelcontextprotocol.io/) can attach without
+shelling out:
+
+```bash
+# Human still owns the TUI:
+next-hunk serve --all
+
+# MCP host spawns (stdio JSON-RPC):
+next-hunk mcp
+```
+
+Tools mirror the session CLI (`list_sessions`, `review_structure`, `navigate`,
+`add_comment`, `get_decision`, `push_focus_note`, `reload`). Feature `mcp` is
+on by default (no extra crates); config snippets for Claude Code and generic
+hosts are in **[`docs/MCP.md`](./docs/MCP.md)**.
+
 ## Testing & benchmarks
 
 ```bash
@@ -490,6 +508,7 @@ Never build a full widget tree for every diff line. The IR is the source of trut
 |-----|----------|
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Position, layers, IR, phases, risks ([中文](docs/ARCHITECTURE_zh.md)) |
 | [docs/PERF.md](docs/PERF.md) | Fixtures, metrics, phase gates, anti-patterns ([中文](docs/PERF_zh.md)) |
+| [docs/MCP.md](docs/MCP.md) | MCP stdio tools + host config snippets |
 
 ## License
 
