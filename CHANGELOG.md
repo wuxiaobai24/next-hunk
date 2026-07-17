@@ -6,7 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+### Fixed — `--export-on-quit` on non-TTY (WXB-31)
+- **Headless export no longer falls back to inspect** — when stdout is not a
+  TTY and `export_on_quit` is `json` / `markdown` / `both`, next-hunk emits the
+  full review report immediately (all hunks `undecided`, plus `--note`s) and
+  exits 0. Previously the flag was silently ignored and the inspect summary
+  (`files=…`) was printed instead, so agents could not parse the documented
+  bridge output.
+- **`--note` allowed with headless export** — notes no longer require a TTY
+  when export-on-quit will carry them in the report. Alone (no export),
+  `--note` still errors on non-TTY rather than being dropped.
+- **Docs** — README + agent skill state the non-TTY export contract explicitly.
 - **`navigate` / `comment add` reject unknown paths** (WXB-33) — both commands
   now validate the target file against the live review's file set and return
   `error: '<path>' is not in the current review (files: …)` instead of a silent

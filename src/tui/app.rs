@@ -341,6 +341,48 @@ pub struct ExportedNote {
 }
 
 impl ReviewReport {
+    /// Headless report: every hunk is `undecided`, plus any agent notes.
+    ///
+    /// Used when stdout is not a TTY and `--export-on-quit` is set — there is no
+    /// interactive session to quit, so emit the report immediately.
+    pub fn from_review_undecided(review: &crate::ir::Review, notes: &[Note]) -> Self {
+        let mut undecided = Vec::new();
+        for file in &review.files {
+            for hunk_idx in 0..file.hunks.len() {
+                undecided.push(format!("{}:h{}", file.display_path, hunk_idx + 1));
+            }
+        }
+        let mut banner = None;
+        let mut exported_notes = Vec::new();
+        for n in notes {
+            match &n.target {
+                NoteTarget::Banner => {
+                    banner = Some(n.text.clone());
+                }
+                NoteTarget::Line { path, line } => exported_notes.push(ExportedNote {
+                    file: path.clone(),
+                    text: n.text.clone(),
+                    line: Some(*line),
+                    hunk: None,
+                }),
+                NoteTarget::Hunk { path, hunk } => exported_notes.push(ExportedNote {
+                    file: path.clone(),
+                    text: n.text.clone(),
+                    line: None,
+                    hunk: Some(*hunk),
+                }),
+            }
+        }
+        Self {
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+            undecided,
+            comments: Vec::new(),
+            notes: exported_notes,
+            banner,
+        }
+    }
+
     /// Decision-only view (identical to legacy `--select` / `decision` JSON).
     pub fn as_selections(&self) -> Selections {
         Selections {
@@ -3314,6 +3356,37 @@ diff --git a/b.rs b/b.rs
         assert!(md.contains("`a.rs:h1`"));
         assert!(md.contains("looks good"));
         assert!(md.contains("watch the boundary"));
+    }
+
+    #[test]
+    fn from_review_undecided_includes_all_hunks_and_notes() {
+        // Headless export path: no App / decisions; notes + all undecided.
+        let app = multi_hunk_app();
+        let notes = vec![
+            Note {
+                target: NoteTarget::Banner,
+                text: "headless export".into(),
+            },
+            Note {
+                target: NoteTarget::Hunk {
+                    path: "a.rs".into(),
+                    hunk: 1,
+                },
+                text: "see this hunk".into(),
+            },
+        ];
+        let r = ReviewReport::from_review_undecided(&app.review, &notes);
+        assert!(r.accepted.is_empty());
+        assert!(r.rejected.is_empty());
+        assert!(!r.undecided.is_empty());
+        assert!(r.undecided.iter().all(|k| k.contains(":h")));
+        assert_eq!(r.banner.as_deref(), Some("headless export"));
+        assert_eq!(r.notes.len(), 1);
+        assert_eq!(r.notes[0].hunk, Some(1));
+        assert!(r.comments.is_empty());
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("\"undecided\""));
+        assert!(json.contains("headless export"));
     }
 
     #[test]

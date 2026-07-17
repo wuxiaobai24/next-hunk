@@ -239,7 +239,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `include_untracked` | bool | `false` | 在 worktree / working-set diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
-| `export_on_quit` | string | `"none"` | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`） |
+| `export_on_quit` | string | `"none"` | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`）。非 TTY 时立即输出报告（全部 `undecided` + notes），不回退到 inspect 摘要 |
 | `vcs` | string | `"auto"` | `"auto"`（有 `.jj` 时优先 jj）/ `"git"` / `"jj"`，见 [`docs/VCS.md`](./docs/VCS.md) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
 

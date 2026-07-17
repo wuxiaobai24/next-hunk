@@ -355,6 +355,15 @@ stdout. With `export_on_quit = "json"|"markdown"|"both"`, quit emits the report
 even without `--select` (notes/comments included; hunks stay `undecided` until
 decided in select/serve).
 
+**Non-TTY / agent contract:** when stdout is not a terminal (piped, CI, agent
+tool call), there is no TUI to quit. With `--export-on-quit json|markdown|both`
+(or the same value in config), next-hunk **emits the report immediately** and
+exits 0 — all hunks `undecided`, plus any `--note` annotations. It never
+substitutes the plain inspect summary in that case (so agents can parse stdout
+reliably). Without export, non-TTY still falls back to the inspect summary.
+`--select` / `--focus` still require an interactive terminal (or a live
+`serve` for auto-forward).
+
 ### Agent skill
 
 A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when

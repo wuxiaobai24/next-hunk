@@ -519,6 +519,13 @@ Notes:
 - Session comments (`next-hunk comment add`) appear under `comments` when the
   human quits a `serve` TUI with export enabled.
 - `--select` alone (export `none`) still emits the legacy three-bucket JSON only.
+- **Non-TTY (piped / agent tool call):** with `--export-on-quit
+  json|markdown|both`, next-hunk emits the report **immediately** (no TUI) and
+  exits 0 — all hunks `undecided`, plus any `--note`s. It does **not** print
+  the inspect `files=…` summary in that case. Without export, non-TTY still
+  falls back to inspect. Use this when you need a parseable headless report
+  without a human at a terminal; use `--select` / `serve` when you need
+  human decisions.
 
 ## Examples
 

@@ -507,13 +507,15 @@ fn run() -> Result<()> {
                 return Ok(());
             }
 
-            // No live serve (or forward disabled): focus/note/select need a TTY
-            // for a one-shot TUI — never silently drop agent annotations.
+            // No live serve (or forward disabled): focus needs a TTY for a
+            // one-shot TUI. Notes without export-on-quit also need a TTY (they
+            // would only render in the TUI); with export they land in the
+            // headless report (see open_review_from_text).
             if !std::io::stdout().is_terminal() {
                 if focus_target.is_some() {
                     bail!("--focus requires an interactive terminal (stdout is not a tty)");
                 }
-                if !notes.is_empty() {
+                if !notes.is_empty() && matches!(resolved.export_on_quit, ExportOnQuit::None) {
                     bail!("--note requires an interactive terminal (stdout is not a tty)");
                 }
             }
@@ -857,8 +859,12 @@ struct AgentBridgeOptions {
     export_on_quit_override: Option<ExportOnQuit>,
 }
 
-/// Parse `--focus` / `--note` / `--select` and refuse agent-bridge interactive
-/// flags when stdout is not a tty — never silently drop focus/notes.
+/// Parse `--focus` / `--note` / `--select` and refuse interactive flags when
+/// stdout is not a tty — never silently drop focus/select.
+///
+/// `--note` is allowed headless when paired with `--export-on-quit
+/// json|markdown|both` (notes land in the quit report). That gate is applied
+/// in [`open_review_from_text`] once export mode is fully resolved (CLI + config).
 fn parse_agent_bridge_options(
     focus: Option<String>,
     note: Vec<String>,
@@ -875,16 +881,14 @@ fn parse_agent_bridge_options(
 
     // Interactive agent-bridge flags cannot run headless. Fail fast so agents
     // never see an exit-0 inspect summary that discarded their annotations.
-    // (Exception: `diff` auto-forward into a live serve, handled before this.)
+    // (Exception: `diff` auto-forward into a live serve, handled before this;
+    // `--note` + `--export-on-quit` is handled headless in open_review_from_text.)
     if !std::io::stdout().is_terminal() {
         if select {
             bail!("--select requires an interactive terminal (stdout is not a tty)");
         }
         if focus.is_some() {
             bail!("--focus requires an interactive terminal (stdout is not a tty)");
-        }
-        if !notes.is_empty() {
-            bail!("--note requires an interactive terminal (stdout is not a tty)");
         }
     }
 
@@ -1718,8 +1722,13 @@ fn open_review_from_text(
     // piped integration tests). The upfront check is portable and avoids that.
     //
     // Agent-bridge flags must never be silently discarded on this path: callers
-    // that pass --focus/--note/--select are rejected earlier via
+    // that pass --focus/--select are rejected earlier via
     // `parse_agent_bridge_options`. Defend in depth here too.
+    //
+    // `--export-on-quit` is the intentional headless agent bridge: with no TUI
+    // to quit, emit the report immediately (all hunks undecided + notes).
+    // Never fall through to the inspect summary when export was requested —
+    // that silently substitutes unparseable text for the documented report.
     if !std::io::stdout().is_terminal() {
         if options.select_mode {
             bail!("--select requires an interactive terminal (stdout is not a tty)");
@@ -1735,6 +1744,12 @@ fn open_review_from_text(
                 );
             }
             bail!("--focus requires an interactive terminal (stdout is not a tty)");
+        }
+        if export_on_quit != ExportOnQuit::None {
+            // Notes are part of the export report; allowed headless.
+            let report = ReviewReport::from_review_undecided(&review, &options.notes);
+            emit_quit_report(&report, select_mode, export_on_quit)?;
+            return Ok(());
         }
         if !options.notes.is_empty() {
             bail!("--note requires an interactive terminal (stdout is not a tty)");

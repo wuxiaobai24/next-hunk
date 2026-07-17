@@ -507,6 +507,119 @@ fn focus_and_note_in_non_tty_error_not_silent() {
 }
 
 #[test]
+fn export_on_quit_json_non_tty_emits_report_not_inspect() {
+    // WXB-31: non-TTY + --export-on-quit must emit the agent report, never the
+    // inspect summary. Agents pipe stdout and parse JSON.
+    let patch = fixture("tiny_simple.patch");
+    let mut child = Command::new(bin())
+        .args([
+            "patch",
+            "-",
+            "--export-on-quit",
+            "json",
+            "--note",
+            "banner=please review",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "export-on-quit non-tty should exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.starts_with("files="),
+        "must not print inspect summary when export-on-quit set: {stdout}"
+    );
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("stdout should be one JSON object");
+    assert!(v.get("accepted").is_some(), "missing accepted: {v}");
+    assert!(v.get("rejected").is_some(), "missing rejected: {v}");
+    assert!(v.get("undecided").is_some(), "missing undecided: {v}");
+    let undecided = v["undecided"].as_array().expect("undecided array");
+    assert!(!undecided.is_empty(), "fixture has hunks: {v}");
+    assert_eq!(
+        v.get("banner").and_then(|b| b.as_str()),
+        Some("please review")
+    );
+}
+
+#[test]
+fn export_on_quit_markdown_non_tty_emits_report() {
+    let patch = fixture("tiny_simple.patch");
+    let mut child = Command::new(bin())
+        .args(["patch", "-", "--export-on-quit", "markdown"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "export-on-quit markdown non-tty should exit 0: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !stdout.starts_with("files="),
+        "must not print inspect summary: {stdout}"
+    );
+    assert!(
+        stdout.contains("# next-hunk review report"),
+        "expected markdown report: {stdout}"
+    );
+    assert!(
+        stdout.contains("## Decisions"),
+        "expected decisions section: {stdout}"
+    );
+}
+
+#[test]
+fn export_on_quit_both_non_tty_emits_json_then_markdown() {
+    let patch = fixture("tiny_simple.patch");
+    let mut child = Command::new(bin())
+        .args(["patch", "-", "--export-on-quit", "both"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.starts_with("files="), "no inspect: {stdout}");
+    // First non-empty line is JSON; body contains markdown.
+    let first_line = stdout.lines().next().expect("output");
+    let v: serde_json::Value = serde_json::from_str(first_line).expect("first line should be JSON");
+    assert!(v.get("undecided").is_some());
+    assert!(
+        stdout.contains("# next-hunk review report"),
+        "both should include markdown after JSON: {stdout}"
+    );
+}
+
+#[test]
 fn pager_garbage_input_exits_nonzero() {
     // Dogfood P1: `echo hello | next-hunk pager` must not exit 0 after a
     // parse failure (agents / scripts treat 0 as success).
