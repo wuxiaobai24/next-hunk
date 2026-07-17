@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Windows / platform support matrix (WXB-27)
+- **`docs/PLATFORMS.md`** — canonical matrix: Linux/macOS full (incl. live
+  `serve` + session CLI + MCP); Windows first-class for one-shot review
+  (`diff`/`show`/`pager`/`inspect`/`--select`/`last-export`), limited
+  `overlay` (in-place TTY only), live serve **deferred to 0.9**.
+- **Clearer session stubs on non-Unix** — `serve` / `push` / `decision` /
+  `list` / … no longer tell Windows users to "rebuild with `--features serve`"
+  when the feature is already on; errors name the OS limit, point at
+  `docs/PLATFORMS.md`, and suggest `--select` / `overlay` / `last-export`.
+- **`platform` module** — `live_session_supported` /
+  `live_session_unavailable` shared by CLI + MCP; unit tests lock message shape.
+- **MCP on non-Unix** — `tools/call` still reports `unknown tool` for bad
+  names; known session tools return the platform matrix error (Windows CI green).
+- **CI** — existing `windows-latest` job remains the gate that pager/parse/
+  inspect/one-shot paths stay green; live-session integration tests stay
+  `cfg(unix)`.
+- **Docs** — README / README_zh / PLAN / MCP / skill link the matrix; PLAN
+  records Windows serve as an explicit 0.9 item.
+
 ### Added — incremental IR reload for dirty files (WXB-26)
 - **Incremental watch/`reload` IR rebuild** — on hot-reload, next-hunk splits
   the unified diff into per-file sections, **byte-compares** each section to

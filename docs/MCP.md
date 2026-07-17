@@ -117,4 +117,4 @@ No extra crates are pulled for MCP (uses existing `serde_json`). The feature exi
 
 - HTTP / WebSocket session broker
 - Replacing the skill document or CLI
-- Windows named-pipe serve (see roadmap / Windows matrix ticket)
+- Windows named-pipe / TCP serve (deferred to 0.9; see [`PLATFORMS.md`](./PLATFORMS.md))

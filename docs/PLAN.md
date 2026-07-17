@@ -21,7 +21,7 @@
 | 配置真接线（`line_numbers` 等，消灭 silent no-op） | Homebrew / 社区运营对标 |
 | 轻量 live session CLI：list / review / navigate / comment / reload；轻量 MCP 映射（`next-hunk mcp`） | 完整 HTTP/WS session-broker monorepo |
 | skill 与 hunk-review **工作流同构** | 像素级 UI 抄袭 |
-| 保留并强化 `--select` + `decision` | Windows 完整 serve（可推 0.9） |
+| 保留并强化 `--select` + `decision` | Windows 完整 serve（**0.9**；矩阵见 [`PLATFORMS.md`](./PLATFORMS.md)） |
 
 **明确不做（至少到 0.8）：** 完整 git 客户端、以二进制体积为 KPI、为抄布局破坏 IR 不变量。
 
@@ -137,9 +137,11 @@
 ## 暂缓（其余）
 
 - Sapling 适配  
-- 完整 session-broker / MCP  
+- 完整 session-broker / HTTP-WS monorepo  
 - STML / 富文本 note  
 - OpenTUI 式可嵌入组件  
 - parse fuzz  
 - [x] 增量 IR 编辑（非全量 reload；WXB-26：section fingerprint + transplant）  
 - ~~CLI「有 socket 就转发」无感切换~~ → done (WXB-9: `diff --focus/--note` auto-forward)
+- [x] **Windows 支持矩阵文档**（WXB-27）— 一等公民 = one-shot review；live serve 明确推 0.9  
+- [ ] **Windows live serve**（0.9）— named pipe 或 localhost TCP，帧协议与 UDS 共用；见 [`PLATFORMS.md`](./PLATFORMS.md)

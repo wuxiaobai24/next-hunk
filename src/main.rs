@@ -1802,7 +1802,7 @@ fn run_serve(
     _no_persist: bool,
     _extra: Vec<String>,
 ) -> Result<()> {
-    bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
+    bail!("{}", next_hunk::platform::live_session_unavailable("serve"));
 }
 
 /// Sanitize a free-form string for use in a persist scope filename.
@@ -1909,42 +1909,57 @@ fn resolve_serve_export(
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
-    bail!("`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
+    bail!("{}", next_hunk::platform::live_session_unavailable("push"));
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_decision() -> Result<()> {
-    bail!("`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!(
+        "{}",
+        next_hunk::platform::live_session_unavailable("decision")
+    )
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_list(_all_worktrees: bool) -> Result<()> {
-    bail!("`list` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!("{}", next_hunk::platform::live_session_unavailable("list"));
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_get(_hash: Option<String>) -> Result<()> {
-    bail!("`get` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!("{}", next_hunk::platform::live_session_unavailable("get"));
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_review(_hash: Option<String>) -> Result<()> {
-    bail!("`review` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!(
+        "{}",
+        next_hunk::platform::live_session_unavailable("review")
+    );
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_navigate(_target: String, _hash: Option<String>) -> Result<()> {
-    bail!("`navigate` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!(
+        "{}",
+        next_hunk::platform::live_session_unavailable("navigate")
+    );
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_comment(_action: CommentAction) -> Result<()> {
-    bail!("`comment` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!(
+        "{}",
+        next_hunk::platform::live_session_unavailable("comment")
+    );
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_reload(_hash: Option<String>) -> Result<()> {
-    bail!("`reload` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+    bail!(
+        "{}",
+        next_hunk::platform::live_session_unavailable("reload")
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

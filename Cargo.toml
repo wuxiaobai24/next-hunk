@@ -63,11 +63,12 @@ highlight = ["dep:syntect"]
 watch = ["dep:notify"]
 # Optional server mode (`next-hunk serve` + `push`/`decision`) for live
 # agent→human streaming into a persistent TUI. Uses std Unix sockets (no new
-# crate), so on non-Unix the subcommands exist but error at runtime.
+# crate). Subcommands exist on all OSes; non-Unix builds error with a message
+# that points at docs/PLATFORMS.md (Windows live serve deferred to 0.9).
 serve = []
 # Lightweight MCP stdio server (`next-hunk mcp`) mapping serve session commands
 # to MCP tools. Zero extra crates (JSON-RPC over stdio via serde_json). Tools
-# still need `serve` + Unix at runtime. Omit with
+# still need `serve` + Unix at runtime (same matrix as CLI). Omit with
 # `--no-default-features --features serve` (or without `mcp`) for lean builds.
 mcp = []
 
