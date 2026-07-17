@@ -182,8 +182,11 @@ pub enum LayoutMode {
 
 /// What to print on TUI quit for agents (and humans pasting into chat).
 ///
-/// Default is [`ExportOnQuit::None`] so everyday pager/`git diff` use does not
-/// pollute stdout. `--select` still emits decision JSON when export is `none`.
+/// Default for pager / plain `diff` is [`ExportOnQuit::None`] so everyday
+/// `git core.pager` use does not pollute stdout. **`serve` defaults to
+/// [`ExportOnQuit::Json`]** when neither CLI nor config sets a value (agents
+/// need comments + notes, not only decision buckets). `--select` still emits
+/// decision JSON when export is `none`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExportOnQuit {
     /// No export (except legacy `--select` decisions-only JSON).

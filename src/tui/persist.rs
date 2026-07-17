@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::tui::app::Decision;
+use crate::tui::app::{Decision, ReviewReport};
 
 /// On-disk document version. Bump when the schema changes incompatibly.
 const VERSION: u32 = 1;
@@ -91,6 +91,83 @@ pub fn path_in_git_dir(git_dir: &Path, scope: &str) -> PathBuf {
     git_dir
         .join("next-hunk")
         .join(format!("decisions-{}.json", sanitize_scope(scope)))
+}
+
+/// Path for the most recent full review export (decisions + comments + notes).
+///
+/// Example: `.git/next-hunk/last-export.json`
+pub fn path_last_export_in_git_dir(git_dir: &Path) -> PathBuf {
+    git_dir.join("next-hunk").join("last-export.json")
+}
+
+/// XDG fallback for last-export when no git dir is known.
+pub fn path_last_export_in_xdg(repo_key: &str) -> Option<PathBuf> {
+    let base = xdg_state_home()?;
+    Some(
+        base.join("next-hunk")
+            .join(sanitize_scope(repo_key))
+            .join("last-export.json"),
+    )
+}
+
+/// Resolve where to cache the last quit-time [`ReviewReport`].
+///
+/// Preference matches decision persistence:
+/// 1. `<git_dir>/next-hunk/last-export.json` when `git_dir` is set
+/// 2. else discover git from `workdir` via `gix`
+/// 3. else XDG state keyed by a hash of the workdir path
+pub fn resolve_last_export_path(git_dir: Option<&Path>, workdir: Option<&Path>) -> Option<PathBuf> {
+    if let Some(gd) = git_dir {
+        return Some(path_last_export_in_git_dir(gd));
+    }
+    if let Some(wd) = workdir {
+        if let Ok(repo) = gix::discover(wd) {
+            return Some(path_last_export_in_git_dir(repo.git_dir()));
+        }
+        let key = repo_key_from_path(wd);
+        return path_last_export_in_xdg(&key);
+    }
+    None
+}
+
+/// Write the full review report so agents can recover it via `next-hunk last-export`
+/// when they miss stdout (common with `serve` quit on the human's terminal).
+///
+/// When `workdir` is `None` (e.g. patch path), falls back to the process cwd so
+/// agents inside a git/jj worktree still get a recoverable cache.
+pub fn save_last_export(workdir: Option<&Path>, report: &ReviewReport) -> std::io::Result<()> {
+    let cwd = std::env::current_dir().ok();
+    let wd = workdir.or(cwd.as_deref());
+    let Some(path) = resolve_last_export_path(None, wd) else {
+        return Ok(());
+    };
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let body = serde_json::to_string(report)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    fs::write(&tmp, body)?;
+    let _ = fs::remove_file(&path);
+    fs::rename(&tmp, &path)?;
+    Ok(())
+}
+
+/// Load the cached last export. Missing file → `None`.
+///
+/// When `workdir` is `None`, falls back to the process cwd.
+pub fn load_last_export(workdir: Option<&Path>) -> Option<ReviewReport> {
+    let cwd = std::env::current_dir().ok();
+    let wd = workdir.or(cwd.as_deref());
+    let path = resolve_last_export_path(None, wd)?;
+    let text = fs::read_to_string(&path).ok()?;
+    match serde_json::from_str::<ReviewReport>(&text) {
+        Ok(r) => Some(r),
+        Err(e) => {
+            eprintln!("warning: cannot parse last export {}: {e}", path.display());
+            None
+        }
+    }
 }
 
 /// XDG fallback when no git dir is known.
@@ -283,5 +360,47 @@ mod tests {
         assert_eq!(decision_from_wire("accept"), Some(Decision::Accept));
         assert_eq!(decision_from_wire("rejected"), Some(Decision::Reject));
         assert_eq!(decision_from_wire("nope"), None);
+    }
+
+    #[test]
+    fn last_export_path_shape() {
+        let p = path_last_export_in_git_dir(Path::new("/repo/.git"));
+        assert_eq!(p, PathBuf::from("/repo/.git/next-hunk/last-export.json"));
+    }
+
+    #[test]
+    fn last_export_round_trip() {
+        let dir = std::env::temp_dir().join(format!(
+            "next-hunk-last-export-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        // Simulate a bare workdir with no .git → XDG path; force via git_dir API.
+        let path = path_last_export_in_git_dir(&dir);
+        let report = ReviewReport {
+            schema_version: crate::tui::app::REVIEW_REPORT_SCHEMA_VERSION,
+            accepted: vec!["a.rs:h1".into()],
+            rejected: vec!["b.rs:h1".into()],
+            undecided: vec![],
+            comments: vec![],
+            notes: vec![],
+            banner: Some("done".into()),
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let body = serde_json::to_string(&report).unwrap();
+        fs::write(&path, &body).unwrap();
+        let loaded: ReviewReport =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(loaded.accepted, report.accepted);
+        assert_eq!(loaded.rejected, report.rejected);
+        assert_eq!(loaded.banner, report.banner);
+        assert_eq!(loaded.schema_version, report.schema_version);
+        let _ = fs::remove_dir_all(&dir);
     }
 }

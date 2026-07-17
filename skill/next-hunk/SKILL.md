@@ -183,6 +183,8 @@ disambiguate, or when debugging why forward did not happen.
 ```bash
 # Prefer --all so the session includes staged + unstaged (+ untracked if set):
 next-hunk serve --all --include-untracked
+# On quit: full JSON report on stdout (export_on_quit defaults to json).
+# If you miss stdout: next-hunk last-export
 ```
 
 The TUI runs with selection mode on (`a`/`r`/`u` per hunk). It binds a Unix
@@ -459,9 +461,12 @@ next-hunk push --focus src/util.rs:15 --note banner="Also fixed the batch size"
 ```
 Human:  next-hunk serve
 Agent:  next-hunk diff --focus … --note …       # auto-forwards (no list needed)
-        next-hunk decision                      # poll human's decisions
+        next-hunk decision                      # poll decisions (3 buckets)
         # ... iterate: diff --focus → comment → decision ...
         next-hunk reload                        # refresh if content changed
+Human:  q  (quit) → stdout full JSON (default export=json)
+Agent:  next-hunk last-export                   # if stdout was missed
+        # then After review playbook: rejected + comments only
 # Optional when multi-worktree or debugging:
         next-hunk list / get / review / navigate
 ```
@@ -483,10 +488,12 @@ feature (on by default). Auto-forward on `diff` uses the same socket.
 | Situation | What to do |
 |-----------|------------|
 | Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
+| Need comments + decisions after human quits | `serve` quit stdout (default json) or `last-export` |
 | Just want them informed, you continue | `diff --focus` / `--note` (auto-forwards if serve is live) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
 | `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
 | Iterating with the human | `serve` + `diff --focus` (prefer) or explicit `push` / `navigate` |
+| After review: only fix what they rejected | parse export → rejected/commented files only → `diff --focus` |
 
 If unsure, prefer **no `--select`** first. The human can always ask you to roll
 back; but a blocking `--select` that no one answers will hang.
@@ -522,8 +529,9 @@ Once the TUI is open, the human navigates with:
 
 ## Export a full review report on quit
 
-When you need **comments + notes + decisions** in one shot (not just
-`accepted`/`rejected`/`undecided`), ask the human to enable quit-time export:
+**`serve` defaults to full JSON export on quit** (decisions + comments + notes
++ banner). Pager / plain `diff` default to `none` so `git core.pager` does not
+pollute stdout. Override anytime:
 
 ```bash
 # JSON only (one line; superset of decision shape — extra fields are optional)
@@ -534,19 +542,24 @@ next-hunk diff --export-on-quit markdown
 
 # Both: JSON line, then Markdown body
 next-hunk diff --select --export-on-quit both
+
+# Serve: already json by default; pin explicitly if you prefer both:
+next-hunk serve --export-on-quit both
 ```
 
-Or persist in config:
+Or persist in config (applies to all entry points, including serve):
 
 ```toml
 # ~/.config/next-hunk/config.toml  or  .next-hunk/config.toml
 export_on_quit = "json"   # none | json | markdown | both
 ```
 
-**JSON shape** (fields beyond the three decision buckets are omitted when empty):
+**JSON shape** (`schema_version` is always present; fields beyond the three
+decision buckets are omitted when empty):
 
 ```json
 {
+  "schema_version": 1,
   "accepted": ["src/auth.rs:h1"],
   "rejected": [],
   "undecided": ["src/util.rs:h1"],
@@ -563,12 +576,23 @@ export_on_quit = "json"   # none | json | markdown | both
 
 Notes:
 
-- Default is `none` so `git core.pager` use does not pollute stdout.
+- **Pager / no-select `diff`:** default `none` — no stdout pollution.
+- **`serve`:** default `json` when unset — quit always yields a parseable full
+  report. Explicit config/CLI `none` still wins.
 - Without `--select`, decisions are all `undecided` unless the session used
   `serve` (select always on) and the human pressed `a`/`r`.
-- Session comments (`next-hunk comment add`) appear under `comments` when the
-  human quits a `serve` TUI with export enabled.
-- `--select` alone (export `none`) still emits the legacy three-bucket JSON only.
+- Session comments (`next-hunk comment add` / in-TUI `c`/`C`) appear under
+  `comments` on serve quit (default export).
+- `--select` alone (export `none`) still emits the **legacy three-bucket JSON
+  only** (no `schema_version` / comments). Prefer export `json` when you need
+  comments. Full report is still cached for `last-export`.
+- **`next-hunk last-export`:** prints the cached full report from the last
+  select/export quit (stored under `.git/next-hunk/last-export.json`). Use
+  this when the human quits `serve` on **their** terminal and you missed
+  stdout. Does not require a live serve.
+- **`decision` during a live serve** still returns three buckets only
+  (backward compatible). For comments mid-session use `comment list`; for the
+  full post-quit package use stdout export or `last-export`.
 - **Non-TTY (piped / agent tool call):** with `--export-on-quit
   json|markdown|both`, next-hunk emits the report **immediately** (no TUI) and
   exits 0 — all hunks `undecided`, plus any `--note`s. It does **not** print
@@ -576,6 +600,77 @@ Notes:
   falls back to inspect. Use this when you need a parseable headless report
   without a human at a terminal; use `--select` / `serve` when you need
   human decisions.
+
+## After review (agent playbook)
+
+When the human finishes a review, **do not** re-read the whole diff. Consume
+the export and fix only what they rejected or annotated.
+
+### 1. Obtain the full report
+
+Prefer, in order:
+
+```bash
+# A) You blocked on --select / you own the serve terminal stdout:
+#    parse the JSON line from that process's stdout (schema_version may be
+#    present; always has accepted/rejected/undecided).
+
+# B) Human ran serve and quit — recover the cache:
+next-hunk last-export
+
+# C) Live serve still open — decisions only (no comments):
+next-hunk decision
+next-hunk comment list   # if you need line/hunk notes before they quit
+```
+
+Parse as JSON. Tolerate extra fields. Three-bucket shape from `--select`
+(export none) / `decision` is a subset: only `accepted` / `rejected` /
+`undecided`.
+
+### 2. Build the work set (rejected + commented only)
+
+```text
+work_files = unique paths from:
+  - every key in `rejected`          # "path:hN" → path
+  - every `comments[].file`
+  - (optional) `notes[].file` if you treat agent notes as still open
+
+Skip pure `accepted` hunks with no comments on that file.
+Treat `undecided` as not approved — do not ship them unless the human said so.
+```
+
+### 3. Fix, then re-present only those files
+
+```bash
+# After editing the rejected / commented paths:
+next-hunk diff --all --include-untracked \
+  --focus <first-rejected-or-commented-path> \
+  --note banner="Addressed review feedback on N files"
+
+# Or, with a live serve still open:
+next-hunk diff --focus <path>:<line> \
+  --note <path>:<line>="Fixed: <summary of their comment>"
+```
+
+When you need another approval pass:
+
+```bash
+next-hunk diff --all --include-untracked --select --export-on-quit json \
+  --focus <path>
+# or keep using the human's serve session and poll:
+next-hunk decision
+# after they quit:
+next-hunk last-export
+```
+
+### 4. Copy-paste checklist
+
+1. `report = last-export` (or quit stdout / `decision` + `comment list`)
+2. For each `rejected` key `path:hN` → open that hunk and fix or revert
+3. For each `comments[]` → fix at `line`/`line_end` or `hunk` (tightest wins)
+4. Do **not** rewrite accepted-only files
+5. Re-show with `diff --focus` on the touched paths
+6. Stop when `rejected` is empty and open comments are addressed
 
 ## Examples
 

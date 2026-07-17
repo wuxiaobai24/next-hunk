@@ -224,6 +224,10 @@ enum Commands {
     /// and read the human's accumulated decisions in real time. The TUI runs
     /// with selection mode on (a/r/u per hunk), so `decision` returns real
     /// accept/reject results.
+    ///
+    /// On quit, serve defaults to `export_on_quit=json` (full report:
+    /// decisions + comments + notes + banner) unless config/CLI overrides.
+    /// Pager / plain `diff` keep default `none` so `git core.pager` is clean.
     Serve {
         /// Review staged changes (`git diff --cached`).
         #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
@@ -296,6 +300,15 @@ enum Commands {
     /// immediately — does not wait for the human to quit. Requires a running
     /// `next-hunk serve` in this repo.
     Decision,
+    /// Print the last full review export cached on quit.
+    ///
+    /// When a TUI session quits with `--select` or `export_on_quit` (serve
+    /// defaults to json), next-hunk writes the full report under
+    /// `.git/next-hunk/last-export.json`. Use this if the agent missed the
+    /// human's terminal stdout. Does **not** require a live serve.
+    /// Prints one JSON line (same shape as `--export-on-quit json`).
+    #[command(name = "last-export")]
+    LastExport,
     /// List live next-hunk server sessions.
     ///
     /// Scans well-known socket directories for live servers. Prints one line
@@ -844,6 +857,7 @@ fn run() -> Result<()> {
         ),
         Commands::Push { focus, note } => run_push(focus, note),
         Commands::Decision => run_decision(),
+        Commands::LastExport => run_last_export(),
         Commands::List { all_worktrees } => run_list(all_worktrees),
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
@@ -1123,6 +1137,15 @@ fn run_serve(
     } else {
         None
     };
+    // Serve product default: full agent report on quit. Only apply when neither
+    // CLI `--export-on-quit` nor config `export_on_quit` was set — explicit
+    // `none` must still win. Pager / plain diff keep ResolvedConfig's None.
+    let export_on_quit = resolve_serve_export(
+        bridge.export_on_quit_override,
+        &cfg,
+        resolved.export_on_quit,
+    );
+
     open_review_from_produced(
         produced,
         reloader,
@@ -1137,7 +1160,7 @@ fn run_serve(
             notes: bridge.notes,
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
-            export_on_quit: resolved.export_on_quit,
+            export_on_quit,
             persist_review: resolved.persist_review,
             persist_scope: resolved.scope.as_str().to_string(),
         },
@@ -1641,6 +1664,23 @@ fn resolve_export_opt(cli: Option<ExportOnQuit>, cfg: &Config) -> Result<ExportO
     }
 }
 
+/// Serve export default: `json` when neither CLI nor config set a value.
+/// Explicit `none` (CLI or config) is preserved. Pager/diff do not use this.
+/// Gated with the serve+unix call site so no-default-features / non-Unix
+/// builds do not emit `dead_code`; kept under `test` so unit tests still run.
+#[cfg(any(all(feature = "serve", unix), test))]
+fn resolve_serve_export(
+    cli_override: Option<ExportOnQuit>,
+    cfg: &Config,
+    resolved: ExportOnQuit,
+) -> ExportOnQuit {
+    if cli_override.is_some() || cfg.export_on_quit.is_some() {
+        resolved
+    } else {
+        ExportOnQuit::Json
+    }
+}
+
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
     bail!("`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
@@ -1771,7 +1811,7 @@ fn open_review_from_text(
         if export_on_quit != ExportOnQuit::None {
             // Notes are part of the export report; allowed headless.
             let report = ReviewReport::from_review_undecided(&review, &options.notes);
-            emit_quit_report(&report, select_mode, export_on_quit)?;
+            emit_quit_report(&report, select_mode, export_on_quit, workdir.as_deref())?;
             return Ok(());
         }
         if !options.notes.is_empty() {
@@ -1788,12 +1828,12 @@ fn open_review_from_text(
         wrap_on,
         theme,
         layout,
-        workdir,
+        workdir.clone(),
         options,
         server,
     ) {
         Ok(report) => {
-            emit_quit_report(&report, select_mode, export_on_quit)?;
+            emit_quit_report(&report, select_mode, export_on_quit, workdir.as_deref())?;
             Ok(())
         }
         Err(err) => {
@@ -1809,7 +1849,20 @@ fn open_review_from_text(
 /// - `export_on_quit = none` + `--select`: legacy decisions-only JSON (compatible).
 /// - `export_on_quit = json|markdown|both`: full report (decisions + comments + notes),
 ///   even when not in `--select` mode.
-fn emit_quit_report(report: &ReviewReport, select_mode: bool, export: ExportOnQuit) -> Result<()> {
+///
+/// When select or export is active, also caches the **full** report under
+/// `.git/next-hunk/last-export.json` for `next-hunk last-export`.
+fn emit_quit_report(
+    report: &ReviewReport,
+    select_mode: bool,
+    export: ExportOnQuit,
+    workdir: Option<&std::path::Path>,
+) -> Result<()> {
+    if select_mode || export != ExportOnQuit::None {
+        if let Err(e) = next_hunk::tui::persist::save_last_export(workdir, report) {
+            eprintln!("warning: cannot cache last export: {e}");
+        }
+    }
     match export {
         ExportOnQuit::None => {
             if select_mode {
@@ -1829,6 +1882,22 @@ fn emit_quit_report(report: &ReviewReport, select_mode: bool, export: ExportOnQu
         }
     }
     Ok(())
+}
+
+/// `next-hunk last-export`: print the cached full review report from the last
+/// select/export quit in this worktree. Does not require a live serve.
+fn run_last_export() -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    match next_hunk::tui::persist::load_last_export(Some(&cwd)) {
+        Some(report) => {
+            println!("{}", serde_json::to_string(&report)?);
+            Ok(())
+        }
+        None => bail!(
+            "no last-export found for this worktree \
+             (quit a `serve` / `--select` / `--export-on-quit` session first)"
+        ),
+    }
 }
 
 fn parse_review(text: &str) -> Result<Review> {
@@ -1870,4 +1939,43 @@ fn read_patch_input(path: &std::path::Path) -> Result<String> {
         bail!("patch file not found: {}", path.display());
     }
     std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+}
+
+#[cfg(test)]
+mod serve_export_defaults {
+    use super::*;
+
+    #[test]
+    fn serve_defaults_to_json_when_unset() {
+        let cfg = Config::default();
+        assert_eq!(
+            resolve_serve_export(None, &cfg, ExportOnQuit::None),
+            ExportOnQuit::Json
+        );
+    }
+
+    #[test]
+    fn serve_respects_config_none() {
+        let cfg = Config {
+            export_on_quit: Some("none".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_serve_export(None, &cfg, ExportOnQuit::None),
+            ExportOnQuit::None
+        );
+    }
+
+    #[test]
+    fn serve_respects_cli_override() {
+        let cfg = Config::default();
+        assert_eq!(
+            resolve_serve_export(Some(ExportOnQuit::Both), &cfg, ExportOnQuit::Both),
+            ExportOnQuit::Both
+        );
+        assert_eq!(
+            resolve_serve_export(Some(ExportOnQuit::None), &cfg, ExportOnQuit::None),
+            ExportOnQuit::None
+        );
+    }
 }

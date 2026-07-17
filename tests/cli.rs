@@ -581,6 +581,11 @@ fn export_on_quit_json_non_tty_emits_report_not_inspect() {
     );
     let v: serde_json::Value =
         serde_json::from_str(stdout.trim()).expect("stdout should be one JSON object");
+    assert_eq!(
+        v.get("schema_version").and_then(|n| n.as_u64()),
+        Some(1),
+        "full export must carry schema_version: {v}"
+    );
     assert!(v.get("accepted").is_some(), "missing accepted: {v}");
     assert!(v.get("rejected").is_some(), "missing rejected: {v}");
     assert!(v.get("undecided").is_some(), "missing undecided: {v}");
@@ -655,6 +660,77 @@ fn export_on_quit_both_non_tty_emits_json_then_markdown() {
         stdout.contains("# next-hunk review report"),
         "both should include markdown after JSON: {stdout}"
     );
+}
+
+#[test]
+fn export_on_quit_json_caches_last_export() {
+    // Headless export should also write last-export for agents that miss stdout.
+    let tmp = std::env::temp_dir().join(format!(
+        "next-hunk-cli-lastexport-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let git_ok = Command::new("git")
+        .args(["init"])
+        .current_dir(&tmp)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !git_ok {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+
+    let patch = fixture("tiny_simple.patch");
+    let mut child = Command::new(bin())
+        .args([
+            "patch",
+            "-",
+            "--export-on-quit",
+            "json",
+            "--note",
+            "banner=cached",
+        ])
+        .current_dir(&tmp)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(patch.as_bytes()).unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "export should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cached = Command::new(bin())
+        .args(["last-export"])
+        .current_dir(&tmp)
+        .output()
+        .expect("last-export");
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        cached.status.success(),
+        "last-export should recover report: {}",
+        String::from_utf8_lossy(&cached.stderr)
+    );
+    let v: serde_json::Value = serde_json::from_str(String::from_utf8_lossy(&cached.stdout).trim())
+        .expect("last-export JSON");
+    assert_eq!(v.get("schema_version").and_then(|n| n.as_u64()), Some(1));
+    assert_eq!(v.get("banner").and_then(|b| b.as_str()), Some("cached"));
+    assert!(v.get("undecided").is_some());
 }
 
 #[test]
