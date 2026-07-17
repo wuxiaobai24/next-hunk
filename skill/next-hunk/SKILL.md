@@ -28,8 +28,10 @@ Use this skill **after** you finish a change and **before** you commit, when:
 - The change is already committed and the human will review it in the **PR UI**.
 - The human is clearly **not at a terminal** (then describe in chat instead).
 - You're in a **non-interactive** context (piped/scripted) and only want to show
-  something — `next-hunk diff` will still print an inspect summary, but the
-  interactive review won't run.
+  something — plain `next-hunk diff` / `inspect` still print a summary, but
+  **do not pass `--focus` / `--note` / `--select` without a TTY** (they exit
+  non-zero instead of silently dropping your annotations). Prefer
+  `next-hunk inspect --json` for headless structure.
 
 ## Which command shows *all* local changes?
 
@@ -136,6 +138,17 @@ next-hunk get
 
 ### 3. Agent: inspect the review structure
 
+Prefer **headless** `inspect --json` when you do not already have a live
+`serve` (same JSON shape as `review`):
+
+```bash
+next-hunk inspect --json
+# or a patch / range without opening a TUI:
+next-hunk inspect --json path/to.patch
+```
+
+With a live session:
+
 ```bash
 next-hunk review
 # {
@@ -154,10 +167,17 @@ next-hunk review
 # }
 ```
 
-`review` returns the file/hunk structure as JSON — file paths, insert/delete
+Both return the file/hunk structure as JSON — file paths, insert/delete
 counts, and hunk ranges. No full patch text by default (agents request it
 separately if needed). Use this to understand what's in the review before
 deciding where to navigate.
+
+One-shot commands also take agent-bridge flags (same as `diff`):
+
+```bash
+next-hunk show main..HEAD --focus src/auth.rs:h1 --note banner="please review"
+next-hunk patch changes.patch --focus src/a.rs --note src/a.rs:h1="why"
+```
 
 ### 4. Agent: navigate to what matters
 

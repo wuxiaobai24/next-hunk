@@ -147,6 +147,7 @@ next-hunk filediff old.rs new.rs    # diff two arbitrary files
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
+next-hunk inspect --json path/to.patch  # same shape as `review` (agent-friendly)
 next-hunk inspect --all --include-untracked  # script: list all local buckets
 
 # Use next-hunk as git's pager for everyday diff/show/log:
