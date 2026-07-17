@@ -409,15 +409,15 @@ fn working_set_shows_staged_unstaged_and_untracked() {
     // Origins: at least one of each mark when all buckets present.
     let origins: Vec<Option<FileOrigin>> = review.files.iter().map(|f| f.origin).collect();
     assert!(
-        origins.iter().any(|o| *o == Some(FileOrigin::Staged)),
+        origins.contains(&Some(FileOrigin::Staged)),
         "expected a staged origin mark: {origins:?}"
     );
     assert!(
-        origins.iter().any(|o| *o == Some(FileOrigin::Modified)),
+        origins.contains(&Some(FileOrigin::Modified)),
         "expected a modified origin mark: {origins:?}"
     );
     assert!(
-        origins.iter().any(|o| *o == Some(FileOrigin::Untracked)),
+        origins.contains(&Some(FileOrigin::Untracked)),
         "expected an untracked origin mark: {origins:?}"
     );
 

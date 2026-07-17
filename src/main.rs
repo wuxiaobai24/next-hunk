@@ -1108,6 +1108,9 @@ fn open_review_from_produced(
     )
 }
 
+// Mirrors the layered open path (diff text + origins + TUI knobs + server);
+// packing into a struct would only rename the same surface area.
+#[allow(clippy::too_many_arguments)]
 fn open_review_from_text(
     text: &str,
     origins: &[FileOrigin],
