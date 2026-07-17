@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **`navigate` / `comment add` reject unknown paths** (WXB-33) — both commands
+  now validate the target file against the live review's file set and return
+  `error: '<path>' is not in the current review (files: …)` instead of a silent
+  `ok`. Stops agent scripts from treating a bad path as confirmation that the
+  human TUI moved or stored a comment.
 - **`pager` / parse: non-empty non-diff input no longer reports `empty diff input`**
   (WXB-34). Zero-length input still yields `empty diff input`; non-empty input
   with no recognisable `@@` hunk now says
