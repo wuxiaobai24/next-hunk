@@ -119,29 +119,43 @@ pub fn parse_note(spec: &str) -> Result<Note> {
     }
 }
 
+/// Stable 16-char hex hash of a worktree (or bare repo) root used in socket names.
+///
+/// Uses a canonical absolute path when the directory exists so `/path` and
+/// `/path/` (or symlink aliases) share one session; falls back to the input
+/// path when canonicalize fails (e.g. path not yet on disk in tests).
+pub fn runtime_socket_hash(repo_root: &Path) -> String {
+    let key = std::fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
 /// Compute the Unix socket path a `serve` process should bind for `repo_root`.
 ///
-/// Path is deterministic per repo so that a `push`/`decision` CLI process in
-/// the same repo finds the same socket without an explicit `--socket` flag:
-/// `$XDG_RUNTIME_DIR/next-hunk-<hash>.sock` (fallback `/tmp/next-hunk-<hash>-<uid>.sock`
-/// when `XDG_RUNTIME_DIR` is unset, mirroring config.rs's manual env resolution).
-/// `<hash>` is a stable `DefaultHasher` of the canonical repo root — good enough
-/// to disambiguate repos without pulling in a hashing crate.
+/// Path is deterministic **per worktree root** (not the shared `.git` common
+/// dir), so parallel agents in linked worktrees each get an independent
+/// session. A `push`/`decision` CLI process in the same worktree finds the
+/// same socket without an explicit `--socket` flag:
+/// `$XDG_RUNTIME_DIR/next-hunk-<hash>.sock` (fallback `/tmp/next-hunk-<hash>.sock`
+/// when `XDG_RUNTIME_DIR` is unset).
+///
+/// `<hash>` is a stable `DefaultHasher` of the canonical worktree root — good
+/// enough to disambiguate worktrees without pulling in a hashing crate.
 pub fn runtime_socket_path(repo_root: &Path) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    repo_root.hash(&mut hasher);
-    let hash = format!("{:016x}", hasher.finish());
+    let hash = runtime_socket_hash(repo_root);
     let name = format!("next-hunk-{hash}.sock");
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         if !xdg.is_empty() {
             return PathBuf::from(xdg).join(name);
         }
     }
-    // Fallback: /tmp keyed only by the repo hash. The hash already disambiguates
-    // repos; multi-user same-repo collisions on a shared host are rare and
-    // handled by the stale-socket probe in ServerListener::spawn. Keeping the
-    // path deterministic in repo_root alone is what lets a `push`/`decision`
-    // process in the same repo find the socket.
+    // Fallback: /tmp keyed only by the worktree hash. The hash already
+    // disambiguates worktrees; multi-user same-path collisions on a shared
+    // host are rare and handled by the stale-socket probe in
+    // ServerListener::spawn. Keeping the path deterministic in repo_root alone
+    // is what lets a `push`/`decision` process in the same worktree find the
+    // socket.
     PathBuf::from(format!("/tmp/next-hunk-{hash}.sock"))
 }
 
@@ -321,6 +335,28 @@ mod tests {
         let a = runtime_socket_path(Path::new("/repo/one"));
         let b = runtime_socket_path(Path::new("/repo/two"));
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn socket_path_differs_across_worktree_paths() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        // Linked worktrees are different paths of the same logical repo —
+        // each must get its own socket so parallel `serve` does not collide.
+        let main = runtime_socket_path(Path::new("/home/you/project"));
+        let linked = runtime_socket_path(Path::new("/home/you/project-feature"));
+        assert_ne!(main, linked);
+        assert_ne!(
+            runtime_socket_hash(Path::new("/home/you/project")),
+            runtime_socket_hash(Path::new("/home/you/project-feature"))
+        );
+    }
+
+    #[test]
+    fn socket_hash_is_stable_16_hex() {
+        let h = runtime_socket_hash(Path::new("/repo/stable"));
+        assert_eq!(h.len(), 16);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_eq!(h, runtime_socket_hash(Path::new("/repo/stable")));
     }
 
     #[test]

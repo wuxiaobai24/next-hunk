@@ -230,8 +230,16 @@ enum Commands {
     /// List live next-hunk server sessions.
     ///
     /// Scans well-known socket directories for live servers. Prints one line
-    /// per live session: `<repo-hash>  <socket-path>`.
-    List,
+    /// per live session: `<hash>  <socket-path>  files=N  repo=<worktree-root>`.
+    /// The `repo` field is the absolute worktree root known at `serve` startup
+    /// — use it to pick among parallel agent worktrees.
+    List {
+        /// Only show sessions belonging to worktrees of the **current**
+        /// repository (main + linked `git worktree` checkouts). Also lists
+        /// known worktree roots that have no live `serve` yet.
+        #[arg(long)]
+        all_worktrees: bool,
+    },
     /// Show info about a running server session.
     ///
     /// Without an argument, checks the current repo's socket. With a hash
@@ -661,7 +669,7 @@ fn run() -> Result<()> {
         ),
         Commands::Push { focus, note } => run_push(focus, note),
         Commands::Decision => run_decision(),
-        Commands::List => run_list(),
+        Commands::List { all_worktrees } => run_list(all_worktrees),
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
         Commands::Navigate { target, hash } => run_navigate(target, hash),
@@ -877,36 +885,114 @@ fn run_decision() -> Result<()> {
 }
 
 /// `next-hunk list`: discover live server sessions.
+///
+/// With `--all-worktrees`, restrict to worktrees of the current repository and
+/// also surface known worktree roots that do not yet have a live `serve`.
 #[cfg(all(feature = "serve", unix))]
-fn run_list() -> Result<()> {
+fn run_list(all_worktrees: bool) -> Result<()> {
     let sessions = next_hunk::cli_parse::discover_live_sockets();
+    let current_hash = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| find_repo(&cwd).ok())
+        .map(|root| next_hunk::cli_parse::runtime_socket_hash(&root));
+
+    if all_worktrees {
+        return run_list_all_worktrees(sessions, current_hash.as_deref());
+    }
+
     if sessions.is_empty() {
         println!("no live sessions found");
         return Ok(());
     }
     for (path, hash) in &sessions {
-        // Try to get session info for richer output.
-        let info = next_hunk::tui::server::send_command(
-            path,
-            &next_hunk::tui::server::ServerCommand::Info,
-        );
-        match info {
-            Ok(next_hunk::tui::server::ServerReply::Info {
-                repo_path,
-                file_count,
-            }) => {
-                println!(
-                    "{}  {}  files={file_count}  repo={repo_path}",
-                    hash,
-                    path.display()
-                );
-            }
-            _ => {
-                println!("{}  {}", hash, path.display());
-            }
-        }
+        print_session_line(path, hash, current_hash.as_deref());
     }
     Ok(())
+}
+
+/// Filter live sessions to the current repo's worktrees; list idle worktrees too.
+#[cfg(all(feature = "serve", unix))]
+fn run_list_all_worktrees(
+    sessions: Vec<(PathBuf, String)>,
+    current_hash: Option<&str>,
+) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    let worktree_roots = next_hunk::source::list_repo_worktree_roots(&cwd)?;
+
+    // Expected socket hash → worktree root for this logical repo.
+    let mut expected: Vec<(String, PathBuf)> = worktree_roots
+        .into_iter()
+        .map(|root| {
+            let hash = next_hunk::cli_parse::runtime_socket_hash(&root);
+            (hash, root)
+        })
+        .collect();
+    // Stable output order by worktree path.
+    expected.sort_by(|a, b| a.1.cmp(&b.1));
+
+    let expected_hashes: std::collections::HashSet<&str> =
+        expected.iter().map(|(h, _)| h.as_str()).collect();
+
+    let live_for_repo: Vec<&(PathBuf, String)> = sessions
+        .iter()
+        .filter(|(_, hash)| expected_hashes.contains(hash.as_str()))
+        .collect();
+
+    println!(
+        "worktrees of this repo: {} total, {} with live serve",
+        expected.len(),
+        live_for_repo.len()
+    );
+
+    // Print live sessions first (rich Info), keyed by hash so we can mark idle ones.
+    let mut live_hashes = std::collections::HashSet::new();
+    for (path, hash) in &live_for_repo {
+        live_hashes.insert(hash.as_str());
+        print_session_line(path, hash, current_hash);
+    }
+
+    for (hash, root) in &expected {
+        if live_hashes.contains(hash.as_str()) {
+            continue;
+        }
+        let marker = if current_hash == Some(hash.as_str()) {
+            "  (current, no serve)"
+        } else {
+            "  (no serve)"
+        };
+        println!("{}  —  files=-  repo={}{}", hash, root.display(), marker);
+    }
+
+    if live_for_repo.is_empty() && expected.is_empty() {
+        println!("no worktrees found");
+    }
+    Ok(())
+}
+
+/// One list line: hash, socket, files, absolute worktree root, optional (current).
+#[cfg(all(feature = "serve", unix))]
+fn print_session_line(path: &std::path::Path, hash: &str, current_hash: Option<&str>) {
+    let current = if current_hash == Some(hash) {
+        "  (current)"
+    } else {
+        ""
+    };
+    let info =
+        next_hunk::tui::server::send_command(path, &next_hunk::tui::server::ServerCommand::Info);
+    match info {
+        Ok(next_hunk::tui::server::ServerReply::Info {
+            repo_path,
+            file_count,
+        }) => {
+            println!(
+                "{hash}  {}  files={file_count}  repo={repo_path}{current}",
+                path.display()
+            );
+        }
+        _ => {
+            println!("{hash}  {}{current}", path.display());
+        }
+    }
 }
 
 /// `next-hunk get [hash]`: show info for a specific session.
@@ -1125,8 +1211,8 @@ fn bail_on_no_server(err: anyhow::Error) -> Result<()> {
 // the CLI surface but report unavailability at runtime — matching how `watch`
 // advertises itself when compiled out.
 
-/// Bind the server socket for `serve`. The path is derived from the repo root
-/// so a `push`/`decision` in the same repo finds it without an explicit flag.
+/// Bind the server socket for `serve`. The path is derived from the worktree
+/// root so a `push`/`decision` in the same worktree finds it without a flag.
 /// `ServerArg` is a type alias for `ServerListener` under the `serve` feature,
 /// so we return the listener directly.
 #[cfg(all(feature = "serve", unix))]
@@ -1188,7 +1274,7 @@ fn run_decision() -> Result<()> {
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
-fn run_list() -> Result<()> {
+fn run_list(_all_worktrees: bool) -> Result<()> {
     bail!("`list` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 

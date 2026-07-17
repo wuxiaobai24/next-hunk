@@ -301,8 +301,18 @@ next-hunk decision
 # {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
 ```
 
-`serve` binds a Unix socket derived from the repo root, so `push`/`decision`
-run from anywhere in the same repo find it automatically — no `--socket` flag.
+`serve` binds a Unix socket derived from the **worktree root path** (not the
+shared `.git` common dir), so `push`/`decision` run from anywhere in the same
+worktree find it automatically — no `--socket` flag. Linked `git worktree`
+checkouts each get an independent session and can `serve` in parallel.
+
+```bash
+# Discover live sessions (repo= is the absolute worktree root):
+next-hunk list
+# Only sessions for worktrees of the current repository:
+next-hunk list --all-worktrees
+```
+
 Requires the `serve` feature (on by default) and a Unix OS; on other builds the
 subcommands report that they're unavailable. The `decision` output matches the
 `--select` quit shape, so an agent parses both identically.
