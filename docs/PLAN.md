@@ -140,5 +140,6 @@
 - 完整 session-broker / MCP  
 - STML / 富文本 note  
 - OpenTUI 式可嵌入组件  
-- parse fuzz、增量 IR 编辑（非全量 reload）  
+- parse fuzz  
+- [x] 增量 IR 编辑（非全量 reload；WXB-26：section fingerprint + transplant）  
 - ~~CLI「有 socket 就转发」无感切换~~ → done (WXB-9: `diff --focus/--note` auto-forward)

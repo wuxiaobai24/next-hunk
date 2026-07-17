@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — incremental IR reload for dirty files (WXB-26)
+- **Incremental watch/`reload` IR rebuild** — on hot-reload, next-hunk splits
+  the unified diff into per-file sections, **byte-compares** each section to
+  the previous patch text, and **reuses** unchanged `FileDiff` blocks (same
+  text arena + rewritten stream indices). Only dirty sections are re-parsed
+  and appended. Identical input is a no-op (keeps the previous IR).
+- **Safe fallback** — first reload (no prior source text), majority-dirty
+  patches, broken stream invariants, or parse failure fall back to a full
+  `parse_unified_diff`. The previous review is kept only when the new text is
+  unparseable (same contract as before).
+- **Status** — incremental reloads report
+  `reloaded (N files, K reused, M reparsed)` so agents/humans can see reuse.
+- **State preservation** — decisions, notes, folds, focus, and scroll remap
+  rules are unchanged; covered by unit tests.
+- **PERF** — `cargo bench --bench parse` adds `reload/huge_full_reparse` vs
+  `reload/huge_incremental_1file` (~1.8× faster on huge/1-file-dirty);
+  numbers in docs/PERF.md.
+
 ### Added — responsive `layout = "auto"` (WXB-25)
 - **`layout = "auto"`** / **`--layout auto`** — pick `split` / `stack` /
   `unified` at render time based on the live stream-pane width. Recommended
