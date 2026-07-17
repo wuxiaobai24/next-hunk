@@ -357,8 +357,11 @@ fn parse_hunk_header(line: &str) -> (u32, u32, u32, u32) {
 
 fn parse_range(spec: &str) -> (u32, u32) {
     if let Some((a, b)) = spec.split_once(',') {
-        (a.parse().unwrap_or(0), b.parse().unwrap_or(1).max(1))
+        // Count may legitimately be 0 for pure additions (`-1,0`) or pure
+        // deletions (`+0,0`). Do not clamp zero to 1.
+        (a.parse().unwrap_or(0), b.parse().unwrap_or(1))
     } else {
+        // Omitted count means 1 per the unified diff format.
         (spec.parse().unwrap_or(0), 1)
     }
 }
@@ -517,6 +520,54 @@ diff --git a/a.rs b/a.rs
         assert_eq!(h.old_count, 3);
         assert_eq!(h.new_start, 5);
         assert_eq!(h.new_count, 4);
+    }
+
+    #[test]
+    fn zero_count_ranges_preserved_for_add_and_delete_only() {
+        // Pure file addition: old side has 0 lines.
+        // Pure file deletion: new side has 0 lines.
+        let patch = "\
+diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+--- a/gone.txt
++++ /dev/null
+@@ -1,3 +0,0 @@
+-line one
+-line two
+-line three
+diff --git a/c.md b/c.md
+new file mode 100644
+--- /dev/null
++++ b/c.md
+@@ -1,0 +1,2 @@
++# New doc
++fresh content
+";
+        let review = parse_unified_diff(patch).unwrap();
+        assert_eq!(review.file_count(), 2);
+
+        let deleted = &review.files[0].hunks[0];
+        assert_eq!(review.text(deleted.header.clone()), "@@ -1,3 +0,0 @@");
+        assert_eq!(deleted.old_start, 1);
+        assert_eq!(deleted.old_count, 3);
+        assert_eq!(deleted.new_start, 0);
+        assert_eq!(deleted.new_count, 0);
+
+        let added = &review.files[1].hunks[0];
+        assert_eq!(review.text(added.header.clone()), "@@ -1,0 +1,2 @@");
+        assert_eq!(added.old_start, 1);
+        assert_eq!(added.old_count, 0);
+        assert_eq!(added.new_start, 1);
+        assert_eq!(added.new_count, 2);
+    }
+
+    #[test]
+    fn parse_range_allows_zero_count() {
+        assert_eq!(parse_range("1,0"), (1, 0));
+        assert_eq!(parse_range("0,0"), (0, 0));
+        assert_eq!(parse_range("1,3"), (1, 3));
+        // Omitted count defaults to 1.
+        assert_eq!(parse_range("1"), (1, 1));
     }
 
     #[test]
