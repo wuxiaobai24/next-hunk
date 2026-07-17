@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with no recognisable `@@` hunk now says
   `no valid '@@ ... @@' hunk header found` (with the first line as a debug
   hint). Genuine empty stdin in pager mode remains exit 0 silent no-op.
+- **`diff` pathspecs honor git-style globs** (WXB-29) — `next-hunk diff '*.rs'`,
+  `b.*`, `src/*.rs`, `**/*.rs`, and magic signatures (`:(glob)`, `:(exclude)`,
+  …) now match the same files as `git diff <pathspec>`. Previously only
+  literal paths / directory prefixes worked; wildcards were compared as
+  literal filenames and silently returned an empty diff. Matching is
+  implemented via `gix::pathspec` (ShellGlob by default, same as git).
 
 ### Added — Jujutsu (jj) first-class support
 - **VCS auto-detect** — walk for `.jj` / `.git`; `vcs = "auto" | "git" | "jj"`

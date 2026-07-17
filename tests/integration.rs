@@ -274,6 +274,104 @@ fn pathspec_filters_files() {
     );
 }
 
+/// WXB-29: glob pathspecs must match the same files as `git diff <glob>`.
+///
+/// Multi-file dirty tree: top-level `a.py` + `b.rs`, nested `src/c.rs`.
+/// Literal `b.rs` always worked; `*.rs` / `b.*` previously returned empty.
+#[test]
+fn pathspec_glob_filters_multi_file_dirty_tree() {
+    let Some(_) = require_git() else { return };
+    let repo = RepoGuard::new();
+    let root = repo.path();
+
+    write(&root.join("a.py"), "print('a')\n");
+    write(&root.join("b.rs"), "fn b() {}\n");
+    write(&root.join("src/c.rs"), "fn c() {}\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "initial"]);
+
+    // Dirty worktree: touch all three files.
+    write(&root.join("a.py"), "print('a-mod')\n");
+    write(&root.join("b.rs"), "fn b_mod() {}\n");
+    write(&root.join("src/c.rs"), "fn c_mod() {}\n");
+
+    let workdir = repo.workdir();
+
+    let paths_for = |specs: &[&str]| -> Vec<String> {
+        let owned: Vec<String> = specs.iter().map(|s| (*s).to_string()).collect();
+        let text = git_diff(&workdir, DiffScope::Worktree, &owned, false).unwrap();
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+        let review = parse_unified_diff(&text).unwrap();
+        review
+            .files
+            .iter()
+            .map(|f| f.display_path.clone())
+            .collect()
+    };
+
+    // Literal path still works (pre-existing behaviour).
+    let literal = paths_for(&["b.rs"]);
+    assert_eq!(
+        literal,
+        vec!["b.rs".to_string()],
+        "literal b.rs: {literal:?}"
+    );
+
+    // Shell-glob `*.rs` matches top-level and nested (git default).
+    let star_rs = paths_for(&["*.rs"]);
+    assert!(
+        star_rs.iter().any(|p| p == "b.rs"),
+        "*.rs should include b.rs: {star_rs:?}"
+    );
+    assert!(
+        star_rs
+            .iter()
+            .any(|p| p == "src/c.rs" || p.ends_with("c.rs")),
+        "*.rs should include src/c.rs: {star_rs:?}"
+    );
+    assert!(
+        !star_rs.iter().any(|p| p.ends_with("a.py")),
+        "*.rs must not include a.py: {star_rs:?}"
+    );
+
+    // Basename-style glob.
+    let b_star = paths_for(&["b.*"]);
+    assert!(
+        b_star.iter().any(|p| p == "b.rs"),
+        "b.* should include b.rs: {b_star:?}"
+    );
+    assert!(
+        !b_star
+            .iter()
+            .any(|p| p.ends_with("a.py") || p.ends_with("c.rs")),
+        "b.* should not match a.py/c.rs: {b_star:?}"
+    );
+
+    // Nested path-aware glob.
+    let nested = paths_for(&["src/*.rs"]);
+    assert!(
+        nested.iter().any(|p| p.ends_with("c.rs")),
+        "src/*.rs should include c.rs: {nested:?}"
+    );
+    assert!(
+        !nested.iter().any(|p| p == "b.rs"),
+        "src/*.rs must not include top-level b.rs: {nested:?}"
+    );
+
+    // Directory prefix still works.
+    let src_only = paths_for(&["src/"]);
+    assert!(
+        src_only.iter().any(|p| p.starts_with("src/")),
+        "src/ should include nested file: {src_only:?}"
+    );
+    assert!(
+        !src_only.iter().any(|p| p == "b.rs" || p == "a.py"),
+        "src/ should exclude top-level files: {src_only:?}"
+    );
+}
+
 #[test]
 fn viewport_materializes_live_diff() {
     let Some(_) = require_git() else { return };
