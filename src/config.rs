@@ -178,6 +178,10 @@ pub enum LayoutMode {
     /// Side-by-side split: old (left) and new (right) panes for the same file.
     /// Narrow terminals fall back to stack, then unified (see view layer).
     Split,
+    /// Responsive: pick split / stack / unified from the live stream-pane
+    /// width each frame (same ladder as [`LayoutMode::Split`]'s fallback).
+    /// Preferred for resizable terminals; never rebuilds the IR.
+    Auto,
 }
 
 /// What to print on TUI quit for agents (and humans pasting into chat).
@@ -235,6 +239,7 @@ impl LayoutMode {
             LayoutMode::Unified => "unified",
             LayoutMode::Stack => "stack",
             LayoutMode::Split => "split",
+            LayoutMode::Auto => "auto",
         }
     }
 
@@ -244,8 +249,9 @@ impl LayoutMode {
             "unified" => Ok(LayoutMode::Unified),
             "stack" => Ok(LayoutMode::Stack),
             "split" => Ok(LayoutMode::Split),
+            "auto" | "responsive" => Ok(LayoutMode::Auto),
             other => Err(format!(
-                "unknown layout '{other}' (expected unified, stack, or split)"
+                "unknown layout '{other}' (expected unified, stack, split, or auto)"
             )),
         }
     }
@@ -1432,10 +1438,13 @@ add = \"#a6e3a1\"
         assert_eq!(LayoutMode::parse_str("stack"), LayoutMode::Stack);
         assert_eq!(LayoutMode::parse_str("split"), LayoutMode::Split);
         assert_eq!(LayoutMode::parse_str("SPLIT"), LayoutMode::Split);
+        assert_eq!(LayoutMode::parse_str("auto"), LayoutMode::Auto);
+        assert_eq!(LayoutMode::parse_str("responsive"), LayoutMode::Auto);
         assert_eq!(LayoutMode::parse_str("unknown"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str(""), LayoutMode::Unified);
         assert!(LayoutMode::try_parse("sidebyside").is_err());
         assert!(LayoutMode::try_parse("stack").is_ok());
+        assert!(LayoutMode::try_parse("auto").is_ok());
     }
 
     #[test]
@@ -1443,6 +1452,17 @@ add = \"#a6e3a1\"
         assert_eq!(LayoutMode::Unified.as_str(), "unified");
         assert_eq!(LayoutMode::Stack.as_str(), "stack");
         assert_eq!(LayoutMode::Split.as_str(), "split");
+        assert_eq!(LayoutMode::Auto.as_str(), "auto");
+    }
+
+    #[test]
+    fn layout_mode_auto_from_config() {
+        let (dir, _path) = write_tmp_config("layout = \"auto\"\n");
+        let cfg = Config::load_project(&dir.0).unwrap();
+        assert_eq!(cfg.layout.as_deref(), Some("auto"));
+        let cli = CliFlags::default();
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert_eq!(r.layout, LayoutMode::Auto);
     }
 
     #[test]

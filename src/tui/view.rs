@@ -31,12 +31,53 @@ use crate::tui::app::{App, Decision, HunkId, InputMode};
 const RAIL_MAX_WIDTH: u16 = 32;
 
 /// Minimum stream-pane width for true side-by-side split. Below this, split
-/// falls back to stack (then unified below [`STACK_MIN_WIDTH`]).
-const SPLIT_MIN_WIDTH: u16 = 80;
+/// / auto fall back to stack (then unified below [`STACK_MIN_WIDTH`]).
+///
+/// Measured on the **stream pane** after the file rail is allocated — roughly
+/// terminal width ≥ ~100–120 cols with a typical rail. Presentation-only;
+/// changing this never rematerializes the IR.
+pub const SPLIT_MIN_WIDTH: u16 = 80;
 
-/// Minimum stream-pane width for stack layout. Below this, stack/split fall
-/// back to unified so the layout never collapses.
-const STACK_MIN_WIDTH: u16 = 40;
+/// Minimum stream-pane width for stack layout. Below this, stack/split/auto
+/// fall back to unified so the layout never collapses.
+pub const STACK_MIN_WIDTH: u16 = 40;
+
+/// Resolve the concrete stream presentation for a configured [`LayoutMode`]
+/// and the current stream-pane width.
+///
+/// Pure / O(1): no IR access, no widget-tree rebuild. Called each frame so
+/// terminal resize switches layout immediately without reloading the review.
+///
+/// Ladder:
+/// - `auto` / `split`: ≥ [`SPLIT_MIN_WIDTH`] → split; ≥ [`STACK_MIN_WIDTH`] →
+///   stack; else unified
+/// - `stack`: ≥ [`STACK_MIN_WIDTH`] → stack; else unified
+/// - `unified`: always unified
+pub fn effective_stream_layout(
+    mode: crate::config::LayoutMode,
+    stream_width: u16,
+) -> crate::config::LayoutMode {
+    use crate::config::LayoutMode;
+    match mode {
+        LayoutMode::Auto | LayoutMode::Split => {
+            if stream_width >= SPLIT_MIN_WIDTH {
+                LayoutMode::Split
+            } else if stream_width >= STACK_MIN_WIDTH {
+                LayoutMode::Stack
+            } else {
+                LayoutMode::Unified
+            }
+        }
+        LayoutMode::Stack => {
+            if stream_width >= STACK_MIN_WIDTH {
+                LayoutMode::Stack
+            } else {
+                LayoutMode::Unified
+            }
+        }
+        LayoutMode::Unified => LayoutMode::Unified,
+    }
+}
 
 /// Draw the whole app. Takes `&mut App` because highlighting populates the
 /// cache lazily during render.
@@ -144,18 +185,15 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
     // Responsive layout ladder (presentation only — IR/scroll indices unchanged):
-    //   split  (>= 80 cols) → stack (40..79) → unified (< 40)
-    //   stack  (>= 40 cols) → unified (< 40)
+    //   auto/split  (>= 80 cols) → stack (40..79) → unified (< 40)
+    //   stack       (>= 40 cols) → unified (< 40)
     //   unified always
+    // Width is re-read every frame so resize follows without rebuilding IR.
     use crate::config::LayoutMode;
-    match app.layout_mode {
-        LayoutMode::Split if area.width >= SPLIT_MIN_WIDTH => {
-            draw_stream_split(app, frame, area);
-        }
-        LayoutMode::Split | LayoutMode::Stack if area.width >= STACK_MIN_WIDTH => {
-            draw_stream_stack(app, frame, area);
-        }
-        _ => draw_stream_unified(app, frame, area),
+    match effective_stream_layout(app.layout_mode, area.width) {
+        LayoutMode::Split => draw_stream_split(app, frame, area),
+        LayoutMode::Stack => draw_stream_stack(app, frame, area),
+        LayoutMode::Unified | LayoutMode::Auto => draw_stream_unified(app, frame, area),
     }
 }
 
@@ -2024,6 +2062,105 @@ diff --git a/a.rs b/a.rs
         assert!(
             rendered.contains("old") || rendered.contains("new") || rendered.contains("a.rs"),
             "narrow fallback should still render content: {rendered}"
+        );
+    }
+
+    #[test]
+    fn effective_stream_layout_ladder() {
+        use crate::config::LayoutMode;
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Auto, SPLIT_MIN_WIDTH),
+            LayoutMode::Split
+        );
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Auto, SPLIT_MIN_WIDTH - 1),
+            LayoutMode::Stack
+        );
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Auto, STACK_MIN_WIDTH - 1),
+            LayoutMode::Unified
+        );
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Split, 100),
+            LayoutMode::Split
+        );
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Stack, 10),
+            LayoutMode::Unified
+        );
+        assert_eq!(
+            effective_stream_layout(LayoutMode::Unified, 200),
+            LayoutMode::Unified
+        );
+    }
+
+    /// layout=auto on a wide terminal presents split (side-by-side), without
+    /// touching IR stream length.
+    #[test]
+    fn draw_auto_uses_split_on_wide_terminal() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old_line
++new_line
+",
+        )
+        .unwrap();
+        let stream_len_before = review.stream_len;
+        let mut app = App::with_highlighter(review, highlighter());
+        app.layout_mode = crate::config::LayoutMode::Auto;
+        app.viewport_height = 12;
+        let backend = ratatui::backend::TestBackend::new(100, 12);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        assert_eq!(
+            app.review.stream_len, stream_len_before,
+            "auto layout must not rematerialize / change IR stream_len"
+        );
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("old") && rendered.contains("new"),
+            "auto@wide should show side-by-side content: {rendered}"
+        );
+    }
+
+    /// layout=auto on a narrow terminal falls back without panic (no O(n) IR work).
+    #[test]
+    fn draw_auto_falls_back_on_narrow_terminal() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.layout_mode = crate::config::LayoutMode::Auto;
+        app.viewport_height = 8;
+        let backend = ratatui::backend::TestBackend::new(50, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("old") || rendered.contains("new") || rendered.contains("a.rs"),
+            "auto@narrow should still render content: {rendered}"
         );
     }
 

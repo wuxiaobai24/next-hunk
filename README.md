@@ -49,6 +49,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [x] Stack layout: `layout = "stack"` config (unified default)
 - [x] Split layout: `layout = "split"` / `--layout split` side-by-side panes
+- [x] Auto layout: `layout = "auto"` / `--layout auto` responsive split→stack→unified by stream width
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
@@ -285,7 +286,7 @@ Fields:
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
 | `include_untracked` | bool | `false` | include untracked files in worktree / working-set diff (`--include-untracked`) |
-| `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), or `"split"` (side-by-side panes; falls back to stack below 80 cols, unified below 40) |
+| `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side; falls back to stack below 80 stream cols, unified below 40), or **`"auto"`** (same responsive ladder as split — recommended for wide / resizable terminals). Override any mode with `--layout`. |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `export_on_quit` | string | `"none"` (pager/diff); **serve defaults to `"json"`** when unset | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`). Serve uses `json` unless config/CLI overrides so agents get comments+notes; pager stays `none` so `core.pager` is clean |
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
@@ -321,7 +322,7 @@ theme_preset = "catppuccin-mocha"
 
 CLI overrides: `--all` / `--staged` / `--base` / `--range` (mutually exclusive modes),
 `--strategy <worktree|staged|working-set|upstream-ahead|merge-base>`,
-`--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`,
+`--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split|auto>`,
 `--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`,
 `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`, `--no-forward`.
 

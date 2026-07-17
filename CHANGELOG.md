@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — responsive `layout = "auto"` (WXB-25)
+- **`layout = "auto"` / `--layout auto`** — picks split / stack / unified from the
+  live stream-pane width each frame (same ladder as split fallback: ≥80 cols
+  split, ≥40 stack, else unified). Presentation-only; resize never rematerializes
+  the IR or rebuilds a full widget tree.
+- Alias `responsive` accepted in config/CLI. README recommends `auto` or `split`
+  for wide / resizable terminals.
+
 ### Added — tmux/zellij overlay + in-session one-shot review (WXB-24)
 - **`next-hunk overlay`** — one command for agent sessions inside a multiplexer:
   detects `$TMUX` / `$ZELLIJ`, opens a floating review (`diff --select
@@ -183,7 +191,7 @@ with sha256, Homebrew formula, and install.sh. Tag `v0.4.0` on `main` runs
   longer lists `.next-hunk/config.toml` as an undecided untracked file under
   `--include-untracked` / `include_untracked = true`.
 - **Illegal config enums fail startup** — typos like `layout = "sidebyside"`
-  exit non-zero with the field name and allowed values (`unified|stack|split`,
+  exit non-zero with the field name and allowed values (`unified|stack|split|auto`,
   etc.) instead of silent fallback + exit 0. Malformed TOML is fatal too.
 - **Focus miss warns on stderr** — when `--focus` does not resolve, the TUI
   still shows status `focus not found: …` and now also prints a stderr warning
