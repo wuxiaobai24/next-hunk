@@ -422,7 +422,9 @@ fn apply_server_command(
             if app.comments.len() < before {
                 ServerReply::Ok
             } else {
-                ServerReply::Error(format!("comment {id} not found"))
+                ServerReply::Error {
+                    message: format!("comment {id} not found"),
+                }
             }
         }
         ServerCommand::CommentApply => {
@@ -462,11 +464,13 @@ fn apply_server_command(
                     app.status = "reloaded by agent".into();
                     ServerReply::Ok
                 }
-                Err(e) => ServerReply::Error(format!("reload failed: {e}")),
+                Err(e) => ServerReply::Error {
+                    message: format!("reload failed: {e}"),
+                },
             },
-            None => ServerReply::Error(
-                "no reloader available (serve was started without --watch)".into(),
-            ),
+            None => ServerReply::Error {
+                message: "no reloader available (serve was started without --watch)".into(),
+            },
         },
     }
 }
@@ -1107,6 +1111,25 @@ diff --git a/a.rs b/a.rs
             !rendered.contains("ghost"),
             "note targeting a missing file should not render: {rendered}"
         );
+    }
+
+    /// Reload without a reloader must return a clear error (not panic / drop).
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn reload_without_reloader_returns_clear_error() {
+        use server::{ServerCommand, ServerReply};
+
+        let mut app = sample_app();
+        let reply = apply_server_command(&mut app, ServerCommand::Reload, None, None);
+        match reply {
+            ServerReply::Error { message } => {
+                assert!(
+                    message.contains("no reloader"),
+                    "expected no-reloader message, got: {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     /// `Info.repo_path` must be the serve workdir (repo root), never the first

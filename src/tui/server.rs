@@ -26,8 +26,10 @@ use std::thread;
 
 use anyhow::{Context, Result};
 
-use crate::ir::Review;
 use crate::tui::app::{CommentEntry, FocusTarget, Note, Selections};
+
+// Re-export summary types so existing `server::ReviewSummary` paths keep working.
+pub use crate::ir::{FileSummary, HunkSummary, ReviewSummary};
 
 /// A request from a CLI client (`push` / `decision`), paired with the channel
 /// the main loop uses to send back the [`ServerReply`].
@@ -74,74 +76,6 @@ pub enum ServerCommand {
     Reload,
 }
 
-/// A serializable summary of one file in the review, suitable for agent
-/// consumption. Contains file paths and hunk metadata but **not** full line
-/// content by default (agents request the full patch separately if needed).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct FileSummary {
-    pub display_path: String,
-    pub old_path: Option<String>,
-    pub new_path: Option<String>,
-    pub inserts: u64,
-    pub deletes: u64,
-    pub hunks: Vec<HunkSummary>,
-}
-
-/// A serializable summary of one hunk.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct HunkSummary {
-    pub header: String,
-    pub old_start: u32,
-    pub old_count: u32,
-    pub new_start: u32,
-    pub new_count: u32,
-    pub lines: usize,
-}
-
-/// Response to a `Review` command: full file/hunk structure.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReviewSummary {
-    pub file_count: usize,
-    pub stream_len: usize,
-    pub inserts: u64,
-    pub deletes: u64,
-    pub files: Vec<FileSummary>,
-}
-
-impl From<&Review> for ReviewSummary {
-    fn from(review: &Review) -> Self {
-        Self {
-            file_count: review.file_count(),
-            stream_len: review.stream_len,
-            inserts: review.inserts,
-            deletes: review.deletes,
-            files: review
-                .files
-                .iter()
-                .map(|f| FileSummary {
-                    display_path: f.display_path.clone(),
-                    old_path: f.old_path.clone(),
-                    new_path: f.new_path.clone(),
-                    inserts: f.inserts,
-                    deletes: f.deletes,
-                    hunks: f
-                        .hunks
-                        .iter()
-                        .map(|h| HunkSummary {
-                            header: review.text(h.header.clone()).to_string(),
-                            old_start: h.old_start,
-                            old_count: h.old_count,
-                            new_start: h.new_start,
-                            new_count: h.new_count,
-                            lines: h.lines.len(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Server → client reply. Same wire format.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "reply")]
@@ -165,8 +99,13 @@ pub enum ServerReply {
     CommentAdded { id: String },
     /// Response to `CommentList`: all session comments.
     CommentList { comments: Vec<CommentEntry> },
-    /// Server-side error (e.g. malformed command).
-    Error(String),
+    /// Server-side error (e.g. no reloader, malformed command).
+    ///
+    /// Struct form (not `Error(String)`) because serde's internally-tagged
+    /// representation cannot serialize a newtype variant containing a bare
+    /// string — that used to make `reload` without `--watch` drop the reply
+    /// and surface as client-side `parse reply: EOF`.
+    Error { message: String },
 }
 
 /// Handle to the running accept thread. Mirrors [`crate::tui::watch::Watcher`]:
@@ -308,9 +247,9 @@ fn handle_connection(mut stream: UnixStream, tx: &mpsc::Sender<ServerRequest>) -
     })
     .map_err(|_| anyhow::anyhow!("main loop gone (serve quitting?)"))?;
 
-    let reply = reply_rx
-        .recv()
-        .unwrap_or_else(|_| ServerReply::Error("serve shutting down".into()));
+    let reply = reply_rx.recv().unwrap_or_else(|_| ServerReply::Error {
+        message: "serve shutting down".into(),
+    });
     let mut json = serde_json::to_string(&reply).context("serialize reply")?;
     json.push('\n');
     stream.write_all(json.as_bytes()).context("write reply")?;
@@ -334,7 +273,13 @@ pub fn send_command(socket_path: &Path, command: &ServerCommand) -> Result<Serve
 
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
-    reader.read_line(&mut line).context("read reply")?;
+    let n = reader.read_line(&mut line).context("read reply")?;
+    if n == 0 || line.trim().is_empty() {
+        anyhow::bail!(
+            "empty reply from server (connection closed before a response; \
+             if this was `reload`, ensure serve was started with --watch)"
+        );
+    }
     let reply: ServerReply =
         serde_json::from_str(line.trim()).map_err(|e| anyhow::anyhow!("parse reply: {e}"))?;
     Ok(reply)
@@ -655,7 +600,9 @@ mod tests {
                             if all.len() < before {
                                 let _ = r.reply.send(ServerReply::Ok);
                             } else {
-                                let _ = r.reply.send(ServerReply::Error("not found".into()));
+                                let _ = r.reply.send(ServerReply::Error {
+                                    message: "not found".into(),
+                                });
                             }
                         }
                         _ => {
@@ -718,5 +665,58 @@ mod tests {
         let reply = send_command(&sock.path, &ServerCommand::Reload).unwrap();
         assert!(matches!(reply, ServerReply::Ok));
         drainer.join().unwrap();
+    }
+
+    #[test]
+    fn error_reply_roundtrips_over_socket() {
+        // Regression: internally-tagged `Error(String)` could not serialize,
+        // so clients saw `parse reply: EOF` on reload-without-watch.
+        let sock = TempSocket::new("error-rt");
+        let listener = ServerListener::spawn(sock.path.clone()).unwrap();
+        let drainer = std::thread::spawn(move || {
+            let mut got = listener.drain();
+            while got.is_empty() {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                got = listener.drain();
+            }
+            for r in got {
+                let _ = r.reply.send(ServerReply::Error {
+                    message: "no reloader available (serve was started without --watch)".into(),
+                });
+            }
+        });
+
+        let reply = send_command(&sock.path, &ServerCommand::Reload).unwrap();
+        match reply {
+            ServerReply::Error { message } => {
+                assert!(
+                    message.contains("no reloader"),
+                    "expected no-reloader message, got: {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        drainer.join().unwrap();
+    }
+
+    #[test]
+    fn error_reply_json_is_internally_tagged() {
+        let e = ServerReply::Error {
+            message: "no reloader available (serve was started without --watch)".into(),
+        };
+        let json = serde_json::to_string(&e).expect("serialize Error");
+        assert!(
+            json.contains("\"reply\":\"Error\""),
+            "expected internal tag, got {json}"
+        );
+        assert!(
+            json.contains("no reloader"),
+            "expected message body, got {json}"
+        );
+        let back: ServerReply = serde_json::from_str(&json).expect("deserialize Error");
+        match back {
+            ServerReply::Error { message } => assert!(message.contains("no reloader")),
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 }

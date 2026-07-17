@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Agent bridge consistency (dogfood P1)
+- **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
+  (and `--export-on-quit`), matching `diff`. Agents can point humans at a
+  commit range or patch the same way as a worktree review.
+- **Non-TTY no longer silently drops agent context** — when stdout is not a
+  terminal, `--focus` / `--note` / `--select` exit non-zero with a clear
+  message instead of falling back to the inspect summary while discarding
+  annotations.
+- **`inspect --json`** — headless file/hunk structure (same shape as live
+  `next-hunk review`: `file_count`, `stream_len`, `inserts`, `deletes`,
+  `files[]` with hunks). Prefer this from skills; no `serve` required.
+- **`reload` without `--watch` returns `server error: no reloader…`** —
+  `ServerReply::Error` was a newtype `Error(String)` that serde's
+  internally-tagged representation cannot serialize, so the accept thread
+  failed to write a reply and the client saw `parse reply: EOF`. Error is
+  now a struct variant and round-trips correctly.
+
 ### Added — Working-set review (dogfood P0)
 - **`diff --all` / `scope = "working-set"`** — one command reviews **staged +
   unstaged** local changes (optional untracked still via `--include-untracked`

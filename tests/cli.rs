@@ -359,3 +359,158 @@ fn pager_reads_stdin_and_renders() {
         "pager should render the patch (inspect fallback): {combined}"
     );
 }
+
+#[test]
+fn show_patch_filediff_accept_focus_note_select() {
+    // Agent-bridge flags must be clap-valid on show/patch/filediff (aligned
+    // with diff). Failure must not be "unexpected argument".
+    let tmp = std::env::temp_dir();
+    for (cmd, extra) in [
+        (vec!["show", "HEAD"], vec![] as Vec<&str>),
+        (vec!["patch", "fixtures/tiny_simple.patch"], vec![]),
+        // filediff needs two paths; use the same fixture twice so clap gets
+        // past arg parsing even if later git-diff fails.
+        (
+            vec![
+                "filediff",
+                "fixtures/tiny_simple.patch",
+                "fixtures/tiny_edge.patch",
+            ],
+            vec![],
+        ),
+    ] {
+        let mut args: Vec<&str> = cmd.clone();
+        args.extend(["--focus", "src/a.rs", "--note", "banner=hi", "--select"]);
+        args.extend(extra);
+        let out = Command::new(bin())
+            .args(&args)
+            .current_dir(if cmd[0] == "show" {
+                tmp.as_path()
+            } else {
+                std::path::Path::new(".")
+            })
+            .output()
+            .expect("run next-hunk");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("unexpected argument") && !stderr.contains("unrecognized"),
+            "{} should accept --focus/--note/--select, stderr: {stderr}",
+            cmd[0]
+        );
+    }
+}
+
+#[test]
+fn focus_and_note_in_non_tty_error_not_silent() {
+    // Non-TTY + --focus/--note must exit non-zero — never fall back to inspect
+    // while dropping agent annotations (WXB-15).
+    let patch = fixture("tiny_simple.patch");
+    for args in [
+        vec!["patch", "-", "--focus", "src/a.rs"],
+        vec!["patch", "-", "--note", "banner=agent note"],
+        vec![
+            "patch",
+            "-",
+            "--focus",
+            "src/a.rs",
+            "--note",
+            "src/a.rs:1=why",
+        ],
+    ] {
+        let mut child = Command::new(bin())
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn");
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().expect("stdin");
+            stdin.write_all(patch.as_bytes()).unwrap();
+        }
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            !out.status.success(),
+            "non-tty {:?} should exit non-zero (got success)",
+            args
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("interactive") || stderr.contains("tty"),
+            "non-tty {:?} should mention interactive/tty, got: {stderr}",
+            args
+        );
+        // Must not pretend success with an inspect summary on stdout alone.
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.starts_with("files="),
+            "must not silently print inspect summary when focus/note given: {stdout}"
+        );
+    }
+}
+
+#[test]
+fn inspect_json_emits_review_shape() {
+    let out = Command::new(bin())
+        .args(["inspect", "--json", "fixtures/tiny_simple.patch"])
+        .output()
+        .expect("run next-hunk");
+    assert!(
+        out.status.success(),
+        "inspect --json should succeed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Shape aligned with `next-hunk review` (no serve required).
+    for key in [
+        "\"file_count\"",
+        "\"stream_len\"",
+        "\"inserts\"",
+        "\"deletes\"",
+        "\"files\"",
+        "\"display_path\"",
+        "\"hunks\"",
+    ] {
+        assert!(
+            stdout.contains(key),
+            "inspect --json missing {key}: {stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("src/a.rs") && stdout.contains("src/b.rs"),
+        "expected both fixture files: {stdout}"
+    );
+    // Must be JSON, not the human text summary.
+    assert!(
+        !stdout.starts_with("files="),
+        "should not emit text inspect summary: {stdout}"
+    );
+}
+
+#[test]
+fn inspect_json_empty_is_zeroed_object() {
+    let mut child = Command::new(bin())
+        .args(["inspect", "--json", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn");
+    {
+        use std::io::Write;
+        let mut stdin = child.stdin.take().expect("stdin");
+        stdin.write_all(b"   \n").unwrap();
+    }
+    let out = child.wait_with_output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"file_count\": 0") || stdout.contains("\"file_count\":0"),
+        "empty json should report file_count 0: {stdout}"
+    );
+    assert!(
+        stdout.contains("\"files\": []") || stdout.contains("\"files\":[]"),
+        "empty json should have empty files: {stdout}"
+    );
+}

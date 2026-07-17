@@ -8,12 +8,14 @@
 
 mod model;
 mod parse;
+mod summary;
 pub mod viewport;
 pub mod whitespace;
 pub mod worddiff;
 
 pub use model::{DiffLine, DiffLineKind, FileDiff, FileOrigin, Hunk, Review};
 pub use parse::{parse_unified_diff, ParseError};
+pub use summary::{FileSummary, HunkSummary, ReviewSummary};
 pub use viewport::{StreamRow, Viewport, ViewportQuery};
 pub use whitespace::strip_whitespace_changes;
 pub use worddiff::{counterpart_text, line_pair_diff, word_diff_regions, WordOp, WordRegion};

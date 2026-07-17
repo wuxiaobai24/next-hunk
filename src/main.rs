@@ -80,6 +80,18 @@ enum Commands {
     Show {
         /// Revision or range (e.g. HEAD, main..HEAD).
         rev: String,
+        /// Scroll to this location on startup (same as `diff --focus`).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable (same as `diff --note`).
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Selection gate (same as `diff --select`). Requires an interactive terminal.
+        #[arg(long)]
+        select: bool,
+        /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
@@ -90,6 +102,18 @@ enum Commands {
         old: PathBuf,
         /// Second file (new).
         new: PathBuf,
+        /// Scroll to this location on startup (same as `diff --focus`).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable (same as `diff --note`).
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Selection gate (same as `diff --select`). Requires an interactive terminal.
+        #[arg(long)]
+        select: bool,
+        /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
@@ -98,6 +122,18 @@ enum Commands {
     Patch {
         /// Path to patch file, or `-` for stdin.
         path: PathBuf,
+        /// Scroll to this location on startup (same as `diff --focus`).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable (same as `diff --note`).
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Selection gate (same as `diff --select`). Requires an interactive terminal.
+        #[arg(long)]
+        select: bool,
+        /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
+        #[arg(long, value_parser = parse_export_on_quit_arg)]
+        export_on_quit: Option<ExportOnQuit>,
         /// Diff stream layout: `unified`, `stack`, or `split`.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
@@ -122,6 +158,10 @@ enum Commands {
         /// Include untracked files when reviewing the worktree / working-set.
         #[arg(long)]
         include_untracked: bool,
+        /// Emit file/hunk structure as JSON (same shape as `next-hunk review`).
+        /// Prefer this from agents/skills — no live `serve` required.
+        #[arg(long)]
+        json: bool,
     },
     /// Open a persistent review TUI that also listens for agent pushes.
     ///
@@ -316,23 +356,11 @@ fn run() -> Result<()> {
             layout,
             extra,
         } => {
-            // Parse the agent-bridge specs and check the --select tty
+            // Parse the agent-bridge specs and check the interactive-tty
             // requirement BEFORE touching the repo, so a bad spec or a
-            // non-interactive --select fails fast with a clear message (an
-            // agent scripting this gets actionable feedback, not a git error).
-            let focus_target = focus
-                .map(|s| next_hunk::cli_parse::parse_focus(&s))
-                .transpose()?;
-            let notes = note
-                .iter()
-                .map(|s| next_hunk::cli_parse::parse_note(s))
-                .collect::<Result<Vec<_>>>()?;
-
-            // `--select` is a blocking interactive gate; it can't run without
-            // a real terminal.
-            if select && !std::io::stdout().is_terminal() {
-                bail!("--select requires an interactive terminal (stdout is not a tty)");
-            }
+            // non-interactive agent-bridge flag fails fast with a clear
+            // message (not a git error).
+            let options = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
 
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
@@ -349,7 +377,7 @@ fn run() -> Result<()> {
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
                     layout,
-                    export_on_quit,
+                    export_on_quit: options.export_on_quit_override,
                 },
             );
 
@@ -381,15 +409,23 @@ fn run() -> Result<()> {
                 resolved.layout,
                 Some(repo),
                 ReviewOptions {
-                    focus: focus_target,
-                    notes,
-                    select_mode: select,
+                    focus: options.focus,
+                    notes: options.notes,
+                    select_mode: options.select,
                     export_on_quit: resolved.export_on_quit,
                 },
                 None,
             )
         }
-        Commands::Show { rev, layout } => {
+        Commands::Show {
+            rev,
+            focus,
+            note,
+            select,
+            export_on_quit,
+            layout,
+        } => {
+            let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
             let text = git_show(&repo, &rev)?;
@@ -399,6 +435,12 @@ fn run() -> Result<()> {
             let resolved_layout = layout
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(LayoutMode::Unified);
+            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
+                cfg.export_on_quit
+                    .as_deref()
+                    .map(ExportOnQuit::parse_str)
+                    .unwrap_or_default()
+            });
             open_review_from_text(
                 &text,
                 &[],
@@ -410,23 +452,35 @@ fn run() -> Result<()> {
                 resolved_layout,
                 Some(repo),
                 ReviewOptions {
-                    export_on_quit: cfg
-                        .export_on_quit
-                        .as_deref()
-                        .map(ExportOnQuit::parse_str)
-                        .unwrap_or_default(),
-                    ..Default::default()
+                    focus: bridge.focus,
+                    notes: bridge.notes,
+                    select_mode: bridge.select,
+                    export_on_quit: export,
                 },
                 None,
             )
         }
-        Commands::Patch { path, layout } => {
+        Commands::Patch {
+            path,
+            focus,
+            note,
+            select,
+            export_on_quit,
+            layout,
+        } => {
+            let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let text = read_patch_input(&path)?;
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
             let cfg = Config::load(&cwd);
             let resolved_layout = layout
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(LayoutMode::Unified);
+            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
+                cfg.export_on_quit
+                    .as_deref()
+                    .map(ExportOnQuit::parse_str)
+                    .unwrap_or_default()
+            });
             open_review_from_text(
                 &text,
                 &[],
@@ -438,17 +492,24 @@ fn run() -> Result<()> {
                 resolved_layout,
                 None,
                 ReviewOptions {
-                    export_on_quit: cfg
-                        .export_on_quit
-                        .as_deref()
-                        .map(ExportOnQuit::parse_str)
-                        .unwrap_or_default(),
-                    ..Default::default()
+                    focus: bridge.focus,
+                    notes: bridge.notes,
+                    select_mode: bridge.select,
+                    export_on_quit: export,
                 },
                 None,
             )
         }
-        Commands::Filediff { old, new, layout } => {
+        Commands::Filediff {
+            old,
+            new,
+            focus,
+            note,
+            select,
+            export_on_quit,
+            layout,
+        } => {
+            let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let cwd = std::env::current_dir()?;
             let repo = open_repo(&cwd)?;
             let text = git_file_diff(&repo, &old, &new)?;
@@ -460,6 +521,12 @@ fn run() -> Result<()> {
             let resolved_layout = layout
                 .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
                 .unwrap_or(LayoutMode::Unified);
+            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
+                cfg.export_on_quit
+                    .as_deref()
+                    .map(ExportOnQuit::parse_str)
+                    .unwrap_or_default()
+            });
             open_review_from_text(
                 &text,
                 &[],
@@ -471,12 +538,10 @@ fn run() -> Result<()> {
                 resolved_layout,
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions {
-                    export_on_quit: cfg
-                        .export_on_quit
-                        .as_deref()
-                        .map(ExportOnQuit::parse_str)
-                        .unwrap_or_default(),
-                    ..Default::default()
+                    focus: bridge.focus,
+                    notes: bridge.notes,
+                    select_mode: bridge.select,
+                    export_on_quit: export,
                 },
                 None,
             )
@@ -486,6 +551,7 @@ fn run() -> Result<()> {
             staged,
             all,
             include_untracked,
+            json,
         } => {
             let (text, origins) = if let Some(path) = path {
                 (read_patch_input(&path)?, Vec::new())
@@ -503,12 +569,28 @@ fn run() -> Result<()> {
                 (produced.text, produced.origins)
             };
             if text.trim().is_empty() {
-                println!("files=0 stream_rows=0 arena_bytes=0");
+                if json {
+                    let empty = next_hunk::ir::ReviewSummary {
+                        file_count: 0,
+                        stream_len: 0,
+                        inserts: 0,
+                        deletes: 0,
+                        files: Vec::new(),
+                    };
+                    println!("{}", serde_json::to_string_pretty(&empty)?);
+                } else {
+                    println!("files=0 stream_rows=0 arena_bytes=0");
+                }
                 return Ok(());
             }
             let mut review = parse_review(&text)?;
             review.apply_file_origins(&origins);
-            print_inspect(&review);
+            if json {
+                let summary = next_hunk::ir::ReviewSummary::from(&review);
+                println!("{}", serde_json::to_string_pretty(&summary)?);
+            } else {
+                print_inspect(&review);
+            }
             Ok(())
         }
         Commands::Pager => {
@@ -588,6 +670,53 @@ fn run() -> Result<()> {
     }
 }
 
+/// Parsed agent-bridge flags shared by `diff` / `show` / `patch` / `filediff`.
+struct AgentBridgeOptions {
+    focus: Option<next_hunk::tui::app::FocusTarget>,
+    notes: Vec<next_hunk::tui::app::Note>,
+    select: bool,
+    /// CLI `--export-on-quit` when present (config still layers underneath).
+    export_on_quit_override: Option<ExportOnQuit>,
+}
+
+/// Parse `--focus` / `--note` / `--select` and refuse agent-bridge interactive
+/// flags when stdout is not a tty — never silently drop focus/notes.
+fn parse_agent_bridge_options(
+    focus: Option<String>,
+    note: Vec<String>,
+    select: bool,
+    export_on_quit: Option<ExportOnQuit>,
+) -> Result<AgentBridgeOptions> {
+    let focus = focus
+        .map(|s| next_hunk::cli_parse::parse_focus(&s))
+        .transpose()?;
+    let notes = note
+        .iter()
+        .map(|s| next_hunk::cli_parse::parse_note(s))
+        .collect::<Result<Vec<_>>>()?;
+
+    // Interactive agent-bridge flags cannot run headless. Fail fast so agents
+    // never see an exit-0 inspect summary that discarded their annotations.
+    if !std::io::stdout().is_terminal() {
+        if select {
+            bail!("--select requires an interactive terminal (stdout is not a tty)");
+        }
+        if focus.is_some() {
+            bail!("--focus requires an interactive terminal (stdout is not a tty)");
+        }
+        if !notes.is_empty() {
+            bail!("--note requires an interactive terminal (stdout is not a tty)");
+        }
+    }
+
+    Ok(AgentBridgeOptions {
+        focus,
+        notes,
+        select,
+        export_on_quit_override: export_on_quit,
+    })
+}
+
 /// Build the live-reload closure for `--watch`: re-runs the same git diff.
 /// Captures the repo path, scope, pathspecs, and untracked flag by value.
 fn make_diff_reloader(
@@ -626,13 +755,9 @@ fn run_serve(
         bail!("serve requires an interactive terminal (stdout is not a tty)");
     }
 
-    let focus_target = focus
-        .map(|s| next_hunk::cli_parse::parse_focus(&s))
-        .transpose()?;
-    let notes = note
-        .iter()
-        .map(|s| next_hunk::cli_parse::parse_note(s))
-        .collect::<Result<Vec<_>>>()?;
+    // serve is always select-mode; still parse focus/note the same way as
+    // `diff` so bad specs fail before bind. (TTY was already required above.)
+    let bridge = parse_agent_bridge_options(focus, note, /*select=*/ true, export_on_quit)?;
 
     let cwd = std::env::current_dir()?;
     let repo = find_repo(&cwd)?;
@@ -647,7 +772,7 @@ fn run_serve(
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
             layout,
-            export_on_quit,
+            export_on_quit: bridge.export_on_quit_override,
         },
     );
 
@@ -661,6 +786,8 @@ fn run_serve(
     let server = spawn_serve_listener(&repo)?;
 
     let produced = git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
+    // Reloader is installed only with `--watch` (also drives FS auto-reload).
+    // Without it, `next-hunk reload` returns a clear server error rather than EOF.
     let reloader = if resolved.watch {
         Some(make_diff_reloader(
             repo.clone(),
@@ -681,8 +808,8 @@ fn run_serve(
         resolved.layout,
         Some(repo),
         ReviewOptions {
-            focus: focus_target,
-            notes,
+            focus: bridge.focus,
+            notes: bridge.notes,
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
             export_on_quit: resolved.export_on_quit,
@@ -741,7 +868,9 @@ fn run_decision() -> Result<()> {
             println!("{}", serde_json::to_string(&selections)?);
             Ok(())
         }
-        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error: {message}")
+        }
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -797,7 +926,9 @@ fn run_get(hash: Option<String>) -> Result<()> {
             println!("files:  {file_count}");
             Ok(())
         }
-        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error: {message}")
+        }
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -815,7 +946,9 @@ fn run_review(hash: Option<String>) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(())
         }
-        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error: {message}")
+        }
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -847,8 +980,8 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     println!("ok: comment added with id {id}");
                     Ok(())
                 }
-                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
-                    bail!("server error: {msg}")
+                Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+                    bail!("server error: {message}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
                 Err(e) => bail_on_no_server(e),
@@ -872,8 +1005,8 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     }
                     Ok(())
                 }
-                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
-                    bail!("server error: {msg}")
+                Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+                    bail!("server error: {message}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
                 Err(e) => bail_on_no_server(e),
@@ -886,8 +1019,8 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     println!("ok: comment removed");
                     Ok(())
                 }
-                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
-                    bail!("server error: {msg}")
+                Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+                    bail!("server error: {message}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
                 Err(e) => bail_on_no_server(e),
@@ -900,8 +1033,8 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     println!("ok: comments applied to TUI");
                     Ok(())
                 }
-                Ok(next_hunk::tui::server::ServerReply::Error(msg)) => {
-                    bail!("server error: {msg}")
+                Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+                    bail!("server error: {message}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
                 Err(e) => bail_on_no_server(e),
@@ -942,7 +1075,9 @@ fn run_navigate(target: String, hash: Option<String>) -> Result<()> {
             println!("ok: navigated to {}", target);
             Ok(())
         }
-        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error: {message}")
+        }
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -960,7 +1095,9 @@ fn run_reload(hash: Option<String>) -> Result<()> {
             println!("ok: session reloaded");
             Ok(())
         }
-        Ok(next_hunk::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(next_hunk::tui::server::ServerReply::Error { message }) => {
+            bail!("server error: {message}")
+        }
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -1142,7 +1279,20 @@ fn open_review_from_text(
     // non-console (pipe) stdout instead of returning promptly - which would
     // hang the process (observed: `pager`/`patch -` deadlocked indefinitely in
     // piped integration tests). The upfront check is portable and avoids that.
+    //
+    // Agent-bridge flags must never be silently discarded on this path: callers
+    // that pass --focus/--note/--select are rejected earlier via
+    // `parse_agent_bridge_options`. Defend in depth here too.
     if !std::io::stdout().is_terminal() {
+        if options.select_mode {
+            bail!("--select requires an interactive terminal (stdout is not a tty)");
+        }
+        if options.focus.is_some() {
+            bail!("--focus requires an interactive terminal (stdout is not a tty)");
+        }
+        if !options.notes.is_empty() {
+            bail!("--note requires an interactive terminal (stdout is not a tty)");
+        }
         print_inspect(&review);
         return Ok(());
     }
