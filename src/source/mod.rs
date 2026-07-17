@@ -5,8 +5,9 @@
 //!   diffs that re-enter the same IR parse path (performance gate preserved).
 //!
 //! Prefer the VCS-agnostic entry points ([`detect_workspace`], [`produce_diff`],
-//! [`produce_show`], [`produce_file_diff`]) from the CLI. Low-level `git_*` /
-//! `jj_*` helpers remain available for tests and specialized callers.
+//! [`produce_diff_request`], [`produce_show`], [`produce_file_diff`]) from the
+//! CLI. Low-level `git_*` / `jj_*` helpers remain available for tests and
+//! specialized callers.
 
 mod detect;
 mod git;
@@ -14,10 +15,10 @@ mod jj;
 
 pub use detect::{detect_workspace, find_workspace, VcsKind, Workspace};
 pub use git::{
-    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, list_repo_worktree_roots,
-    open_repo, ProducedDiff,
+    find_repo, git_diff, git_diff_produced, git_diff_request, git_file_diff, git_show,
+    list_repo_worktree_roots, open_repo, resolve_upstream_rev, ProducedDiff,
 };
-pub use jj::{jj_available, jj_diff_produced, jj_show};
+pub use jj::{jj_available, jj_diff_produced, jj_diff_request, jj_show};
 
 // Re-export so callers can `use next_hunk::source::VcsPreference`.
 pub use crate::config::VcsPreference;
@@ -27,7 +28,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
-use crate::config::DiffScope;
+use crate::config::{DiffRequest, DiffScope};
 
 /// Produce a worktree / staged / working-set review for the given workspace.
 pub fn produce_diff(
@@ -36,9 +37,22 @@ pub fn produce_diff(
     pathspecs: &[String],
     include_untracked: bool,
 ) -> Result<ProducedDiff> {
+    produce_diff_request(ws, &DiffRequest::Local(scope), pathspecs, include_untracked)
+}
+
+/// Produce a review for any [`DiffRequest`] (local scope, base, or range).
+///
+/// Branch-level reviews still emit ordinary unified-diff text so the IR +
+/// viewport path is unchanged for large diffs (git and jj).
+pub fn produce_diff_request(
+    ws: &Workspace,
+    request: &DiffRequest,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<ProducedDiff> {
     match ws.kind {
-        VcsKind::Git => git_diff_produced(&ws.root, scope, pathspecs, include_untracked),
-        VcsKind::Jj => jj_diff_produced(&ws.root, scope, pathspecs, include_untracked),
+        VcsKind::Git => git_diff_request(&ws.root, request, pathspecs, include_untracked),
+        VcsKind::Jj => jj_diff_request(&ws.root, request, pathspecs, include_untracked),
     }
 }
 

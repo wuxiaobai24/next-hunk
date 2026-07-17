@@ -164,6 +164,62 @@ fn no_highlight_flag_is_recognized() {
 }
 
 #[test]
+fn base_range_strategy_flags_are_recognized() {
+    let tmp = std::env::temp_dir();
+    for args in [
+        vec!["diff", "--base", "origin/main"],
+        vec!["diff", "--range", "main..HEAD"],
+        vec!["diff", "--strategy", "upstream-ahead"],
+        vec!["diff", "--strategy", "merge-base", "--base", "main"],
+        vec!["inspect", "--base", "HEAD"],
+    ] {
+        let out = Command::new(bin())
+            .args(&args)
+            .current_dir(&tmp)
+            .output()
+            .expect("run next-hunk");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !stderr.contains("unexpected argument") && !stderr.contains("unknown"),
+            "flags {:?} should be recognized, stderr: {stderr}",
+            args
+        );
+    }
+}
+
+#[test]
+fn merge_base_strategy_without_base_errors() {
+    // Needs a git repo so we get past discover; then strategy validation fires.
+    // Use a temp git repo if available; otherwise skip.
+    let tmp = std::env::temp_dir().join(format!("next-hunk-cli-mb-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).unwrap();
+    let init = Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&tmp)
+        .status();
+    if !init.map(|s| s.success()).unwrap_or(false) {
+        let _ = std::fs::remove_dir_all(&tmp);
+        return;
+    }
+    let out = Command::new(bin())
+        .args(["diff", "--strategy", "merge-base"])
+        .current_dir(&tmp)
+        .output()
+        .expect("run next-hunk");
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "merge-base without --base should fail"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("merge-base") && stderr.contains("--base"),
+        "expected merge-base/--base guidance, got: {stderr}"
+    );
+}
+
+#[test]
 fn focus_flag_is_recognized() {
     // `--focus` must be a valid flag taking a value. In a non-git dir it fails
     // with the repo error, not an "unknown argument" error.
