@@ -3,6 +3,7 @@
 //! No `git` CLI subprocess — repository discovery, tree/index/worktree
 //! comparison, and unified-diff text are all produced in-process.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -14,7 +15,7 @@ use gix::objs::{self, tree::EntryKind, Write as _};
 use gix::status::{index_worktree::Item as IwItem, UntrackedFiles};
 use gix::{ObjectId, Repository};
 
-use crate::config::DiffScope;
+use crate::config::{DiffRequest, DiffScope};
 use crate::ir::FileOrigin;
 
 /// Unified-diff text plus optional per-file origin tags (parse order).
@@ -219,11 +220,31 @@ pub fn git_diff_produced(
     pathspecs: &[String],
     include_untracked: bool,
 ) -> Result<ProducedDiff> {
+    git_diff_request(
+        repo_path,
+        &DiffRequest::Local(scope),
+        pathspecs,
+        include_untracked,
+    )
+}
+
+/// Produce a unified diff for any [`DiffRequest`] (local scope, base, or range).
+///
+/// Branch-level reviews (`AgainstBase` / `Range`) still emit ordinary unified
+/// patch text, so the IR + viewport path is unchanged for large branch diffs.
+pub fn git_diff_request(
+    repo_path: &Path,
+    request: &DiffRequest,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<ProducedDiff> {
     let repo = open_repo(repo_path)?;
-    match scope {
-        DiffScope::Worktree => diff_worktree(&repo, pathspecs, include_untracked),
-        DiffScope::Staged => diff_staged(&repo, pathspecs),
-        DiffScope::WorkingSet => {
+    match request {
+        DiffRequest::Local(DiffScope::Worktree) => {
+            diff_worktree(&repo, pathspecs, include_untracked)
+        }
+        DiffRequest::Local(DiffScope::Staged) => diff_staged(&repo, pathspecs),
+        DiffRequest::Local(DiffScope::WorkingSet) => {
             // Staged first, then unstaged (+ optional untracked). A path that
             // has both staged and unstaged edits appears twice — once per
             // bucket — so the human can review each side of the index boundary.
@@ -233,27 +254,42 @@ pub fn git_diff_produced(
             staged.origins.extend(worktree.origins);
             Ok(staged)
         }
+        DiffRequest::AgainstBase {
+            base,
+            use_merge_base,
+        } => diff_against_base(&repo, base, *use_merge_base, pathspecs, include_untracked),
+        DiffRequest::Range(spec) => {
+            let text = git_show_in_repo(&repo, spec)?;
+            Ok(ProducedDiff {
+                text,
+                origins: Vec::new(),
+            })
+        }
     }
 }
 
 /// Diff a single revision (commit → parent) or a range `A..B` / `A...B`.
 pub fn git_show(repo_path: &Path, rev: &str) -> Result<String> {
     let repo = open_repo(repo_path)?;
+    git_show_in_repo(&repo, rev)
+}
+
+fn git_show_in_repo(repo: &Repository, rev: &str) -> Result<String> {
     if let Some((a, b, merge_base)) = parse_range(rev) {
         let old = if merge_base {
-            let left = peel_to_oid(&repo, a)?;
-            let right = peel_to_oid(&repo, b)?;
+            let left = peel_to_oid(repo, a)?;
+            let right = peel_to_oid(repo, b)?;
             repo.merge_base(left, right)
                 .with_context(|| format!("no merge base for {rev}"))?
                 .detach()
         } else {
-            peel_to_oid(&repo, a)?
+            peel_to_oid(repo, a)?
         };
-        let new = peel_to_oid(&repo, b)?;
-        return diff_tree_oids(&repo, Some(old), new);
+        let new = peel_to_oid(repo, b)?;
+        return diff_tree_oids(repo, Some(old), new);
     }
 
-    let id = peel_to_oid(&repo, rev)?;
+    let id = peel_to_oid(repo, rev)?;
     let obj = repo.find_object(id).context("load revision object")?;
     let commit = obj
         .try_into_commit()
@@ -269,7 +305,319 @@ pub fn git_show(repo_path: &Path, rev: &str) -> Result<String> {
         }
         None => None,
     };
-    diff_tree_oids(&repo, old_tree, new_tree)
+    diff_tree_oids(repo, old_tree, new_tree)
+}
+
+/// Resolve the current branch's fetch upstream tracking ref (like `@{upstream}`).
+///
+/// Returns a rev string suitable for [`peel_to_oid`] / `--base`.
+pub fn resolve_upstream_rev(repo_path: &Path) -> Result<String> {
+    let repo = open_repo(repo_path)?;
+    resolve_upstream_in_repo(&repo)
+}
+
+fn resolve_upstream_in_repo(repo: &Repository) -> Result<String> {
+    let head = repo.head().context("resolve HEAD for upstream")?;
+    let head_ref = head.try_into_referent().ok_or_else(|| {
+        anyhow!("HEAD is detached; cannot resolve upstream. Use --base <rev> instead")
+    })?;
+    let tracking = head_ref
+        .remote_tracking_ref_name(gix::remote::Direction::Fetch)
+        .ok_or_else(|| {
+            anyhow!(
+                "no upstream configured for current branch; \
+                 set branch.<name>.merge / remote, or use --base <rev>"
+            )
+        })?
+        .context("resolve upstream tracking ref name")?;
+    Ok(tracking.as_bstr().to_str_lossy().into_owned())
+}
+
+/// Branch-level review: left = base tree (optionally merge-base with HEAD),
+/// right = worktree (like `git diff <base>`). Includes uncommitted edits on disk.
+fn diff_against_base(
+    repo: &Repository,
+    base_spec: &str,
+    use_merge_base: bool,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<ProducedDiff> {
+    let mut base_oid = peel_to_oid(repo, base_spec)?;
+    if use_merge_base {
+        let head = peel_to_oid(repo, "HEAD")?;
+        base_oid = repo
+            .merge_base(base_oid, head)
+            .with_context(|| format!("no merge base between `{base_spec}` and HEAD"))?
+            .detach();
+    }
+    let base_tree_id = peel_to_tree_id(repo, base_oid)?;
+
+    let mut paths = BTreeSet::new();
+
+    // Paths that differ between base and HEAD (committed branch changes).
+    let head_tree_id = repo
+        .head_tree_id_or_empty()
+        .context("resolve HEAD^{tree}")?
+        .detach();
+    collect_tree_change_paths(
+        repo,
+        Some(base_tree_id),
+        head_tree_id,
+        pathspecs,
+        &mut paths,
+    )?;
+
+    // Paths with local staged / unstaged / untracked edits.
+    collect_working_set_paths(repo, pathspecs, include_untracked, &mut paths)?;
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("bare repository has no worktree to diff against base"))?
+        .to_owned();
+
+    let base_tree = repo
+        .find_object(base_tree_id)
+        .context("load base tree")?
+        .peel_to_tree()
+        .context("peel base tree")?;
+
+    let mut out = String::new();
+    let mut origins = Vec::new();
+    let mut cache = repo
+        .diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGit,
+            gix::diff::blob::pipeline::WorktreeRoots {
+                old_root: None,
+                new_root: Some(workdir.clone()),
+            },
+        )
+        .context("diff resource cache (base vs worktree)")?;
+
+    for path in paths {
+        if let Err(e) = append_base_vs_worktree(
+            repo,
+            &base_tree,
+            &workdir,
+            &path,
+            &mut cache,
+            &mut out,
+            &mut origins,
+        ) {
+            eprintln!("warning: skip base-diff path {path}: {e:#}");
+        }
+        cache.clear_resource_cache_keep_allocation();
+    }
+
+    Ok(ProducedDiff { text: out, origins })
+}
+
+fn peel_to_tree_id(repo: &Repository, id: ObjectId) -> Result<ObjectId> {
+    let obj = repo.find_object(id).context("load object for tree peel")?;
+    let tree = obj.peel_to_tree().context("peel object to tree")?;
+    Ok(tree.id().detach())
+}
+
+fn collect_tree_change_paths(
+    repo: &Repository,
+    old: Option<ObjectId>,
+    new: ObjectId,
+    pathspecs: &[String],
+    paths: &mut BTreeSet<String>,
+) -> Result<()> {
+    let empty = repo.empty_tree();
+    let old_tree_owned = match old {
+        Some(id) if !id.is_empty_tree() => Some(
+            repo.find_object(id)
+                .context("load old tree for path collect")?
+                .peel_to_tree()
+                .context("peel old tree for path collect")?,
+        ),
+        _ => None,
+    };
+    let new_tree_owned = if new.is_empty_tree() {
+        None
+    } else {
+        Some(
+            repo.find_object(new)
+                .context("load new tree for path collect")?
+                .peel_to_tree()
+                .context("peel new tree for path collect")?,
+        )
+    };
+    let old_ref = old_tree_owned.as_ref().unwrap_or(&empty);
+    let new_ref = new_tree_owned.as_ref().unwrap_or(&empty);
+    let changes = repo
+        .diff_tree_to_tree(Some(old_ref), Some(new_ref), None)
+        .context("diff_tree_to_tree (path collect)")?;
+
+    use gix::diff::tree_with_rewrites::Change;
+    for change in &changes {
+        if change.entry_mode().is_tree() {
+            continue;
+        }
+        match change {
+            Change::Addition { location, .. }
+            | Change::Deletion { location, .. }
+            | Change::Modification { location, .. } => {
+                let p = path_display(location.as_bstr());
+                if pathspec_match(location.as_bstr(), pathspecs) {
+                    paths.insert(p);
+                }
+            }
+            Change::Rewrite {
+                source_location,
+                location,
+                ..
+            } => {
+                if pathspec_match(source_location.as_bstr(), pathspecs) {
+                    paths.insert(path_display(source_location.as_bstr()));
+                }
+                if pathspec_match(location.as_bstr(), pathspecs) {
+                    paths.insert(path_display(location.as_bstr()));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn collect_working_set_paths(
+    repo: &Repository,
+    pathspecs: &[String],
+    include_untracked: bool,
+    paths: &mut BTreeSet<String>,
+) -> Result<()> {
+    // Staged: HEAD tree vs index.
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .context("open index (path collect)")?;
+    let head_tree = repo
+        .head_tree_id_or_empty()
+        .context("resolve HEAD^{tree} (path collect)")?
+        .detach();
+    repo.tree_index_status(
+        &head_tree,
+        &index,
+        None,
+        gix::status::tree_index::TrackRenames::Disabled,
+        |change, _tree_index, _worktree_index| -> Result<gix::diff::index::Action, anyhow::Error> {
+            let loc = change.location();
+            if pathspec_match(loc.as_bstr(), pathspecs) {
+                paths.insert(path_display(loc.as_bstr()));
+            }
+            Ok(std::ops::ControlFlow::Continue(()))
+        },
+    )
+    .context("tree-index status (path collect)")?;
+
+    // Unstaged (+ optional untracked).
+    let workdir = match repo.workdir() {
+        Some(w) => w.to_owned(),
+        None => return Ok(()),
+    };
+    let untracked = if include_untracked {
+        UntrackedFiles::Files
+    } else {
+        UntrackedFiles::None
+    };
+    let platform = repo
+        .status(gix::progress::Discard)
+        .context("status platform (path collect)")?
+        .untracked_files(untracked)
+        .index_worktree_rewrites(None);
+    // Keep workdir in scope for the iterator lifetime (status uses it).
+    let _ = &workdir;
+    let iter = platform
+        .into_index_worktree_iter(std::iter::empty::<BString>())
+        .context("index-worktree iterator (path collect)")?;
+    for item in iter {
+        let item = item.context("index-worktree item (path collect)")?;
+        let rela = item.rela_path();
+        if pathspec_match(rela, pathspecs) {
+            paths.insert(path_display(rela));
+        }
+    }
+    Ok(())
+}
+
+fn append_base_vs_worktree(
+    repo: &Repository,
+    base_tree: &gix::Tree<'_>,
+    workdir: &Path,
+    path: &str,
+    cache: &mut gix::diff::blob::Platform,
+    out: &mut String,
+    origins: &mut Vec<FileOrigin>,
+) -> Result<()> {
+    let null = repo.object_hash().null();
+    let rela = BStr::new(path.as_bytes());
+
+    // Old side: blob from the base tree (if present and not a tree).
+    let (old_id, old_kind, has_old) = match base_tree.lookup_entry_by_path(path) {
+        Ok(Some(entry)) => {
+            let mode = entry.mode();
+            if mode.is_tree() {
+                (null, EntryKind::Blob, false)
+            } else {
+                (entry.object_id(), mode.kind(), true)
+            }
+        }
+        Ok(None) => (null, EntryKind::Blob, false),
+        Err(e) => {
+            // Path may not resolve cleanly; treat as absent on base.
+            eprintln!("warning: base lookup {path}: {e:#}");
+            (null, EntryKind::Blob, false)
+        }
+    };
+
+    let disk = workdir.join(path);
+    let has_new = disk.is_file() || disk.is_symlink();
+    // New side: null id + path; with WorktreeRoots the engine reads from disk
+    // when the path exists, and treats a missing path as deletion.
+    let (new_id, new_kind) = (null, EntryKind::Blob);
+
+    if !has_old && !has_new {
+        return Ok(());
+    }
+
+    // Identical content? Hash the worktree file and compare to base blob id.
+    if has_old && has_new {
+        if let Ok(bytes) = std::fs::read(&disk) {
+            if let Ok(hash) =
+                gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &bytes)
+            {
+                if hash == old_id {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    cache
+        .set_resource(
+            old_id,
+            old_kind,
+            rela,
+            ResourceKind::OldOrSource,
+            &repo.objects,
+        )
+        .context("set old (base) resource")?;
+    cache
+        .set_resource(
+            new_id,
+            new_kind,
+            rela,
+            ResourceKind::NewOrDestination,
+            &repo.objects,
+        )
+        .context("set new (worktree) resource")?;
+
+    let old_path = if has_old { Some(path) } else { None };
+    let new_path = if has_new { Some(path) } else { None };
+    push_origin_if_appended(out, origins, FileOrigin::Modified, |out| {
+        render_file_patch(out, old_path, new_path, cache)
+    })?;
+    Ok(())
 }
 
 // ─── staged / worktree ───────────────────────────────────────────────────────

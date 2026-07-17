@@ -20,7 +20,7 @@ use std::process::Command;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-use crate::config::DiffScope;
+use crate::config::{DiffRequest, DiffScope};
 use crate::ir::FileOrigin;
 use crate::source::ProducedDiff;
 
@@ -31,30 +31,89 @@ pub fn jj_diff_produced(
     pathspecs: &[String],
     include_untracked: bool,
 ) -> Result<ProducedDiff> {
-    match scope {
-        DiffScope::Staged => {
-            eprintln!(
-                "note: jj has no staging area; `--staged` / scope=staged yields an empty review. \
-                 Use plain `next-hunk diff` for working-copy changes."
-            );
-            return Ok(ProducedDiff::default());
+    jj_diff_request(
+        workspace,
+        &DiffRequest::Local(scope),
+        pathspecs,
+        include_untracked,
+    )
+}
+
+/// Produce a review for any [`DiffRequest`] under jj.
+///
+/// - **Local**: same as [`jj_diff_produced`]
+/// - **Range**: same as [`jj_show`] (revset / `A..B` / `A...B`)
+/// - **AgainstBase**: `jj diff --from <base|merge-base> --to @ --git`
+///   (working-copy tip vs base — closest match to `git diff <base>`)
+pub fn jj_diff_request(
+    workspace: &Path,
+    request: &DiffRequest,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<ProducedDiff> {
+    match request {
+        DiffRequest::Local(scope) => {
+            match scope {
+                DiffScope::Staged => {
+                    eprintln!(
+                        "note: jj has no staging area; `--staged` / scope=staged yields an empty review. \
+                         Use plain `next-hunk diff` for working-copy changes."
+                    );
+                    return Ok(ProducedDiff::default());
+                }
+                DiffScope::Worktree | DiffScope::WorkingSet => {}
+            }
+
+            if include_untracked {
+                eprintln!(
+                    "note: `--include-untracked` is ignored in jj workspaces \
+                     (new files usually appear in `jj diff` via working-copy snapshot)."
+                );
+            }
+
+            let mut args = vec!["diff".to_string(), "--git".to_string()];
+            for p in pathspecs {
+                args.push(p.clone());
+            }
+            let text = run_jj(workspace, &args)?;
+            Ok(produced_from_git_diff(text))
         }
-        DiffScope::Worktree | DiffScope::WorkingSet => {}
+        DiffRequest::Range(spec) => {
+            let text = jj_show(workspace, spec)?;
+            Ok(produced_from_git_diff(text))
+        }
+        DiffRequest::AgainstBase {
+            base,
+            use_merge_base,
+        } => {
+            if include_untracked {
+                eprintln!(
+                    "note: `--include-untracked` is ignored in jj workspaces \
+                     (new files usually appear in `jj diff` via working-copy snapshot)."
+                );
+            }
+            // Map git `diff <base>` → jj working-copy vs base.
+            // merge-base style: left side is heads(::base & ::@).
+            let from = if *use_merge_base {
+                format!("heads(::{base} & ::@)")
+            } else {
+                base.clone()
+            };
+            let mut args = vec![
+                "diff".to_string(),
+                "--git".to_string(),
+                "--from".to_string(),
+                from,
+                "--to".to_string(),
+                "@".to_string(),
+            ];
+            for p in pathspecs {
+                args.push(p.clone());
+            }
+            let text = run_jj(workspace, &args)?;
+            Ok(produced_from_git_diff(text))
+        }
     }
-
-    if include_untracked {
-        eprintln!(
-            "note: `--include-untracked` is ignored in jj workspaces \
-             (new files usually appear in `jj diff` via working-copy snapshot)."
-        );
-    }
-
-    let mut args = vec!["diff".to_string(), "--git".to_string()];
-    for p in pathspecs {
-        args.push(p.clone());
-    }
-    let text = run_jj(workspace, &args)?;
-    Ok(produced_from_git_diff(text))
 }
 
 /// Diff a single revision or a range for `next-hunk show`.

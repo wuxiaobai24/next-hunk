@@ -50,6 +50,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recommended multi-agent layout (one `serve` per worktree, tmux split) and
   how agents should choose a session (`list` / `--all-worktrees` / cwd auto).
 
+### Added — Branch-level base / range review (WXB-8)
+- **`diff --base <rev>`** — review the whole branch (and local worktree) against
+  a base revision, like `git diff <rev>`. File rail shows +/− relative to that
+  base. Same flags on `serve` and `inspect` (`inspect --base origin/main --json`).
+  Git uses gix tree-vs-worktree; jj maps to `jj diff --from <base> --to @ --git`
+  (merge-base → `heads(::base & ::@)`).
+- **`diff --range A..B` / `A...B`** — explicit commit range (same semantics as
+  `show`). Prefer this when you want committed-only trees without worktree noise.
+- **`--strategy`** — `worktree` | `staged` | `working-set` | `upstream-ahead`
+  (vs `@{upstream}`, merge-base style; git only) | `merge-base` (requires
+  `--base <branch>` for PR-style fork-point left side). Config: `strategy` +
+  optional `base`.
+- Large branch diffs still go through the unified-diff IR + viewport path (no
+  full-widget fallback). README + skill recommend agents use `--base` after
+  finishing a feature branch.
+
 ### Fixed — Daily-driver polish (dogfood P1 / WXB-16)
 - **Exclude `.next-hunk/` from untracked reviews** — writing project config no
   longer lists `.next-hunk/config.toml` as an undecided untracked file under
