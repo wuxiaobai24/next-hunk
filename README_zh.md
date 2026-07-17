@@ -207,7 +207,7 @@ git show HEAD   # → 启动 review TUI
 | `#` | 切换行号显示 |
 | `w` | 切换词级行内 diff |
 | `W` | 切换忽略空白（隐藏仅空白变化） |
-| `t` | 循环主题：light → auto → dark |
+| `t` | 循环主题：light → auto → dark → catppuccin-mocha → catppuccin-latte → tokyonight |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
 | `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
@@ -246,16 +246,35 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `export_on_quit` | string | `"none"`（pager/diff）；**serve 未设置时默认 `"json"`** | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`）。serve 默认 json 以便 agent 拿到 comments+notes；pager 保持 none 以免污染 `core.pager`。非 TTY 时立即输出报告（全部 `undecided` + notes），不回退到 inspect 摘要 |
 | `vcs` | string | `"auto"` | `"auto"`（有 `.jj` 时优先 jj）/ `"git"` / `"jj"`，见 [`docs/VCS.md`](./docs/VCS.md) |
-| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |
+| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` — 当 `theme_preset` 为 `"default"` 时使用 Flexoki。`t` 会循环模式**和**命名预设。 |
+| `theme_preset` | string | `"default"` | Chrome 调色板：`"default"`（Flexoki）/ `"catppuccin-mocha"` / `"catppuccin-latte"` / `"tokyonight"`（CLI `--theme-preset`）。 |
+| `theme_colors` | table | — | 可选 hex 覆盖（`#RRGGBB`）：`bg` / `fg` / `add` / `del` / `rail` / `status`，叠在当前预设上。 |
+
+**内置预设**
+
+| 预设 | 观感 | Syntect |
+|------|------|---------|
+| `default` | [Flexoki](https://flexoki.com)（由 `theme` 决定 light/dark/auto） | 跟随 `theme` |
+| `catppuccin-mocha` | 深色 | `base16-ocean.dark` |
+| `catppuccin-latte` | 浅色 | `base16-ocean.light` |
+| `tokyonight` | 深色 | `base16-ocean.dark` |
 
 示例 `~/.config/next-hunk/config.toml`:
 
 ```toml
 highlight = true
 watch = true
+theme_preset = "catppuccin-mocha"
+
+# 可选槽位覆盖（hex）：
+# [theme_colors]
+# add = "#a6e3a1"
+# del = "#f38ba8"
+# rail = "#45475a"
+# status = "#181825"
 ```
 
-CLI 覆盖:`--all` / `--staged`（互斥）、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`、`--export-on-quit <none|json|markdown|both>`。
+CLI 覆盖:`--all` / `--staged`（互斥）、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`、`--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`、`--export-on-quit <none|json|markdown|both>`。
 
 使用 working-set（`--all` 或 `scope = "working-set"`）时，文件栏会标注来源：**`S`** staged、**`M`** modified（unstaged）、**`?`** untracked。同一路径若既有 staged 又有 unstaged，会各出现一次。
 

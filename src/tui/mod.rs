@@ -104,6 +104,36 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
     Ok(())
 }
 
+/// Build a [`theme::ThemeState`] from config/CLI strings. Invalid values fall
+/// back to defaults (config validation already rejected illegal enums at load).
+fn build_theme_state(
+    theme: Option<&str>,
+    theme_preset: Option<&str>,
+    theme_colors: Option<crate::config::ThemeColorsConfig>,
+) -> theme::ThemeState {
+    let mode = theme.map(theme::ThemeMode::parse).unwrap_or_default();
+    let preset = theme_preset
+        .map(theme::ThemePreset::parse)
+        .unwrap_or_default();
+    let overrides = match theme_colors {
+        Some(c) => theme::ThemeColorOverrides::from_strings(
+            c.bg.as_deref(),
+            c.fg.as_deref(),
+            c.add.as_deref(),
+            c.del.as_deref(),
+            c.rail.as_deref(),
+            c.status.as_deref(),
+        )
+        .unwrap_or_default(),
+        None => theme::ThemeColorOverrides::default(),
+    };
+    theme::ThemeState {
+        mode,
+        preset,
+        overrides,
+    }
+}
+
 /// Run the interactive review UI over an already-parsed [`Review`].
 ///
 /// `reloader` enables `--watch`: when present (and a [`Watcher`] can be
@@ -123,6 +153,8 @@ pub fn run_review_tui(
     start_line_numbers: bool,
     wrap_on: bool,
     theme: Option<String>,
+    theme_preset: Option<String>,
+    theme_colors: Option<crate::config::ThemeColorsConfig>,
     layout: crate::config::LayoutMode,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
@@ -150,17 +182,13 @@ pub fn run_review_tui(
     let mut terminal = Terminal::new(backend).context("create terminal")?;
     terminal.clear()?;
 
-    // Honor the config theme: parse "dark"/"light"/"auto" into a ThemeMode
-    // (unknown/empty falls back to dark inside ThemeMode::parse).
-    let theme_mode = theme
-        .as_deref()
-        .map(theme::ThemeMode::parse)
-        .unwrap_or_default();
+    // Honor config theme + preset + optional color overrides.
+    let theme_state = build_theme_state(theme.as_deref(), theme_preset.as_deref(), theme_colors);
     let highlighter = std::sync::Arc::new(
-        crate::highlight::Highlighter::load(theme_mode.syntect_theme_name())
+        crate::highlight::Highlighter::load(theme_state.syntect_theme_name())
             .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop()),
     );
-    let mut app = App::with_theme(review, highlighter, theme_mode);
+    let mut app = App::with_theme_state(review, highlighter, theme_state);
     app.highlight_on = start_highlight;
     app.line_numbers_on = start_line_numbers;
     app.wrap_on = wrap_on;
@@ -610,6 +638,8 @@ diff --git a/b.rs b/b.rs
             true,
             false,
             None,
+            None,
+            None,
             crate::config::LayoutMode::Unified,
             None,
             ReviewOptions::default(),
@@ -975,10 +1005,11 @@ diff --git a/a.rs b/a.rs
 
     #[test]
     fn t_key_cycles_theme_mode_and_status() {
-        use crate::tui::theme::ThemeMode;
+        use crate::tui::theme::{ThemeMode, ThemePreset};
         let mut app = sample_app();
         // The default theme is now Light (Flexoki paper).
         assert_eq!(app.theme_mode, ThemeMode::Light);
+        assert_eq!(app.theme_state.preset, ThemePreset::Default);
         let light_add = app.theme.add;
 
         // Light → Auto
@@ -992,9 +1023,25 @@ diff --git a/a.rs b/a.rs
         assert_ne!(app.theme.add, light_add); // palette changed
         assert!(app.status.contains("dark"));
 
-        // Dark → Light
+        // Dark → catppuccin-mocha
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_state.preset, ThemePreset::CatppuccinMocha);
+        assert!(app.status.contains("catppuccin-mocha"));
+
+        // → catppuccin-latte
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_state.preset, ThemePreset::CatppuccinLatte);
+        assert!(app.status.contains("catppuccin-latte"));
+
+        // → tokyonight
+        app.handle_key(key(KeyCode::Char('t')));
+        assert_eq!(app.theme_state.preset, ThemePreset::TokyoNight);
+        assert!(app.status.contains("tokyonight"));
+
+        // → light (default flexoki)
         app.handle_key(key(KeyCode::Char('t')));
         assert_eq!(app.theme_mode, ThemeMode::Light);
+        assert_eq!(app.theme_state.preset, ThemePreset::Default);
         assert!(app.status.contains("light"));
     }
 

@@ -245,7 +245,7 @@ git show HEAD   # → launches the review TUI
 | `#` | toggle line-number gutter |
 | `w` | toggle word-level inline diff |
 | `W` | toggle ignore-whitespace (hide whitespace-only changes) |
-| `t` | cycle theme: light → auto → dark |
+| `t` | cycle theme: light → auto → dark → catppuccin-mocha → catppuccin-latte → tokyonight |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
@@ -287,18 +287,38 @@ Fields:
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
 | `persist_review` | bool | `true` | save accept/reject decisions under `.git/next-hunk/decisions-<scope>.json` and restore on reopen (`--no-persist` disables) |
 | `auto_forward` | bool | `true` | when a live `serve` exists, `diff --focus`/`--note` push into it (`--no-forward` disables) |
-| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
+| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` — Flexoki light/dark mode when `theme_preset` is `"default"`. `t` cycles modes **and** named presets. |
+| `theme_preset` | string | `"default"` | Chrome palette: `"default"` (Flexoki) / `"catppuccin-mocha"` / `"catppuccin-latte"` / `"tokyonight"` (CLI `--theme-preset`). |
+| `theme_colors` | table | — | Optional hex overrides (`#RRGGBB`): `bg`, `fg`, `add`, `del`, `rail`, `status`. Layered on the active preset. |
+
+**Built-in presets**
+
+| Preset | Character | Syntect |
+|--------|-----------|---------|
+| `default` | [Flexoki](https://flexoki.com) via `theme` (light/dark/auto) | follows `theme` |
+| `catppuccin-mocha` | dark | `base16-ocean.dark` |
+| `catppuccin-latte` | light | `base16-ocean.light` |
+| `tokyonight` | dark | `base16-ocean.dark` |
 
 Example `~/.config/next-hunk/config.toml`:
 
 ```toml
 highlight = true
 watch = true
+theme_preset = "catppuccin-mocha"
+
+# Optional slot overrides (hex):
+# [theme_colors]
+# add = "#a6e3a1"
+# del = "#f38ba8"
+# rail = "#45475a"
+# status = "#181825"
 ```
 
 CLI overrides: `--all` / `--staged` / `--base` / `--range` (mutually exclusive modes),
 `--strategy <worktree|staged|working-set|upstream-ahead|merge-base>`,
 `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`,
+`--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`,
 `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`, `--no-forward`.
 
 When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail

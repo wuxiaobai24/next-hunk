@@ -16,7 +16,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent,
 use crate::config::LayoutMode;
 use crate::highlight::{HighlightCache, HighlightJob, Highlighter};
 use crate::ir::{Review, Viewport, ViewportQuery};
-use crate::tui::theme::{Theme, ThemeMode};
+use crate::tui::theme::{Theme, ThemeMode, ThemePreset, ThemeState};
 
 /// Format a [`FocusTarget`] for status messages (compact, human-readable).
 pub fn focus_display(target: &FocusTarget) -> String {
@@ -212,8 +212,10 @@ pub struct App {
     /// Show the full-screen keybinding help overlay (toggle with `?`).
     pub show_help: bool,
 
-    /// User's theme choice (dark / light / auto). `theme` is the resolved
-    /// palette the view reads from; `t` cycles the mode and refreshes it.
+    /// User's theme choice (mode + preset + optional overrides). `theme` is
+    /// the resolved palette the view reads from; `t` cycles and refreshes it.
+    pub theme_state: ThemeState,
+    /// Convenience mirror of `theme_state.mode` for status / legacy callers.
     pub theme_mode: ThemeMode,
     pub theme: Theme,
 
@@ -565,25 +567,44 @@ impl App {
 
     /// Construct with an explicit highlighter (used by `run_review_tui` to
     /// reuse a single loaded `Highlighter` and by tests). Defaults to the light
-    /// (Flexoki paper) theme. Use [`App::with_theme`] to inject a config-driven
-    /// theme.
+    /// (Flexoki paper) theme. Use [`App::with_theme_state`] to inject a
+    /// config-driven theme.
     pub fn with_highlighter(review: Review, highlighter: Highlighter) -> Self {
         Self::with_theme(review, Arc::new(highlighter), ThemeMode::default())
     }
 
-    /// Construct with an explicit highlighter and theme mode (used by
-    /// `run_review_tui` to honor `config.toml`'s `theme`).
+    /// Construct with an explicit highlighter and theme mode (legacy path;
+    /// preset stays `default`). Prefer [`App::with_theme_state`].
     pub fn with_theme(
         review: Review,
         highlighter: Arc<Highlighter>,
         theme_mode: ThemeMode,
+    ) -> Self {
+        Self::with_theme_state(
+            review,
+            highlighter,
+            ThemeState {
+                mode: theme_mode,
+                preset: ThemePreset::Default,
+                overrides: Default::default(),
+            },
+        )
+    }
+
+    /// Construct with an explicit highlighter and full theme state (used by
+    /// `run_review_tui` to honor `theme` / `theme_preset` / `[theme_colors]`).
+    pub fn with_theme_state(
+        review: Review,
+        highlighter: Arc<Highlighter>,
+        theme_state: ThemeState,
     ) -> Self {
         let status = if review.is_empty() {
             "empty diff".to_string()
         } else {
             format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count())
         };
-        let theme = theme_mode.to_theme();
+        let theme = theme_state.to_theme();
+        let theme_mode = theme_state.mode;
         Self {
             review: review.clone(),
             base_review: review,
@@ -604,6 +625,7 @@ impl App {
             rail_rect: None,
             stream_rect: None,
             show_help: false,
+            theme_state,
             theme_mode,
             theme,
             mode: InputMode::Normal,
@@ -1482,17 +1504,19 @@ impl App {
                     "rail hidden".into()
                 };
             }
-            // cycle theme: dark → light → auto → dark; reload syntect palette
+            // cycle theme: light → auto → dark → catppuccin-mocha →
+            // catppuccin-latte → tokyonight → light; reload syntect palette
             KeyCode::Char('t') => {
-                self.theme_mode = self.theme_mode.cycle();
-                self.theme = self.theme_mode.to_theme();
+                self.theme_state = self.theme_state.cycle();
+                self.theme_mode = self.theme_state.mode;
+                self.theme = self.theme_state.to_theme();
                 // New Arc so in-flight worker jobs keep the old theme gen-safe.
                 self.highlighter = Arc::new(
-                    Highlighter::load(self.theme_mode.syntect_theme_name())
+                    Highlighter::load(self.theme_state.syntect_theme_name())
                         .unwrap_or_else(|_| Highlighter::load_noop()),
                 );
                 self.cache.invalidate();
-                self.status = format!("theme: {}", self.theme_mode.name());
+                self.status = format!("theme: {}", self.theme_state.display_name());
             }
             // begin in-stream search
             KeyCode::Char('/') => {

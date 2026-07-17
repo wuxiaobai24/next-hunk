@@ -2,23 +2,18 @@
 //!
 //! `view.rs` reads colors from [`Theme`] instead of hardcoding them, so the
 //! chrome adapts to a light vs. dark terminal background. [`ThemeMode`] holds
-//! the user's choice (dark / light / auto); `auto` resolves via the
-//! `$COLORFGBG` convention at startup.
+//! the user's light/dark/auto choice for the **default** Flexoki palette;
+//! [`ThemePreset`] selects a named chrome palette (Catppuccin, Tokyo Night, …).
+//! Optional [`ThemeColorOverrides`] tweak individual slots from config.
 //!
-//! Both palettes are [Flexoki](https://flexoki.com) — an inky, contrast-balanced
-//! color system by Steph Ango — mapped onto the semantic slots. The light
-//! variant uses Flexoki's paper background (`#FFFCF0`) with the deeper 600-level
-//! accents; the dark variant uses the black background (`#100F0F`) with the
-//! brighter 400-level accents.
-//!
-//! This themes only the TUI chrome (line prefixes, gutters, status bar, …).
-//! Syntax-highlight (syntect) keeps its own default theme; swapping that is a
-//! follow-up.
+//! Syntax highlight (syntect) stays on `base16-ocean.{light,dark}` — chosen by
+//! whether the active chrome is light or dark, never by inventing a per-preset
+//! syntect theme.
 
 use ratatui::style::Color;
 
-/// Build a `Color::Rgb` from a `0xRRGGBB` literal, so the Flexoki palette reads
-/// as hex rather than three loose bytes. `const` so it costs nothing at runtime.
+/// Build a `Color::Rgb` from a `0xRRGGBB` literal, so palettes read as hex
+/// rather than three loose bytes. `const` so it costs nothing at runtime.
 const fn hex(c: u32) -> Color {
     Color::Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
@@ -27,7 +22,7 @@ const fn hex(c: u32) -> Color {
 ///
 /// Colors are stored by value (small, `Copy`) so the view can read them
 /// cheaply per cell.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     /// `+` line prefix on Add lines.
     pub add: Color,
@@ -88,10 +83,7 @@ impl Theme {
 
     /// Flexoki light variant — tuned for a paper terminal background
     /// (`#FFFCF0`), using the deeper 600-level accents which stay readable on
-    /// white/paper. (The pale `Light*` ANSI variants are meant for dark
-    /// backgrounds and go invisible on paper, so we avoid them.) Word-level
-    /// emphasis reuses brighter shades; it renders reversed+bold, so it still
-    /// pops without fighting the line color.
+    /// white/paper.
     pub fn light() -> Self {
         Self {
             add: hex(0x66800B),               // green-600
@@ -111,6 +103,319 @@ impl Theme {
             note: hex(0x24837B),              // cyan-600 (italic agent notes)
         }
     }
+
+    /// [Catppuccin Mocha](https://github.com/catppuccin/catppuccin) — dark.
+    pub fn catppuccin_mocha() -> Self {
+        Self {
+            add: hex(0xA6E3A1),               // green
+            delete: hex(0xF38BA8),            // red
+            word_add: hex(0x94E2D5),          // teal
+            word_del: hex(0xEBA0AC),          // maroon
+            dim: hex(0x6C7086),               // overlay0
+            file_header: hex(0xCBA6F7),       // mauve
+            hunk_header: hex(0x89B4FA),       // blue
+            selection_fg: hex(0xCDD6F4),      // text
+            selection_bg: hex(0x45475A),      // surface1
+            match_active_fg: hex(0x1E1E2E),   // base
+            match_active_bg: hex(0xF9E2AF),   // yellow
+            match_inactive_bg: hex(0x313244), // surface0
+            edit_mode_fg: hex(0xFAB387),      // peach
+            status_bg: hex(0x181825),         // mantle
+            note: hex(0x94E2D5),              // teal
+        }
+    }
+
+    /// [Catppuccin Latte](https://github.com/catppuccin/catppuccin) — light.
+    pub fn catppuccin_latte() -> Self {
+        Self {
+            add: hex(0x40A02B),               // green
+            delete: hex(0xD20F39),            // red
+            word_add: hex(0x179299),          // teal
+            word_del: hex(0xE64553),          // maroon
+            dim: hex(0x9CA0B0),               // overlay0
+            file_header: hex(0x8839EF),       // mauve
+            hunk_header: hex(0x1E66F5),       // blue
+            selection_fg: hex(0x4C4F69),      // text
+            selection_bg: hex(0xCCD0DA),      // surface0
+            match_active_fg: hex(0xEFF1F5),   // base
+            match_active_bg: hex(0xDF8E1D),   // yellow
+            match_inactive_bg: hex(0xDCE0E8), // crust
+            edit_mode_fg: hex(0xFE640B),      // peach
+            status_bg: hex(0xE6E9EF),         // mantle
+            note: hex(0x179299),              // teal
+        }
+    }
+
+    /// [Tokyo Night](https://github.com/folke/tokyonight.nvim) storm-ish — dark.
+    pub fn tokyonight() -> Self {
+        Self {
+            add: hex(0x9ECE6A),               // green
+            delete: hex(0xF7768E),            // red
+            word_add: hex(0x73DACA),          // teal-ish
+            word_del: hex(0xFF9E64),          // orange
+            dim: hex(0x565F89),               // comment
+            file_header: hex(0xBB9AF7),       // magenta
+            hunk_header: hex(0x7AA2F7),       // blue
+            selection_fg: hex(0xC0CAF5),      // fg
+            selection_bg: hex(0x292E42),      // bg_highlight
+            match_active_fg: hex(0x1A1B26),   // bg
+            match_active_bg: hex(0xE0AF68),   // yellow
+            match_inactive_bg: hex(0x24283B), // bg_dark
+            edit_mode_fg: hex(0xFF9E64),      // orange
+            status_bg: hex(0x16161E),         // darker status
+            note: hex(0x7DCFFF),              // cyan
+        }
+    }
+
+    /// Apply optional color overrides on top of this theme (in place).
+    pub fn apply_overrides(&mut self, o: &ThemeColorOverrides) {
+        if let Some(c) = o.add {
+            self.add = c;
+            self.word_add = c;
+        }
+        if let Some(c) = o.del {
+            self.delete = c;
+            self.word_del = c;
+        }
+        if let Some(c) = o.rail {
+            self.selection_bg = c;
+        }
+        if let Some(c) = o.status {
+            self.status_bg = c;
+        }
+        if let Some(c) = o.fg {
+            self.selection_fg = c;
+        }
+        if let Some(c) = o.bg {
+            // Terminal pane bg is not painted by ratatui; use as inactive
+            // match / subdued chrome so the override is still visible.
+            self.match_inactive_bg = c;
+        }
+    }
+}
+
+/// Named chrome palette preset. Independent of [`ThemeMode`] (light/dark/auto).
+///
+/// `Default` means "use Flexoki via [`ThemeMode`]". Named presets own their
+/// light/dark character and map to the matching syntect ocean theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemePreset {
+    /// Flexoki via [`ThemeMode`] (the historical default).
+    #[default]
+    Default,
+    /// Catppuccin Mocha (dark).
+    CatppuccinMocha,
+    /// Catppuccin Latte (light).
+    CatppuccinLatte,
+    /// Tokyo Night (dark).
+    TokyoNight,
+}
+
+impl ThemePreset {
+    /// All built-in preset ids in docs / error messages order.
+    pub const ALL: &'static [&'static str] = &[
+        "default",
+        "catppuccin-mocha",
+        "catppuccin-latte",
+        "tokyonight",
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ThemePreset::Default => "default",
+            ThemePreset::CatppuccinMocha => "catppuccin-mocha",
+            ThemePreset::CatppuccinLatte => "catppuccin-latte",
+            ThemePreset::TokyoNight => "tokyonight",
+        }
+    }
+
+    /// Whether this preset paints a light chrome (for syntect pairing).
+    pub fn is_light(self) -> bool {
+        matches!(self, ThemePreset::CatppuccinLatte)
+    }
+
+    /// Whether this preset is dark chrome. Named dark presets always are;
+    /// `Default` defers to [`ThemeMode`].
+    pub fn is_dark_named(self) -> bool {
+        matches!(self, ThemePreset::CatppuccinMocha | ThemePreset::TokyoNight)
+    }
+
+    /// Resolve this preset + mode to a concrete [`Theme`].
+    pub fn to_theme(self, mode: ThemeMode) -> Theme {
+        match self {
+            ThemePreset::Default => mode.to_theme(),
+            ThemePreset::CatppuccinMocha => Theme::catppuccin_mocha(),
+            ThemePreset::CatppuccinLatte => Theme::catppuccin_latte(),
+            ThemePreset::TokyoNight => Theme::tokyonight(),
+        }
+    }
+
+    /// Syntect theme for this preset + mode.
+    ///
+    /// Named light presets always get the light ocean theme; named dark
+    /// presets always get the dark ocean theme; `Default` follows mode.
+    pub fn syntect_theme_name(self, mode: ThemeMode) -> &'static str {
+        match self {
+            ThemePreset::Default => mode.syntect_theme_name(),
+            ThemePreset::CatppuccinLatte => "base16-ocean.light",
+            ThemePreset::CatppuccinMocha | ThemePreset::TokyoNight => "base16-ocean.dark",
+        }
+    }
+
+    /// Parse a config/CLI string. Unknown → error with the allowed set.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "default" | "" => Ok(ThemePreset::Default),
+            "catppuccin-mocha" | "catppuccin_mocha" | "mocha" => Ok(ThemePreset::CatppuccinMocha),
+            "catppuccin-latte" | "catppuccin_latte" | "latte" => Ok(ThemePreset::CatppuccinLatte),
+            "tokyonight" | "tokyo-night" | "tokyo_night" => Ok(ThemePreset::TokyoNight),
+            other => Err(format!(
+                "unknown theme_preset '{other}' (expected {})",
+                ThemePreset::ALL.join(", ")
+            )),
+        }
+    }
+
+    /// Parse config/CLI values. Unknown → `Default` (lenient for tests).
+    pub fn parse(s: &str) -> Self {
+        Self::try_parse(s).unwrap_or(ThemePreset::Default)
+    }
+}
+
+/// Optional per-slot color overrides from config (`[theme_colors]` table).
+///
+/// Keys map onto chrome slots (not syntect):
+/// - `add` / `del` — add/delete line prefixes (and word-diff accents)
+/// - `rail` — selection / rail highlight background
+/// - `status` — status bar background
+/// - `fg` — selection foreground
+/// - `bg` — subdued chrome background (match inactive)
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThemeColorOverrides {
+    pub bg: Option<Color>,
+    pub fg: Option<Color>,
+    pub add: Option<Color>,
+    pub del: Option<Color>,
+    pub rail: Option<Color>,
+    pub status: Option<Color>,
+}
+
+impl ThemeColorOverrides {
+    pub fn is_empty(&self) -> bool {
+        self.bg.is_none()
+            && self.fg.is_none()
+            && self.add.is_none()
+            && self.del.is_none()
+            && self.rail.is_none()
+            && self.status.is_none()
+    }
+
+    /// Parse from raw string fields (config layer). Empty/`None` keys skipped.
+    pub fn from_strings(
+        bg: Option<&str>,
+        fg: Option<&str>,
+        add: Option<&str>,
+        del: Option<&str>,
+        rail: Option<&str>,
+        status: Option<&str>,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            bg: parse_color_opt(bg, "bg")?,
+            fg: parse_color_opt(fg, "fg")?,
+            add: parse_color_opt(add, "add")?,
+            del: parse_color_opt(del, "del")?,
+            rail: parse_color_opt(rail, "rail")?,
+            status: parse_color_opt(status, "status")?,
+        })
+    }
+}
+
+fn parse_color_opt(raw: Option<&str>, field: &str) -> Result<Option<Color>, String> {
+    match raw {
+        None => Ok(None),
+        Some(s) if s.trim().is_empty() => Ok(None),
+        Some(s) => parse_hex_color(s)
+            .map(Some)
+            .map_err(|e| format!("theme_colors.{field}: {e}")),
+    }
+}
+
+/// Parse `#RRGGBB` / `RRGGBB` / `#RGB` / `RGB` into [`Color::Rgb`].
+pub fn parse_hex_color(s: &str) -> Result<Color, String> {
+    let s = s.trim();
+    let hex_str = s.strip_prefix('#').unwrap_or(s);
+    match hex_str.len() {
+        6 => {
+            let n = u32::from_str_radix(hex_str, 16)
+                .map_err(|_| format!("invalid hex color '{s}' (expected #RRGGBB)"))?;
+            Ok(hex(n))
+        }
+        3 => {
+            // #RGB → #RRGGBB
+            let mut expanded = String::with_capacity(6);
+            for c in hex_str.chars() {
+                expanded.push(c);
+                expanded.push(c);
+            }
+            let n = u32::from_str_radix(&expanded, 16)
+                .map_err(|_| format!("invalid hex color '{s}' (expected #RGB or #RRGGBB)"))?;
+            Ok(hex(n))
+        }
+        _ => Err(format!(
+            "invalid hex color '{s}' (expected #RRGGBB or #RGB)"
+        )),
+    }
+}
+
+/// Combined appearance used by the TUI: mode + preset + optional overrides.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ThemeState {
+    pub mode: ThemeMode,
+    pub preset: ThemePreset,
+    pub overrides: ThemeColorOverrides,
+}
+
+impl ThemeState {
+    /// Resolve the concrete chrome palette (preset + mode + overrides).
+    pub fn to_theme(&self) -> Theme {
+        let mut theme = self.preset.to_theme(self.mode);
+        theme.apply_overrides(&self.overrides);
+        theme
+    }
+
+    /// Syntect theme name matching the chrome light/dark character.
+    pub fn syntect_theme_name(&self) -> &'static str {
+        self.preset.syntect_theme_name(self.mode)
+    }
+
+    /// Status-line / help label for the current choice.
+    pub fn display_name(&self) -> String {
+        match self.preset {
+            ThemePreset::Default => self.mode.name().to_string(),
+            other => other.name().to_string(),
+        }
+    }
+
+    /// Cycle: light → auto → dark → catppuccin-mocha → catppuccin-latte →
+    /// tokyonight → light. Named presets keep a sensible mode so a later
+    /// switch back to `default` is not surprising.
+    pub fn cycle(&self) -> Self {
+        let (mode, preset) = match self.preset {
+            ThemePreset::Default => match self.mode {
+                ThemeMode::Light => (ThemeMode::Auto, ThemePreset::Default),
+                ThemeMode::Auto => (ThemeMode::Dark, ThemePreset::Default),
+                ThemeMode::Dark => (ThemeMode::Dark, ThemePreset::CatppuccinMocha),
+            },
+            ThemePreset::CatppuccinMocha => (ThemeMode::Light, ThemePreset::CatppuccinLatte),
+            ThemePreset::CatppuccinLatte => (ThemeMode::Dark, ThemePreset::TokyoNight),
+            ThemePreset::TokyoNight => (ThemeMode::Light, ThemePreset::Default),
+        };
+        Self {
+            mode,
+            preset,
+            overrides: self.overrides.clone(),
+        }
+    }
 }
 
 /// The user's theme choice. `Auto` resolves at startup via `$COLORFGBG`.
@@ -127,7 +432,8 @@ pub enum ThemeMode {
 }
 
 impl ThemeMode {
-    /// Cycler order: Dark → Light → Auto → Dark.
+    /// Cycler order for mode-only: Dark → Light → Auto → Dark.
+    /// Prefer [`ThemeState::cycle`] when presets are in play.
     pub fn cycle(self) -> Self {
         match self {
             ThemeMode::Dark => ThemeMode::Light,
@@ -145,7 +451,7 @@ impl ThemeMode {
         }
     }
 
-    /// Resolve this mode to a concrete [`Theme`]. `Auto` inspects
+    /// Resolve this mode to a concrete Flexoki [`Theme`]. `Auto` inspects
     /// `$COLORFGBG` once.
     pub fn to_theme(self) -> Theme {
         match self {
@@ -181,6 +487,18 @@ impl ThemeMode {
             "light" => ThemeMode::Light,
             "auto" => ThemeMode::Auto,
             _ => ThemeMode::Light,
+        }
+    }
+
+    /// Strict parse used by config validation.
+    pub fn try_parse(s: &str) -> Result<Self, String> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "dark" => Ok(ThemeMode::Dark),
+            "light" => Ok(ThemeMode::Light),
+            "auto" => Ok(ThemeMode::Auto),
+            other => Err(format!(
+                "unknown theme '{other}' (expected dark, light, or auto)"
+            )),
         }
     }
 }
@@ -246,14 +564,11 @@ mod tests {
     fn dark_and_light_palettes_differ() {
         let d = Theme::dark();
         let l = Theme::light();
-        // Sanity: the two Flexoki variants are genuinely distinct. We assert on
-        // slots that intentionally differ (dark uses 400-level accents on black;
-        // light uses 600-level accents on paper).
-        assert_ne!(d.file_header, l.file_header); // magenta-400 vs magenta-600
-        assert_ne!(d.hunk_header, l.hunk_header); // blue-400 vs blue-600
-        assert_ne!(d.status_bg, l.status_bg); // base-900 vs base-100
-        assert_ne!(d.word_add, l.word_add); // green-300 vs green-400
-        assert_ne!(d.match_inactive_bg, l.match_inactive_bg); // base-800 vs base-200
+        assert_ne!(d.file_header, l.file_header);
+        assert_ne!(d.hunk_header, l.hunk_header);
+        assert_ne!(d.status_bg, l.status_bg);
+        assert_ne!(d.word_add, l.word_add);
+        assert_ne!(d.match_inactive_bg, l.match_inactive_bg);
     }
 
     #[test]
@@ -275,7 +590,6 @@ mod tests {
         assert_eq!(ThemeMode::parse("dark"), ThemeMode::Dark);
         assert_eq!(ThemeMode::parse("Light"), ThemeMode::Light);
         assert_eq!(ThemeMode::parse("AUTO"), ThemeMode::Auto);
-        // Unknown / empty falls back to the default (Light).
         assert_eq!(ThemeMode::parse("nonsense"), ThemeMode::Light);
         assert_eq!(ThemeMode::parse(""), ThemeMode::Light);
         assert_eq!(ThemeMode::parse("  auto "), ThemeMode::Auto);
@@ -283,7 +597,6 @@ mod tests {
 
     #[test]
     fn to_theme_resolves_each_mode() {
-        // Dark/Light are deterministic; Auto depends on env (tested below).
         assert_eq!(ThemeMode::Dark.to_theme().add, Theme::dark().add);
         assert_eq!(ThemeMode::Light.to_theme().add, Theme::light().add);
     }
@@ -294,7 +607,7 @@ mod tests {
             assert!(background_is_light());
         });
         with_colorfgbg(Some("15;7"), || {
-            assert!(background_is_light()); // exactly 7 counts as light
+            assert!(background_is_light());
         });
     }
 
@@ -304,7 +617,7 @@ mod tests {
             assert!(!background_is_light());
         });
         with_colorfgbg(Some("0;6"), || {
-            assert!(!background_is_light()); // below 7
+            assert!(!background_is_light());
         });
     }
 
@@ -323,7 +636,6 @@ mod tests {
         with_colorfgbg(Some("0;abc"), || {
             assert!(!background_is_light());
         });
-        // Trailing ";default" (iTerm2) is tolerated.
         with_colorfgbg(Some("0;7;default"), || {
             assert!(background_is_light());
         });
@@ -360,5 +672,130 @@ mod tests {
         with_colorfgbg(Some("0;0"), || {
             assert_eq!(ThemeMode::Auto.syntect_theme_name(), "base16-ocean.dark");
         });
+    }
+
+    #[test]
+    fn presets_differ_from_flexoki() {
+        let mocha = Theme::catppuccin_mocha();
+        let latte = Theme::catppuccin_latte();
+        let tokyo = Theme::tokyonight();
+        assert_ne!(mocha.add, Theme::dark().add);
+        assert_ne!(latte.add, Theme::light().add);
+        assert_ne!(tokyo.add, Theme::dark().add);
+        assert_ne!(mocha.status_bg, latte.status_bg);
+    }
+
+    #[test]
+    fn light_preset_uses_light_syntect() {
+        assert_eq!(
+            ThemePreset::CatppuccinLatte.syntect_theme_name(ThemeMode::Dark),
+            "base16-ocean.light"
+        );
+        // Dark mode must not force dark syntect under a light preset.
+        assert!(!ThemePreset::CatppuccinLatte
+            .syntect_theme_name(ThemeMode::Dark)
+            .contains("dark"));
+    }
+
+    #[test]
+    fn dark_presets_use_dark_syntect() {
+        assert_eq!(
+            ThemePreset::CatppuccinMocha.syntect_theme_name(ThemeMode::Light),
+            "base16-ocean.dark"
+        );
+        assert_eq!(
+            ThemePreset::TokyoNight.syntect_theme_name(ThemeMode::Light),
+            "base16-ocean.dark"
+        );
+    }
+
+    #[test]
+    fn theme_state_cycle_includes_presets() {
+        let mut s = ThemeState {
+            mode: ThemeMode::Light,
+            preset: ThemePreset::Default,
+            overrides: ThemeColorOverrides::default(),
+        };
+        s = s.cycle();
+        assert_eq!(s.mode, ThemeMode::Auto);
+        assert_eq!(s.preset, ThemePreset::Default);
+        s = s.cycle();
+        assert_eq!(s.mode, ThemeMode::Dark);
+        s = s.cycle();
+        assert_eq!(s.preset, ThemePreset::CatppuccinMocha);
+        s = s.cycle();
+        assert_eq!(s.preset, ThemePreset::CatppuccinLatte);
+        s = s.cycle();
+        assert_eq!(s.preset, ThemePreset::TokyoNight);
+        s = s.cycle();
+        assert_eq!(s.preset, ThemePreset::Default);
+        assert_eq!(s.mode, ThemeMode::Light);
+    }
+
+    #[test]
+    fn overrides_apply_to_slots() {
+        let mut theme = Theme::dark();
+        let o = ThemeColorOverrides {
+            add: Some(hex(0x00FF00)),
+            del: Some(hex(0xFF0000)),
+            rail: Some(hex(0x111111)),
+            status: Some(hex(0x222222)),
+            fg: Some(hex(0xEEEEEE)),
+            bg: Some(hex(0x010101)),
+        };
+        theme.apply_overrides(&o);
+        assert_eq!(theme.add, hex(0x00FF00));
+        assert_eq!(theme.word_add, hex(0x00FF00));
+        assert_eq!(theme.delete, hex(0xFF0000));
+        assert_eq!(theme.selection_bg, hex(0x111111));
+        assert_eq!(theme.status_bg, hex(0x222222));
+        assert_eq!(theme.selection_fg, hex(0xEEEEEE));
+        assert_eq!(theme.match_inactive_bg, hex(0x010101));
+    }
+
+    #[test]
+    fn parse_hex_color_accepts_hash_and_short() {
+        assert_eq!(parse_hex_color("#A6E3A1").unwrap(), hex(0xA6E3A1));
+        assert_eq!(parse_hex_color("A6E3A1").unwrap(), hex(0xA6E3A1));
+        assert_eq!(parse_hex_color("#abc").unwrap(), hex(0xAABBCC));
+        assert!(parse_hex_color("zz").is_err());
+        assert!(parse_hex_color("").is_err());
+    }
+
+    #[test]
+    fn theme_preset_try_parse() {
+        assert_eq!(
+            ThemePreset::try_parse("catppuccin-mocha").unwrap(),
+            ThemePreset::CatppuccinMocha
+        );
+        assert_eq!(
+            ThemePreset::try_parse("mocha").unwrap(),
+            ThemePreset::CatppuccinMocha
+        );
+        assert_eq!(
+            ThemePreset::try_parse("latte").unwrap(),
+            ThemePreset::CatppuccinLatte
+        );
+        assert_eq!(
+            ThemePreset::try_parse("tokyonight").unwrap(),
+            ThemePreset::TokyoNight
+        );
+        assert_eq!(
+            ThemePreset::try_parse("default").unwrap(),
+            ThemePreset::Default
+        );
+        assert!(ThemePreset::try_parse("solarized").is_err());
+    }
+
+    #[test]
+    fn display_name_prefers_preset() {
+        let s = ThemeState {
+            mode: ThemeMode::Light,
+            preset: ThemePreset::TokyoNight,
+            overrides: ThemeColorOverrides::default(),
+        };
+        assert_eq!(s.display_name(), "tokyonight");
+        let s2 = ThemeState::default();
+        assert_eq!(s2.display_name(), "light");
     }
 }
