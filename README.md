@@ -172,6 +172,10 @@ git show HEAD   # → launches the review TUI
 | `]h` | next hunk (wraps across files) |
 | `[h` | previous hunk (wraps across files) |
 | `Space` | next hunk (quick `]h` alias) |
+| `a` / `r` / `u` | accept / reject / undecided current hunk (review tracking; always on with default persistence) |
+| `A` | accept **all** hunks in the current file → next unreviewed file |
+| `]u` / `[u` | next / previous unreviewed hunk |
+| `]U` / `[U` | next / previous unreviewed file |
 | `zc` | fold (collapse) current file |
 | `zo` | unfold (expand) current file |
 | `Tab` / `l` / `→` | next file |
@@ -217,6 +221,7 @@ Fields:
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
+| `persist_review` | bool | `true` | save accept/reject decisions under `.git/next-hunk/decisions-<scope>.json` and restore on reopen (`--no-persist` disables) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -226,7 +231,7 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`.
+CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`.
 
 When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail
 tags each path with its git bucket: **`S`** staged, **`M`** modified (unstaged),
@@ -262,6 +267,12 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
 (undecided) per hunk; on quit the decisions are emitted as JSON for the agent
 to parse. `--select` requires an interactive terminal and errors out otherwise.
+
+**Resume review across sessions:** decisions are persisted by default (see
+`persist_review`). Quit and reopen the same worktree/staged/working-set diff to
+continue; the status bar shows `reviewed N/M files · X/Y hunks`. Use `A` to
+accept a whole file, `]u` to jump to the next unreviewed hunk. `--select` still
+controls quit-time JSON; persistence is independent.
 
 **Full review report on quit (`export_on_quit`):**
 

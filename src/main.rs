@@ -79,6 +79,10 @@ enum Commands {
         /// VCS backend: `auto` (default), `git`, or `jj`. Overrides `vcs` in config.
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
+        /// Disable persisting review decisions across sessions (overrides
+        /// `persist_review` in config; default is on).
+        #[arg(long)]
+        no_persist: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -221,6 +225,9 @@ enum Commands {
         /// VCS backend: `auto` (default), `git`, or `jj`.
         #[arg(long, value_parser = parse_vcs_arg)]
         vcs: Option<VcsPreference>,
+        /// Disable persisting review decisions across sessions.
+        #[arg(long)]
+        no_persist: bool,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -369,6 +376,7 @@ fn run() -> Result<()> {
         export_on_quit: None,
         layout: None,
         vcs: None,
+        no_persist: false,
         extra: Vec::new(),
     }) {
         Commands::Diff {
@@ -383,6 +391,7 @@ fn run() -> Result<()> {
             export_on_quit,
             layout,
             vcs,
+            no_persist,
             extra,
         } => {
             // Parse the agent-bridge specs and check the interactive-tty
@@ -407,6 +416,7 @@ fn run() -> Result<()> {
                     layout,
                     export_on_quit: options.export_on_quit_override,
                     vcs,
+                    persist_review: if no_persist { Some(false) } else { None },
                 },
             )
             .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -444,6 +454,8 @@ fn run() -> Result<()> {
                     notes: options.notes,
                     select_mode: options.select,
                     export_on_quit: resolved.export_on_quit,
+                    persist_review: resolved.persist_review,
+                    persist_scope: resolved.scope.as_str().to_string(),
                 },
                 None,
             )
@@ -484,6 +496,8 @@ fn run() -> Result<()> {
                     notes: bridge.notes,
                     select_mode: bridge.select,
                     export_on_quit: export,
+                    persist_review: cfg.persist_review.unwrap_or(true),
+                    persist_scope: format!("show-{}", sanitize_persist_scope(&rev)),
                 },
                 None,
             )
@@ -517,6 +531,12 @@ fn run() -> Result<()> {
                     notes: bridge.notes,
                     select_mode: bridge.select,
                     export_on_quit: export,
+                    // Patches have no stable repo identity for multi-session
+                    // resume; keep tracking keys available but skip disk store
+                    // unless the human is inside a git workdir (path resolves
+                    // via workdir=None → no store).
+                    persist_review: false,
+                    persist_scope: "patch".into(),
                 },
                 None,
             )
@@ -576,6 +596,8 @@ fn run() -> Result<()> {
                     notes: bridge.notes,
                     select_mode: bridge.select,
                     export_on_quit: export,
+                    persist_review: cfg.persist_review.unwrap_or(true),
+                    persist_scope: "filediff".into(),
                 },
                 None,
             )
@@ -670,6 +692,8 @@ fn run() -> Result<()> {
                 workdir,
                 ReviewOptions {
                     export_on_quit: export,
+                    persist_review: cfg.persist_review.unwrap_or(true),
+                    persist_scope: "pager".into(),
                     ..Default::default()
                 },
                 None,
@@ -686,6 +710,7 @@ fn run() -> Result<()> {
             export_on_quit,
             layout,
             vcs,
+            no_persist,
             extra,
         } => run_serve(
             staged,
@@ -698,6 +723,7 @@ fn run() -> Result<()> {
             export_on_quit,
             layout,
             vcs,
+            no_persist,
             extra,
         ),
         Commands::Push { focus, note } => run_push(focus, note),
@@ -803,6 +829,7 @@ fn run_serve(
     export_on_quit: Option<ExportOnQuit>,
     layout: Option<LayoutMode>,
     vcs: Option<VcsPreference>,
+    no_persist: bool,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
@@ -828,6 +855,7 @@ fn run_serve(
             layout,
             export_on_quit: bridge.export_on_quit_override,
             vcs,
+            persist_review: if no_persist { Some(false) } else { None },
         },
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -871,6 +899,8 @@ fn run_serve(
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
             export_on_quit: resolved.export_on_quit,
+            persist_review: resolved.persist_review,
+            persist_scope: resolved.scope.as_str().to_string(),
         },
         Some(server),
     )
@@ -1280,9 +1310,27 @@ fn run_serve(
     _export_on_quit: Option<ExportOnQuit>,
     _layout: Option<LayoutMode>,
     _vcs: Option<VcsPreference>,
+    _no_persist: bool,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
+}
+
+/// Sanitize a free-form string for use in a persist scope filename.
+fn sanitize_persist_scope(s: &str) -> String {
+    let mut out = String::with_capacity(s.len().min(64));
+    for c in s.chars().take(64) {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+            out.push(c);
+        } else {
+            out.push('_');
+        }
+    }
+    if out.is_empty() {
+        "rev".into()
+    } else {
+        out
+    }
 }
 
 /// clap value_parser for `--layout`. Accepts unified|stack|split (case-insensitive).

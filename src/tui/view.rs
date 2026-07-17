@@ -960,9 +960,9 @@ fn stream_row_to_line(
             hunk_idx,
             ..
         } => {
-            // In --select mode, prefix the header with a decision marker so
-            // the human can see at a glance which hunks they've ruled on.
-            if app.select_mode {
+            // Decision markers: always in --select; otherwise when any
+            // decisions exist (restored or recorded this session).
+            if app.show_decision_markers() {
                 let id = HunkId { file_idx, hunk_idx };
                 let (mark, mark_color) = match app.decisions.get(&id).copied().unwrap_or_default() {
                     Decision::Accept => ("✓", app.theme.add),
@@ -1229,6 +1229,12 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     let shown_path = status_path(app.current_path(), path_budget);
     let left = format!(" {}{}", shown_path, non_path_suffix);
     let totals = format!(" Σ +{}/−{} ", app.review.inserts, app.review.deletes);
+    // Review progress when select/tracking is on, or once any decision exists.
+    let progress = if app.decisions_active() || !app.decisions.is_empty() {
+        Some(format!(" {} ", app.review_progress_label()))
+    } else {
+        None
+    };
     let right = format!(" {} ", app.status);
     // A banner note (`--note banner=text`) is surfaced in the status bar so the
     // human sees the agent's high-level summary without scrolling.
@@ -1241,6 +1247,9 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(totals, Style::default().fg(app.theme.dim)),
     ];
+    if let Some(p) = progress {
+        spans.push(Span::styled(p, Style::default().fg(app.theme.hunk_header)));
+    }
     if let Some(b) = banner {
         spans.push(Span::styled(b, Style::default().fg(app.theme.note)));
     }
@@ -1254,7 +1263,10 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
 fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     let content = match app.mode {
         InputMode::Search => {
-            format!("/{}▌  (Enter search · Enter confirm · Esc cancel)", app.search.query)
+            format!(
+                "/{}▌  (Enter search · Enter confirm · Esc cancel)",
+                app.search.query
+            )
         }
         InputMode::Filter => {
             format!(
@@ -1263,8 +1275,13 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
-                .to_string()
+            if app.decisions_active() {
+                " j/k · ]h/[h hunk · ]u unreviewed · a/r/u decide · A file · zc/zo · / · o · ? · q "
+                    .to_string()
+            } else {
+                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
+                    .to_string()
+            }
         }
     };
     let style = match app.mode {
@@ -1355,11 +1372,14 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     );
     push_help_section(
         &mut lines,
-        "Agent (--select)",
+        "Review decisions",
         &[
             ("a / r / u", "accept / reject / undecided (auto next hunk)"),
-            ("A / R", "accept / reject rest of current file"),
-            ("Ctrl-A / Ctrl-R", "accept / reject all remaining hunks"),
+            ("A", "accept all hunks in current file (when not --select)"),
+            ("A / R", "--select: accept / reject rest of current file"),
+            ("Ctrl-A / Ctrl-R", "--select: accept / reject all remaining"),
+            ("]u / [u", "next / previous unreviewed hunk"),
+            ("]U / [U", "next / previous unreviewed file"),
         ],
         head,
         key,
