@@ -1132,3 +1132,83 @@ impl Drop for DirGuard {
         let _ = std::fs::remove_dir_all(&self.0);
     }
 }
+
+// ─── MCP stdio control plane (WXB-23) ───────────────────────────────────────
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_initialize_and_tools_list_over_stdio() {
+    use std::io::{BufRead, BufReader, Write};
+
+    let mut child = Command::new(bin())
+        .args(["mcp"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn next-hunk mcp");
+
+    let mut stdin = child.stdin.take().expect("stdin");
+    let stdout = child.stdout.take().expect("stdout");
+    let mut reader = BufReader::new(stdout);
+
+    // initialize
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":1,"method":"initialize","params":{{"protocolVersion":"2024-11-05","capabilities":{{}},"clientInfo":{{"name":"test","version":"0"}}}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+
+    let mut line = String::new();
+    reader.read_line(&mut line).expect("read initialize result");
+    assert!(
+        line.contains("\"result\"") && line.contains("next-hunk"),
+        "initialize response: {line}"
+    );
+    assert!(
+        line.contains("2024-11-05") || line.contains("protocolVersion"),
+        "protocol version in: {line}"
+    );
+
+    // tools/list
+    line.clear();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{{}}}}"#
+    )
+    .unwrap();
+    stdin.flush().unwrap();
+    reader.read_line(&mut line).expect("read tools/list");
+    for tool in [
+        "list_sessions",
+        "review_structure",
+        "navigate",
+        "add_comment",
+        "get_decision",
+        "push_focus_note",
+        "reload",
+    ] {
+        assert!(line.contains(tool), "tools/list missing {tool}: {line}");
+    }
+
+    // Close stdin so the server exits cleanly.
+    drop(stdin);
+    let status = child.wait().expect("wait mcp");
+    assert!(status.success(), "mcp should exit 0 on EOF");
+}
+
+#[cfg(feature = "mcp")]
+#[test]
+fn mcp_help_lists_subcommand() {
+    let out = Command::new(bin())
+        .args(["mcp", "--help"])
+        .output()
+        .expect("run next-hunk mcp --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.to_lowercase().contains("mcp") || stdout.contains("stdio"),
+        "help: {stdout}"
+    );
+}

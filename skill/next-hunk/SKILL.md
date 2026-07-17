@@ -178,6 +178,18 @@ interaction, use server mode.
 Only use `list` / `get` when multiple worktrees are live and you need to
 disambiguate, or when debugging why forward did not happen.
 
+### MCP path (when the host speaks MCP)
+
+If your runtime can attach an MCP server, prefer tools over shell:
+
+1. Human: `next-hunk serve --all --include-untracked`
+2. Host config: command `next-hunk`, args `["mcp"]` (see repo `docs/MCP.md`)
+3. Agent tools: `list_sessions` → `review_structure` / `navigate` /
+   `add_comment` / `push_focus_note` → `get_decision` / `reload`
+
+Same Unix-socket semantics as the CLI (optional `hash` for multi-worktree).
+Skill + shell CLI remain valid when MCP is unavailable.
+
 ### 1. Human opens the persistent TUI
 
 ```bash
