@@ -1,10 +1,36 @@
 use super::model::{DiffLine, DiffLineKind, FileDiff, Hunk, Review};
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseError {
+    /// Stdin / input string was empty (zero length).
     #[error("empty diff input")]
     Empty,
+    /// Input was non-empty but produced no reviewable hunks (garbage text,
+    /// pure rename/mode-only with no content change, etc.).
+    ///
+    /// `context` is either empty or a short suffix like
+    /// ` (first line: "hello")` to help debug miswired pagers.
+    #[error("no valid '@@ ... @@' hunk header found{context}")]
+    NoHunkHeader { context: String },
+}
+
+/// Build [`ParseError::NoHunkHeader`] with an optional first-line hint.
+fn no_hunk_header(input: &str) -> ParseError {
+    const MAX_CHARS: usize = 80;
+    let context = input
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|line| {
+            let truncated: String = if line.chars().count() > MAX_CHARS {
+                format!("{}…", line.chars().take(MAX_CHARS).collect::<String>())
+            } else {
+                line.to_string()
+            };
+            format!(" (first line: {truncated:?})")
+        })
+        .unwrap_or_default();
+    ParseError::NoHunkHeader { context }
 }
 
 /// Parse a unified diff into a compact [`Review`].
@@ -156,7 +182,9 @@ pub fn parse_unified_diff(input: &str) -> Result<Review, ParseError> {
     review.stream_len = stream_row;
 
     if review.files.is_empty() {
-        return Err(ParseError::Empty);
+        // Non-empty input with nothing reviewable — do not report this as
+        // "empty diff input" (that message is reserved for zero-length input).
+        return Err(no_hunk_header(input));
     }
 
     Ok(review)
@@ -400,7 +428,36 @@ diff --git a/src/b.rs b/src/b.rs
 
     #[test]
     fn empty_errors() {
-        assert!(parse_unified_diff("").is_err());
+        let err = parse_unified_diff("").unwrap_err();
+        assert_eq!(err, ParseError::Empty);
+        assert_eq!(err.to_string(), "empty diff input");
+    }
+
+    #[test]
+    fn non_empty_garbage_is_not_empty_error() {
+        // Dogfood: `echo "this is not a diff" | next-hunk pager` used to say
+        // "empty diff input" even though stdin was non-empty. The message must
+        // name the real failure mode (no hunk header).
+        let err = parse_unified_diff("this is not a diff at all\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("empty diff input"),
+            "must not claim empty input: {msg}"
+        );
+        assert!(
+            msg.contains("no valid") && msg.contains("@@"),
+            "should name missing hunk header: {msg}"
+        );
+        assert!(
+            msg.contains("this is not a diff at all"),
+            "should include first line for debugging: {msg}"
+        );
+        // No trailing newline / multi-line garbage still not Empty.
+        let err2 = parse_unified_diff("x\ny\nz").unwrap_err();
+        assert!(
+            !matches!(err2, ParseError::Empty),
+            "non-empty no-newline garbage must not be Empty: {err2}"
+        );
     }
 
     #[test]
@@ -470,7 +527,12 @@ similarity index 100%
 rename from old.rs
 rename to new.rs
 ";
-        assert!(parse_unified_diff(patch).is_err());
+        let err = parse_unified_diff(patch).unwrap_err();
+        // Not Empty — input had content, just no reviewable hunks.
+        assert!(
+            matches!(err, ParseError::NoHunkHeader { .. }),
+            "pure rename should be NoHunkHeader, got: {err}"
+        );
     }
 
     #[test]

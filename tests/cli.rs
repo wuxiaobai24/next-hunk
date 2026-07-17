@@ -529,8 +529,17 @@ fn pager_garbage_input_exits_nonzero() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("parse") || stderr.contains("empty diff") || stderr.contains("error"),
+        stderr.contains("parse") || stderr.contains("error"),
         "pager should report parse/fatal on stderr, got: {stderr}"
+    );
+    // WXB-34: non-empty garbage must not claim "empty diff input".
+    assert!(
+        !stderr.contains("empty diff input"),
+        "non-empty garbage must not say empty diff input: {stderr}"
+    );
+    assert!(
+        stderr.contains("no valid") || stderr.contains("@@"),
+        "should name missing hunk header: {stderr}"
     );
 }
 
