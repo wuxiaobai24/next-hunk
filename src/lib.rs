@@ -6,6 +6,7 @@
 //! - [`highlight`] — syntax highlighting (syntect, feature-gated)
 //! - [`tui`] — interactive review UI
 //! - [`cli_parse`] — parsing for agent-bridge CLI specs (`--focus` / `--note`)
+//! - [`overlay`] — tmux/zellij floating review launcher for agents
 //! - [`session_client`] — shared live-serve client (CLI + MCP; serve+unix)
 //! - [`mcp`] — optional MCP stdio control plane (feature `mcp`)
 
@@ -13,6 +14,7 @@ pub mod cli_parse;
 pub mod config;
 pub mod highlight;
 pub mod ir;
+pub mod overlay;
 pub mod source;
 pub mod tui;
 

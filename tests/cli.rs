@@ -1212,3 +1212,43 @@ fn mcp_help_lists_subcommand() {
         "help: {stdout}"
     );
 }
+
+#[test]
+fn overlay_outside_mux_prints_fallback() {
+    // Clear mux env so the binary always takes the fallback path in CI.
+    let out = Command::new(bin())
+        .args(["overlay", "--all"])
+        .env_remove("TMUX")
+        .env_remove("ZELLIJ")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("run next-hunk overlay");
+    assert!(
+        !out.status.success(),
+        "overlay outside mux should exit non-zero"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("tmux") || stderr.contains("zellij") || stderr.contains("overlay"),
+        "expected mux fallback help, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("last-export") || stderr.contains("serve"),
+        "fallback should mention last-export or serve: {stderr}"
+    );
+}
+
+#[test]
+fn overlay_help_lists_subcommand() {
+    let out = Command::new(bin())
+        .args(["overlay", "--help"])
+        .output()
+        .expect("run next-hunk overlay --help");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("select") || stdout.contains("tmux") || stdout.contains("zellij"),
+        "help: {stdout}"
+    );
+}

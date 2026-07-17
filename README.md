@@ -359,6 +359,21 @@ In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
 (undecided) per hunk; on quit the decisions are emitted as JSON for the agent
 to parse. `--select` requires an interactive terminal and errors out otherwise.
 
+**One-shot floating review from a mux session (`overlay`):**
+
+```bash
+# Human is inside tmux or zellij; agent runs (no TTY required on the agent):
+next-hunk overlay --all --include-untracked \
+  --focus src/db/migrate.rs:140 \
+  --note banner="please review migration"
+# → tmux display-popup / zellij float runs select+export TUI
+# → on quit, full export JSON is printed on this process's stdout
+```
+
+Outside tmux/zellij, `overlay` exits with a clear fallback (adjacent pane +
+`last-export`, or `serve`). It never reprints a stale cache if the popup did
+not write a new export.
+
 **Resume review across sessions:** decisions are persisted by default (see
 `persist_review`). Quit and reopen the same worktree/staged/working-set diff to
 continue; the status bar shows `reviewed N/M files · X/Y hunks`. Use `A` to

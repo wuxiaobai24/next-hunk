@@ -389,6 +389,53 @@ enum Commands {
     /// `next-hunk serve` for tool calls. Feature-gated (`mcp`, on by default).
     /// See `docs/MCP.md` for host config snippets.
     Mcp,
+    /// Pop a floating review TUI inside tmux/zellij; print export JSON on quit.
+    ///
+    /// Detects `$TMUX` / `$ZELLIJ`, opens a popup (tmux `display-popup` or
+    /// zellij floating pane) running `diff --select --export-on-quit json`,
+    /// then prints the fresh full report on **this** process's stdout so an
+    /// agent can parse feedback without owning a TTY. Outside a mux session,
+    /// prints a clear fallback (adjacent pane / `serve` / `last-export`).
+    ///
+    /// Always forces `--select`, `--export-on-quit json`, and `--no-forward`.
+    Overlay {
+        /// Review staged changes (`git diff --cached`).
+        #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
+        staged: bool,
+        /// Full working set (staged + unstaged); see `diff --all`.
+        #[arg(long, short = 'a', conflicts_with_all = ["staged", "base", "range"])]
+        all: bool,
+        /// Branch-level review against `<rev>` (see `diff --base`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "range"])]
+        base: Option<String>,
+        /// Explicit commit range (see `diff --range`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "base"])]
+        range: Option<String>,
+        /// Diff strategy (see `diff --strategy`).
+        #[arg(long, value_parser = parse_strategy_arg)]
+        strategy: Option<DiffStrategy>,
+        /// Include untracked files in worktree / working-set / base diff.
+        #[arg(long)]
+        include_untracked: bool,
+        /// Scroll to this location on startup (same as `diff --focus`).
+        #[arg(long)]
+        focus: Option<String>,
+        /// Attach an agent annotation, repeatable (same as `diff --note`).
+        #[arg(long, action = clap::ArgAction::Append)]
+        note: Vec<String>,
+        /// Diff stream layout: `unified`, `stack`, or `split`.
+        #[arg(long, value_parser = parse_layout_arg)]
+        layout: Option<LayoutMode>,
+        /// Chrome palette preset (see `diff --theme-preset`).
+        #[arg(long, value_parser = parse_theme_preset_arg)]
+        theme_preset: Option<String>,
+        /// VCS backend: `auto` (default), `git`, or `jj`.
+        #[arg(long, value_parser = parse_vcs_arg)]
+        vcs: Option<VcsPreference>,
+        /// Optional pathspecs to limit the review.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        extra: Vec<String>,
+    },
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -910,7 +957,80 @@ fn run() -> Result<()> {
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
         Commands::Mcp => run_mcp(),
+        Commands::Overlay {
+            staged,
+            all,
+            base,
+            range,
+            strategy,
+            include_untracked,
+            focus,
+            note,
+            layout,
+            theme_preset,
+            vcs,
+            extra,
+        } => run_overlay(
+            staged,
+            all,
+            base,
+            range,
+            strategy,
+            include_untracked,
+            focus,
+            note,
+            layout,
+            theme_preset,
+            vcs,
+            extra,
+        ),
     }
+}
+
+/// `next-hunk overlay`: floating mux review → JSON on caller stdout.
+#[allow(clippy::too_many_arguments)] // mirrors Commands::Overlay field set
+fn run_overlay(
+    staged: bool,
+    all: bool,
+    base: Option<String>,
+    range: Option<String>,
+    strategy: Option<DiffStrategy>,
+    include_untracked: bool,
+    focus: Option<String>,
+    note: Vec<String>,
+    layout: Option<LayoutMode>,
+    theme_preset: Option<String>,
+    vcs: Option<VcsPreference>,
+    extra: Vec<String>,
+) -> Result<()> {
+    // Validate focus/note syntax early (same as diff).
+    if let Some(ref f) = focus {
+        let _ = next_hunk::cli_parse::parse_focus(f)?;
+    }
+    for n in &note {
+        let _ = next_hunk::cli_parse::parse_note(n)?;
+    }
+
+    let exe = std::env::current_exe().context("resolve next-hunk binary path")?;
+    let cwd = std::env::current_dir()?;
+
+    let diff_argv = next_hunk::overlay::build_diff_argv(&next_hunk::overlay::OverlayDiffOpts {
+        staged,
+        all,
+        base: base.as_deref(),
+        range: range.as_deref(),
+        strategy: strategy.map(|s| s.as_str()),
+        include_untracked,
+        focus: focus.as_deref(),
+        notes: &note,
+        layout: layout.map(|l| l.as_str()),
+        theme_preset: theme_preset.as_deref(),
+        vcs: vcs.map(|v| v.as_str()),
+        extra: &extra,
+    });
+
+    let mux = next_hunk::overlay::detect_mux();
+    next_hunk::overlay::run_overlay_session(mux, &exe, &cwd, &diff_argv)
 }
 
 /// `next-hunk mcp`: MCP stdio server (feature `mcp`).

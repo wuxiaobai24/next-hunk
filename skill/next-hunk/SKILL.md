@@ -144,9 +144,71 @@ Without a live serve, the human opens the one-shot TUI, reviews, and quits.
 You don't receive any signal back (use `--select` or `serve` + `decision` for
 approval).
 
+## Overlay (one-shot from agent session)
+
+When the human is already inside **tmux** or **zellij** (common for Claude Code /
+Codex / OpenCode / Multica terminal layouts), prefer a single blocking command
+that floats the TUI over their session and returns JSON on **your** stdout:
+
+```bash
+next-hunk overlay --all --include-untracked \
+  --focus <path>:<line> --note banner="please review"
+# blocks → human reviews in popup → full export JSON on this process's stdout
+```
+
+What it does:
+
+1. Detects `$TMUX` (preferred) or `$ZELLIJ`.
+2. Opens a floating pane running `diff --select --export-on-quit json --no-forward`
+   (plus your flags).
+3. After the human quits (`q`), prints the **fresh** full report (same shape as
+   `export_on_quit json` / `last-export`) on the caller stdout.
+
+**Requirements:** human must be inside tmux or zellij. Outside a mux session the
+command exits non-zero with fallback instructions (adjacent pane + `last-export`,
+or `serve`). It never prints a **stale** last-export if the popup did not write.
+
+### Host layouts (recommended)
+
+#### Claude Code (tmux)
+
+```text
+┌─ tmux ──────────────────────────────────────────────────────────┐
+│ pane 0: Claude Code (agent)                                     │
+│   …edits…                                                       │
+│   next-hunk overlay --all --include-untracked --focus …         │
+│   → tmux display-popup floats the TUI over this pane            │
+│   → agent parses JSON from overlay stdout, applies rejected     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Codex (tmux or zellij)
+
+```text
+Same as Claude: keep the agent in a mux pane. After a non-trivial edit batch:
+  next-hunk overlay --all --include-untracked --note banner="Codex batch N"
+Parse stdout JSON; fix only rejected + comments (see After review playbook).
+If Codex runs outside mux: ask the human to `tmux new -As review` (or zellij)
+once, then re-run overlay — or use serve + last-export fallback.
+```
+
+#### OpenCode (zellij or tmux)
+
+```text
+┌─ zellij ────────────────────────────────────────────────────────┐
+│ tab: agent (OpenCode)     floating: next-hunk overlay TUI       │
+│   overlay --all …         human a/r/u + c/C comments, then q    │
+│   stdout ← full JSON                                            │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+If no mux: `next-hunk serve --all --include-untracked` in a neighbour pane,
+agent uses `diff --focus` / `decision` / `last-export` instead.
+
 ## Approval: one-shot `--select`
 
-When you need the human to accept/reject your changes hunk-by-hunk:
+When you need the human to accept/reject your changes hunk-by-hunk (and they
+can give your process a TTY — or use `overlay` instead):
 
 ```bash
 next-hunk diff --all --include-untracked --select \
@@ -499,11 +561,13 @@ feature (on by default). Auto-forward on `diff` uses the same socket.
 
 | Situation | What to do |
 |-----------|------------|
-| Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
+| Human in tmux/zellij; need one blocking review + JSON | **`overlay --all --include-untracked`** (preferred one-shot) |
+| Need approval to proceed (agent has TTY) | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
 | Need comments + decisions after human quits | `serve` quit stdout (default json) or `last-export` |
 | Just want them informed, you continue | `diff --focus` / `--note` (auto-forwards if serve is live) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
-| `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
+| `--select` in a non-interactive context | **errors out** — use `overlay` (mux) or `serve` + `last-export` |
+| Outside mux and no TTY | open adjacent pane `serve` / one-shot `diff --select`, then `last-export` |
 | Iterating with the human | `serve` + `diff --focus` (prefer) or explicit `push` / `navigate` |
 | After review: only fix what they rejected | parse export → rejected/commented files only → `diff --focus` |
 

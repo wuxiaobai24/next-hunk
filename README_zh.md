@@ -305,6 +305,19 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 
 `--select` 模式下,人按 `a`(接受)/ `r`(拒绝)/ `u`(未决)逐 hunk 决策;退出时把决策以 JSON 输出供 agent 解析。`--select` 需要交互式终端,否则报错。
 
+**在 tmux/zellij 会话内一键叠层审查 (`overlay`):**
+
+```bash
+# 人在 tmux 或 zellij 里；agent 侧无需 TTY：
+next-hunk overlay --all --include-untracked \
+  --focus src/db/migrate.rs:140 \
+  --note banner="请审 migration"
+# → tmux display-popup / zellij 浮动窗跑 select+export TUI
+# → 人 quit 后，完整 export JSON 打在本进程 stdout
+```
+
+不在 mux 会话内时，`overlay` 以非零退出并给出降级说明（邻窗 + `last-export`，或 `serve`）。若弹层未写出新 export，**不会**回打过期的 `last-export`。
+
 ### Agent skill
 
 仓库内置一个现成 skill(`skill/next-hunk/SKILL.md`),教 coding agent 何时、如何调用 next-hunk —— 把它装进你的 agent skills 目录即可。完整决策指南和示例见 skill 文件。

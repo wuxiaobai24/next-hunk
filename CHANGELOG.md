@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — tmux/zellij overlay one-shot review (WXB-24)
+- **`next-hunk overlay`** — detect `$TMUX` / `$ZELLIJ`, open a floating review
+  (`tmux display-popup` or zellij floating pane) running
+  `diff --select --export-on-quit json --no-forward`, then print the **fresh**
+  full export JSON on the caller's stdout. Agents get the same
+  `schema_version` / decisions / comments shape as quit export without owning
+  a TTY. Refuses to print a stale `last-export` when the popup did not write.
+- **Clear non-mux fallback** — outside tmux/zellij, exit non-zero with steps
+  for adjacent pane, `serve`, or enter mux then re-run `overlay`.
+- **Docs** — skill sections for Claude Code / Codex / OpenCode overlay layouts;
+  README (EN/ZH) mention the command.
+
 ### Added — MCP session control plane (WXB-23)
 - **`next-hunk mcp`** — stdio Model Context Protocol server that maps the live
   `serve` control plane to first-class tools: `list_sessions`,
