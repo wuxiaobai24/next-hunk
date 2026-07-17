@@ -564,6 +564,7 @@ next-hunk diff --all --include-untracked --select \
 
 ## Installation note for the human
 
-next-hunk must be installed (`cargo install --git https://github.com/wuxiaobai24/next-hunk`)
+next-hunk must be installed (`cargo install next-hunk`, or
+`cargo install --git https://github.com/wuxiaobai24/next-hunk`)
 and the human must be at an interactive terminal. If `next-hunk` isn't on PATH,
 suggest the install command rather than failing silently.

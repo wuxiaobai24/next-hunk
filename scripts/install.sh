@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # next-hunk one-click installer.
 #
-# Downloads the latest prebuilt static binary from GitHub Releases and installs
-# it to a sensible bin directory. Falls back to `cargo install` on platforms
-# without a prebuilt binary.
+# Downloads the latest prebuilt binary from GitHub Releases and installs it to a
+# sensible bin directory. Prebuilts cover:
+#   Linux  x86_64 / aarch64  (static musl)
+#   macOS  arm64 / x86_64    (dist profile)
+# Falls back to `cargo install` (crates.io, then git) on other platforms.
 #
 # One-click:
 #   curl -fsSL https://github.com/wuxiaobai24/next-hunk/raw/main/scripts/install.sh | bash
@@ -95,10 +97,14 @@ require tar
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
-# Resolve the prebuilt target tuple. Only linux-x86_64 musl is published today.
+# Resolve the prebuilt asset suffix published by .github/workflows/release.yml.
+# Empty string → fall back to cargo install.
 prebuilt_target() {
   case "$OS/$ARCH" in
     Linux/x86_64|Linux/amd64) echo "x86_64-musl" ;;
+    Linux/aarch64|Linux/arm64) echo "aarch64-musl" ;;
+    Darwin/arm64|Darwin/aarch64) echo "aarch64-apple-darwin" ;;
+    Darwin/x86_64) echo "x86_64-apple-darwin" ;;
     *) echo "" ;;
   esac
 }
@@ -145,6 +151,38 @@ verify_checksum() {
   ok "checksum verified"
 }
 
+# ---- cargo fallback ----------------------------------------------------------
+# Prefer crates.io (`cargo install next-hunk`) once published; fall back to the
+# GitHub repo so install still works before/without a crates.io release.
+install_via_cargo() {
+  if ! command -v cargo >/dev/null 2>&1; then
+    die "no prebuilt binary for ${OS}/${ARCH} and cargo is not installed. \
+Install Rust from https://rustup.rs, then run: cargo install next-hunk
+(or: cargo install --git ${REPO_URL})"
+  fi
+  local ver_args=()
+  if [[ -n "$VERSION" ]]; then
+    local bare
+    bare="$(normalize_version "$VERSION")"
+    ver_args=(--version "${bare}")
+  fi
+  # crates.io first (official once published).
+  if cargo install next-hunk --locked "${ver_args[@]+"${ver_args[@]}"}" 2>/dev/null; then
+    ok "installed next-hunk via cargo (crates.io)"
+    return 0
+  fi
+  # GitHub fallback (works for every historical version / unreleased main).
+  info "crates.io install unavailable; running: cargo install --git ${REPO_URL} --locked"
+  if [[ -n "$VERSION" ]]; then
+    local tag
+    tag="v$(normalize_version "$VERSION")"
+    cargo install --git "${REPO_URL}" --tag "${tag}" --locked
+  else
+    cargo install --git "${REPO_URL}" --locked
+  fi
+  ok "installed next-hunk via cargo (git)"
+}
+
 # ---- install dir selection ---------------------------------------------------
 pick_install_dir() {
   if [[ -n "$BIN_DIR" ]]; then echo "$BIN_DIR"; return; fi
@@ -170,17 +208,7 @@ main() {
   if [[ -z "$target" ]]; then
     # No prebuilt binary for this platform → fall back to cargo.
     info "no prebuilt binary for ${OS}/${ARCH}; trying cargo install"
-    if command -v cargo >/dev/null 2>&1; then
-      if [[ -n "$VERSION" ]]; then
-        warn "--version pinning is not supported for the cargo fallback; installing latest from ${REPO}"
-      fi
-      info "running: cargo install --git ${REPO_URL} --locked"
-      cargo install --git "${REPO_URL}" --locked
-      ok "installed next-hunk via cargo"
-    else
-      die "no prebuilt binary for ${OS}/${ARCH} and cargo is not installed. \
-Install Rust from https://rustup.rs, then run: cargo install --git ${REPO_URL}"
-    fi
+    install_via_cargo
   else
     # Prebuilt path.
     local tag version asset_url sha_url
@@ -193,50 +221,57 @@ Install Rust from https://rustup.rs, then run: cargo install --git ${REPO_URL}"
     fi
     info "target version: ${C_BOLD}${tag}${C_RESET}  ${C_DIM}(${OS}/${ARCH} → ${target})${C_RESET}"
 
-    asset_url="${REPO_URL}/releases/download/${tag}/next-hunk-${version}-x86_64-musl.tar.xz"
+    asset_url="${REPO_URL}/releases/download/${tag}/next-hunk-${version}-${target}.tar.xz"
     sha_url="${asset_url}.sha256"
 
     local tarball="${TMP}/next-hunk.tar.xz"
     local shafile="${TMP}/next-hunk.tar.xz.sha256"
 
     info "downloading ${asset_url}"
-    curl -fsSL "$asset_url" -o "$tarball" || die "download failed: $asset_url"
-
-    if (( VERIFY_CHECKSUM )); then
-      info "downloading checksum"
-      curl -fsSL "$sha_url" -o "$shafile" || die "checksum download failed: $sha_url"
-      verify_checksum "$tarball" "$shafile"
+    if ! curl -fsSL "$asset_url" -o "$tarball"; then
+      # Older releases only shipped x86_64-musl. Fall back to cargo for
+      # platforms that gained prebuilts after that release, or when the user
+      # pins a version that predates multi-arch artifacts.
+      warn "no prebuilt asset for ${target} at ${tag}; falling back to cargo install"
+      install_via_cargo
+      # Optional pager wiring still runs below.
     else
-      warn "skipping checksum verification (--no-verify-checksum)"
+      if (( VERIFY_CHECKSUM )); then
+        info "downloading checksum"
+        curl -fsSL "$sha_url" -o "$shafile" || die "checksum download failed: $sha_url"
+        verify_checksum "$tarball" "$shafile"
+      else
+        warn "skipping checksum verification (--no-verify-checksum)"
+      fi
+
+      info "extracting"
+      if ! tar -xJf "$tarball" -C "$TMP" 2>/dev/null; then
+        die "extraction failed (tar may lack xz support; install 'xz-utils' / 'xz' and retry)"
+      fi
+      local srcdir="${TMP}/next-hunk-${version}-${target}"
+      local srcbin="${srcdir}/next-hunk"
+      [[ -f "$srcbin" ]] || die "extracted binary not found: $srcbin"
+
+      local bin
+      bin="$(pick_install_dir)"
+      ensure_dir_writable "$bin"
+      info "installing to ${C_BOLD}${bin}/next-hunk${C_RESET}"
+
+      if [[ -e "${bin}/next-hunk" && $FORCE -eq 0 ]]; then
+        die "existing binary at ${bin}/next-hunk (pass --force to overwrite)"
+      fi
+      install -m 0755 "$srcbin" "${bin}/next-hunk"
+
+      ok "installed ${bin}/next-hunk"
+      "${bin}/next-hunk" --version || true
+
+      # PATH hint for ~/.local/bin.
+      case ":${PATH}:" in
+        *":${bin}:"*) ;;
+        *) printf '%s!%s %s is not on your PATH.\n' "${C_YELLOW}" "${C_RESET}" "$bin"
+           printf '   Add it with:  export PATH="%s:\$PATH"\n' "$bin" ;;
+      esac
     fi
-
-    info "extracting"
-    if ! tar -xJf "$tarball" -C "$TMP" 2>/dev/null; then
-      die "extraction failed (tar may lack xz support; install 'xz-utils' / 'xz' and retry)"
-    fi
-    local srcdir="${TMP}/next-hunk-${version}-x86_64-musl"
-    local srcbin="${srcdir}/next-hunk"
-    [[ -f "$srcbin" ]] || die "extracted binary not found: $srcbin"
-
-    local bin
-    bin="$(pick_install_dir)"
-    ensure_dir_writable "$bin"
-    info "installing to ${C_BOLD}${bin}/next-hunk${C_RESET}"
-
-    if [[ -e "${bin}/next-hunk" && $FORCE -eq 0 ]]; then
-      die "existing binary at ${bin}/next-hunk (pass --force to overwrite)"
-    fi
-    install -m 0755 "$srcbin" "${bin}/next-hunk"
-
-    ok "installed ${bin}/next-hunk"
-    "${bin}/next-hunk" --version || true
-
-    # PATH hint for ~/.local/bin.
-    case ":${PATH}:" in
-      *":${bin}:"*) ;;
-      *) printf '%s!%s %s is not on your PATH.\n' "${C_YELLOW}" "${C_RESET}" "$bin"
-         printf '   Add it with:  export PATH="%s:\$PATH"\n' "$bin" ;;
-    esac
   fi
 
   # Optional: wire up as git pager.

@@ -54,34 +54,88 @@
 
 ## 安装
 
+**官方推荐路径**（任选其一）：
+
+| 方式 | 平台 | 需要 Rust？ | 命令 |
+|------|------|-------------|------|
+| **crates.io** | 全平台 | 是（编译） | `cargo install next-hunk` |
+| **Homebrew** | macOS（Linux brew 亦可） | 是（构建依赖） | 见下文 |
+| **install.sh** | Linux x86_64/aarch64、macOS arm64/amd64 | 否 | `curl … \| bash` |
+| **GitHub Release** | 同上 | 否 | 下载 `.tar.xz` |
+| **源码** | 全平台 | 是 | `cargo install --git …` |
+
+### crates.io（Cargo 官方路径）
+
 ```bash
-# 从 GitHub 安装（当前发布渠道）
-cargo install --git https://github.com/wuxiaobai24/next-hunk
-# 或本地克隆后安装
-cargo install --path .
-# 或直接运行
-cargo run --release -- diff
+cargo install next-hunk
+# 固定版本：
+cargo install next-hunk --version 0.3.0
 ```
 
-### 预编译静态二进制（musl）
-
-每个带 tag 的 release 都会发布一个**全静态、全特性**的 x86_64 musl 二进制
-—— 单个 ~2.6 MB（xz）文件，无任何运行时依赖，可直接在任何 Linux 上运行
-（Alpine、distroless、老版本 glibc 等），无需装 Rust 或 C 库。从
-[Releases 页](https://github.com/wuxiaobai24/next-hunk/releases) 下载：
+若 crates.io 尚未上架（或需要 `main` 分支），改用 GitHub：
 
 ```bash
-# 以 v0.1.0 为例（URL/版本按实际调整）：
-curl -L https://github.com/wuxiaobai24/next-hunk/releases/latest/download/next-hunk-0.1.0-x86_64-musl.tar.xz \
+cargo install --git https://github.com/wuxiaobai24/next-hunk --locked
+cargo install --path .          # 本地克隆
+cargo run --release -- diff     # 不安装直接跑
+```
+
+### Homebrew
+
+```bash
+brew tap wuxiaobai24/next-hunk https://github.com/wuxiaobai24/next-hunk
+brew install next-hunk
+```
+
+一次性安装（不永久加 tap）：
+
+```bash
+brew install --formula \
+  https://raw.githubusercontent.com/wuxiaobai24/next-hunk/main/Formula/next-hunk.rb
+```
+
+Formula 从带 tag 的源码用 cargo 构建（`depends_on "rust" => :build`）。
+
+### 一键安装脚本（预编译）
+
+从 Releases 下载对应平台预编译包，校验 sha256，安装到 `/usr/local/bin`
+（不可写则 `~/.local/bin`）。覆盖 **Linux x86_64 / aarch64**（静态 musl）与
+**macOS arm64 / x86_64**；其它平台回退到 `cargo install`。
+
+```bash
+curl -fsSL https://github.com/wuxiaobai24/next-hunk/raw/main/scripts/install.sh | bash
+```
+
+可选参数：`--prefix`、`--bin-dir`、`--version`、`--as-pager`、`--force`。
+
+### 预编译 Release 产物
+
+每个 `v*` tag 会通过 `release` workflow 发布多平台 **全特性** 归档。Linux musl
+为**全静态**（xz 约 2–3 MB），可在 Alpine / distroless / 老 glibc 上直接运行。
+
+| 产物后缀 | 目标 |
+|---|---|
+| `x86_64-musl` | Linux x86_64，静态 musl |
+| `aarch64-musl` | Linux aarch64，静态 musl |
+| `aarch64-apple-darwin` | macOS Apple Silicon |
+| `x86_64-apple-darwin` | macOS Intel |
+
+```bash
+# 示例：Linux x86_64 / 0.3.0 — 按平台改 VER 与 TARGET
+VER=0.3.0
+TARGET=x86_64-musl   # 或 aarch64-musl / aarch64-apple-darwin / x86_64-apple-darwin
+curl -fsSL "https://github.com/wuxiaobai24/next-hunk/releases/download/v${VER}/next-hunk-${VER}-${TARGET}.tar.xz" \
   | tar -xJ
-sudo install -m 0755 next-hunk-0.1.0-x86_64-musl/next-hunk /usr/local/bin/
+sudo install -m 0755 "next-hunk-${VER}-${TARGET}/next-hunk" /usr/local/bin/
 next-hunk --version
 ```
 
-#### 自己编静态二进制
+完整列表与 `.sha256` 见 [Releases](https://github.com/wuxiaobai24/next-hunk/releases)。
 
-next-hunk 是纯 Rust（用 gix 而非 libgit2、syntect 的 default-fancy regex、
-`zlib-rs`），**不需要 C 交叉工具链**，只要 musl 的 rust-std target：
+#### 自己编 dist 二进制
+
+next-hunk 是纯 Rust（gix / syntect default-fancy / `zlib-rs`），Linux 静态目标
+只需 musl rust-std（及 `musl-tools`）：
 
 ```bash
 rustup target add x86_64-unknown-linux-musl

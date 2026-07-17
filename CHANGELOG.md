@@ -94,6 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`--no-forward` / `auto_forward = false`** — opt out of auto-forward and
   always open a one-shot TUI. Default is `auto_forward = true`.
 
+### Added — Distribution (crates.io / Homebrew / multi-arch)
+- **Multi-platform release artifacts** on every `v*` tag: Linux static musl
+  (`x86_64-musl`, `aarch64-musl`) and macOS (`aarch64-apple-darwin`,
+  `x86_64-apple-darwin`). Built by the expanded `release` workflow; each
+  archive ships with a `.sha256` checksum.
+- **crates.io publish job** in `release.yml` (runs when the
+  `CARGO_REGISTRY_TOKEN` repository secret is set) so
+  `cargo install next-hunk` is the official Cargo path after the first
+  successful publish.
+- **Homebrew formula** at `Formula/next-hunk.rb` — install via
+  `brew tap wuxiaobai24/next-hunk https://github.com/wuxiaobai24/next-hunk &&
+  brew install next-hunk` (builds from the tagged source).
+- **`scripts/install.sh`** supports all four prebuilt platforms; falls back to
+  crates.io then `cargo install --git` when no asset exists for the host.
+- **README / README_zh** install section rewritten as a recommended-path matrix
+  (crates.io · Homebrew · install.sh · Release archives · source).
+
 ### Fixed — Agent bridge consistency (dogfood P1)
 - **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
   (and `--export-on-quit`), matching `diff`. Agents can point humans at a
