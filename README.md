@@ -188,6 +188,9 @@ git show HEAD   # → launches the review TUI
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
 | `?` | toggle the full-screen keybinding help |
+| `a` / `r` / `u` | `--select`: accept / reject / undecided current hunk (auto next) |
+| `A` / `R` | `--select`: accept / reject rest of current file |
+| `Ctrl-A` / `Ctrl-R` | `--select`: accept / reject all remaining hunks |
 | `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 
 ## Configuration

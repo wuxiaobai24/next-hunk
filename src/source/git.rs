@@ -403,6 +403,13 @@ fn append_worktree_item(
                 return Ok(());
             }
             let path = path_display(rela_path);
+            // Never surface next-hunk's own project state as review content.
+            // Writing `.next-hunk/config.toml` and then reviewing with
+            // `--include-untracked` would otherwise list the tool's config as
+            // an undecided untracked file (dogfood P1).
+            if is_tool_state_path(&path) {
+                return Ok(());
+            }
             let null = repo.object_hash().null();
             // Untracked file: diff from /dev/null to the file on disk.
             // Use the worktree root + rela_path to construct the on-disk path,
@@ -849,6 +856,20 @@ fn path_display(path: &BStr) -> String {
     path.to_str_lossy().into_owned()
 }
 
+/// Paths owned by next-hunk itself that must never appear as untracked review
+/// targets. Covers the project config/state directory (`.next-hunk/`) and any
+/// nested copy under a path component of that name.
+fn is_tool_state_path(path: &str) -> bool {
+    let p = path.trim_start_matches("./");
+    if p == ".next-hunk" || p.starts_with(".next-hunk/") {
+        return true;
+    }
+    // Nested e.g. `vendor/pkg/.next-hunk/config.toml` — still tool state.
+    Path::new(p)
+        .components()
+        .any(|c| c.as_os_str() == ".next-hunk")
+}
+
 fn pathspec_match(path: &BStr, pathspecs: &[String]) -> bool {
     if pathspecs.is_empty() {
         return true;
@@ -859,4 +880,20 @@ fn pathspec_match(path: &BStr, pathspecs: &[String]) -> bool {
             || p.starts_with(spec.trim_end_matches('/'))
             || Path::new(p.as_ref()).starts_with(spec)
     })
+}
+
+#[cfg(test)]
+mod tool_state_path_tests {
+    use super::is_tool_state_path;
+
+    #[test]
+    fn excludes_project_config_dir() {
+        assert!(is_tool_state_path(".next-hunk"));
+        assert!(is_tool_state_path(".next-hunk/config.toml"));
+        assert!(is_tool_state_path("./.next-hunk/config.toml"));
+        assert!(is_tool_state_path("pkg/.next-hunk/x"));
+        assert!(!is_tool_state_path("next-hunk/config.toml"));
+        assert!(!is_tool_state_path("src/main.rs"));
+        assert!(!is_tool_state_path(".next-hunk-backup"));
+    }
 }

@@ -346,6 +346,37 @@ fn worktree_diff_untracked_included_when_enabled() {
     assert!(has_add, "untracked file should have added lines");
 }
 
+/// Dogfood P1: tool-owned `.next-hunk/` must never appear as untracked review
+/// content (writing config then `--include-untracked` used to list itself).
+#[test]
+fn untracked_excludes_next_hunk_config_dir() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_repo();
+    let cfg_dir = repo.path().join(".next-hunk");
+    std::fs::create_dir_all(&cfg_dir).unwrap();
+    write(&cfg_dir.join("config.toml"), "layout = \"unified\"\n");
+    write(&repo.path().join("real_untracked.txt"), "keep me\n");
+
+    let text = git_diff(&repo.workdir(), DiffScope::Worktree, &[], true).unwrap();
+    if text.trim().is_empty() {
+        panic!("expected at least real_untracked.txt in the diff");
+    }
+    let review = parse_unified_diff(&text).unwrap();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("real_untracked.txt")),
+        "real untracked file should still appear: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.contains(".next-hunk")),
+        ".next-hunk/* must be excluded from untracked review: {paths:?}"
+    );
+}
+
 /// Dogfood P0: staged + unstaged + untracked must appear together under
 /// `scope = working-set` (`--all --include-untracked`), with origin marks.
 #[test]

@@ -127,6 +127,18 @@ pub fn run_review_tui(
         anyhow::bail!("nothing to review (empty diff)");
     }
 
+    // Surface focus miss on stderr *before* entering the alternate screen so
+    // agent logs / non-TTY fallbacks still see a clear warning (TUI status bar
+    // alone is easy to miss). Review still opens; the status bar also shows it.
+    if let Some(ref focus) = options.focus {
+        if app::resolve_focus_row(&review, focus).is_none() {
+            eprintln!(
+                "warning: focus not found: {}",
+                app::focus_display(focus)
+            );
+        }
+    }
+
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
@@ -153,10 +165,12 @@ pub fn run_review_tui(
     app.layout_mode = layout;
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
+    // Focus miss is already mirrored on stderr below (pre-TTY) so agents /
+    // non-interactive logs see it even when the status bar is not visible.
     app.focus_target = options.focus;
     app.notes = options.notes;
     app.select_mode = options.select_mode;
-    app.apply_focus();
+    let _ = app.apply_focus();
     // Background highlight worker: viewport misses enqueue; main loop drains.
     let hl_worker = crate::highlight::HighlightWorker::spawn();
     app.hl_job_tx = Some(hl_worker.job_sender());

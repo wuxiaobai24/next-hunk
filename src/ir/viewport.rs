@@ -313,6 +313,32 @@ impl ViewportQuery {
         })
     }
 
+    /// Resolve the hunk that owns absolute stream `row` (file header → first
+    /// hunk when present; mid-hunk body lines → that hunk). Used by `--select`
+    /// so `a`/`r` work even when the hunk header has scrolled off the top.
+    pub fn hunk_id_at_row(review: &Review, row: usize) -> Option<(usize, usize)> {
+        let (file_idx, line_in_file) = Self::file_and_line(review, row)?;
+        let file = review.files.get(file_idx)?;
+        if file.hunks.is_empty() {
+            return None;
+        }
+        if line_in_file == 0 {
+            // On the file header: treat as the first hunk so select keys still
+            // act when the user has not scrolled into a body yet.
+            return Some((file_idx, 0));
+        }
+        let mut cursor = 1; // skip file header
+        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+            let hunk_end = cursor + 1 + hunk.lines.len(); // header + body
+            if line_in_file < hunk_end {
+                return Some((file_idx, hunk_idx));
+            }
+            cursor = hunk_end;
+        }
+        // Past last body line of the file (shouldn't happen for in-range rows).
+        Some((file_idx, file.hunks.len() - 1))
+    }
+
     /// Absolute stream row of the `hunk_idx`-th hunk header within `file_idx`.
     /// Walks the file's hunk list accumulating `1 + lines.len()` per hunk,
     /// mirroring how `hunk_starts` is built at parse time (parse.rs). Returns

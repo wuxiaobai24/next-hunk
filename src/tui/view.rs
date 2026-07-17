@@ -1356,7 +1356,11 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     push_help_section(
         &mut lines,
         "Agent (--select)",
-        &[("a / r / u", "accept / reject / undecided on hunk")],
+        &[
+            ("a / r / u", "accept / reject / undecided (auto next hunk)"),
+            ("A / R", "accept / reject rest of current file"),
+            ("Ctrl-A / Ctrl-R", "accept / reject all remaining hunks"),
+        ],
         head,
         key,
         dim,
