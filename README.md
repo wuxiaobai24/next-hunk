@@ -21,7 +21,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 
 ## Status
 
-`v0.4-dev` — daily driver for reviewing diffs:
+`v0.4.0` — daily driver for reviewing diffs:
 
 - [x] Project scaffold + compact unified-diff IR (runtime model)
 - [x] Viewport query with binary search on file spans
@@ -74,6 +74,9 @@ the viewport materializes only what's on screen. Full numbers live in
 
 ## Install
 
+Maintainers: cut tags with [docs/RELEASE.md](./docs/RELEASE.md) (tag-only
+workflow; crates.io needs `CARGO_REGISTRY_TOKEN`).
+
 **Recommended paths** (pick one):
 
 | Path | Platforms | Needs Rust? | Command |
@@ -89,15 +92,7 @@ the viewport materializes only what's on screen. Full numbers live in
 ```bash
 cargo install next-hunk
 # pin a version:
-cargo install next-hunk --version 0.3.0
-```
-
-If the crate is not yet on crates.io (or you want `main`), use GitHub:
-
-```bash
-cargo install --git https://github.com/wuxiaobai24/next-hunk --locked
-cargo install --path .          # local clone
-cargo run --release -- diff     # run without installing
+cargo install next-hunk --version 0.4.0
 ```
 
 ### Homebrew
@@ -147,8 +142,8 @@ same `dist` profile (fat LTO + strip).
 | `x86_64-apple-darwin` | macOS Intel |
 
 ```bash
-# example: Linux x86_64, version 0.3.0 — adjust version + suffix for your platform
-VER=0.3.0
+# example: Linux x86_64, version 0.4.0 — adjust version + suffix for your platform
+VER=0.4.0
 TARGET=x86_64-musl   # or aarch64-musl / aarch64-apple-darwin / x86_64-apple-darwin
 curl -fsSL "https://github.com/wuxiaobai24/next-hunk/releases/download/v${VER}/next-hunk-${VER}-${TARGET}.tar.xz" \
   | tar -xJ
@@ -158,6 +153,14 @@ next-hunk --version
 
 See the [Releases page](https://github.com/wuxiaobai24/next-hunk/releases) for
 the full asset list and `.sha256` checksums.
+
+### From source / development
+
+```bash
+cargo install --git https://github.com/wuxiaobai24/next-hunk --locked   # latest main
+cargo install --path .          # local clone
+cargo run --release -- diff     # run without installing
+```
 
 #### Build a dist binary yourself
 

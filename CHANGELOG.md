@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-17
+
+First **official multi-path install** release: crates.io publish path (requires
+repo secret `CARGO_REGISTRY_TOKEN`), four-platform GitHub Release artifacts
+with sha256, Homebrew formula, and install.sh. Tag `v0.4.0` on `main` runs
+`.github/workflows/release.yml` (push tags only — no untagged publish).
+
 ### Added — Theme presets + configurable palette (WXB-21)
 - **Named chrome presets** — `theme_preset` config key and
   `--theme-preset` CLI flag (`diff` / `show` / `patch` / `filediff` /
@@ -544,7 +551,8 @@ viewport in sub-microsecond to sub-millisecond range is what makes the tool
 stay responsive on changesets that stall other viewers.
 
 
-[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.3.0
 [0.2.1]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.2.1
 [0.2.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.2.0
