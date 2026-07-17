@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — Daily-driver polish (dogfood P1 / WXB-16)
+- **Exclude `.next-hunk/` from untracked reviews** — writing project config no
+  longer lists `.next-hunk/config.toml` as an undecided untracked file under
+  `--include-untracked` / `include_untracked = true`.
+- **Illegal config enums fail startup** — typos like `layout = "sidebyside"`
+  exit non-zero with the field name and allowed values (`unified|stack|split`,
+  etc.) instead of silent fallback + exit 0. Malformed TOML is fatal too.
+- **Focus miss warns on stderr** — when `--focus` does not resolve, the TUI
+  still shows status `focus not found: …` and now also prints a stderr warning
+  before the alternate screen (visible to agents/logs).
+- **`--select` bulk decisions** — `a`/`r` already auto-advance to the next hunk;
+  new: `A`/`R` accept/reject rest of current file; `Ctrl-A`/`Ctrl-R` accept/
+  reject all remaining hunks from the current position. Mid-body `a`/`r` also
+  work when the hunk header has scrolled off.
+- **Pager parse/fatal errors stay non-zero** — covered by CLI tests (`echo hello
+  | next-hunk pager`).
+
 ### Fixed — Agent bridge consistency (dogfood P1)
 - **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
   (and `--export-on-quit`), matching `diff`. Agents can point humans at a

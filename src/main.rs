@@ -367,7 +367,7 @@ fn run() -> Result<()> {
 
             // Layered config: project (.next-hunk/config.toml) > user
             // (~/.config/next-hunk/config.toml). CLI flags override on top.
-            let cfg = Config::load(&cwd);
+            let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
             let resolved = ResolvedConfig::resolve(
                 &cfg,
                 &CliFlags {
@@ -379,7 +379,8 @@ fn run() -> Result<()> {
                     layout,
                     export_on_quit: options.export_on_quit_override,
                 },
-            );
+            )
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
 
             if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
                 eprintln!(
@@ -431,16 +432,9 @@ fn run() -> Result<()> {
             let text = git_show(&repo, &rev)?;
             // `show` is a one-shot snapshot: no watch, highlight default on.
             // Honor the user/project theme/layout config even for `show`.
-            let cfg = Config::load(&cwd);
-            let resolved_layout = layout
-                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
-                .unwrap_or(LayoutMode::Unified);
-            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
-                cfg.export_on_quit
-                    .as_deref()
-                    .map(ExportOnQuit::parse_str)
-                    .unwrap_or_default()
-            });
+            let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let resolved_layout = resolve_layout_opt(layout, &cfg)?;
+            let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -471,16 +465,9 @@ fn run() -> Result<()> {
             let bridge = parse_agent_bridge_options(focus, note, select, export_on_quit)?;
             let text = read_patch_input(&path)?;
             let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            let cfg = Config::load(&cwd);
-            let resolved_layout = layout
-                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
-                .unwrap_or(LayoutMode::Unified);
-            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
-                cfg.export_on_quit
-                    .as_deref()
-                    .map(ExportOnQuit::parse_str)
-                    .unwrap_or_default()
-            });
+            let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let resolved_layout = resolve_layout_opt(layout, &cfg)?;
+            let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -517,16 +504,9 @@ fn run() -> Result<()> {
                 eprintln!("(files are identical)");
                 return Ok(());
             }
-            let cfg = Config::load(&cwd);
-            let resolved_layout = layout
-                .or_else(|| cfg.layout.as_deref().map(LayoutMode::parse_str))
-                .unwrap_or(LayoutMode::Unified);
-            let export = bridge.export_on_quit_override.unwrap_or_else(|| {
-                cfg.export_on_quit
-                    .as_deref()
-                    .map(ExportOnQuit::parse_str)
-                    .unwrap_or_default()
-            });
+            let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
+            let resolved_layout = resolve_layout_opt(layout, &cfg)?;
+            let export = resolve_export_opt(bridge.export_on_quit_override, &cfg)?;
             open_review_from_text(
                 &text,
                 &[],
@@ -553,10 +533,13 @@ fn run() -> Result<()> {
             include_untracked,
             json,
         } => {
+            // Validate layered config even when inspect does not consume layout/
+            // theme — illegal enums must fail every subcommand (dogfood P1).
+            let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+            let _cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
             let (text, origins) = if let Some(path) = path {
                 (read_patch_input(&path)?, Vec::new())
             } else {
-                let cwd = std::env::current_dir()?;
                 let repo = find_repo(&cwd)?;
                 let scope = if all {
                     DiffScope::WorkingSet
@@ -596,7 +579,7 @@ fn run() -> Result<()> {
         Commands::Pager => {
             // Git pipes the diff to our stdin. Honor the user/project theme.
             let cwd = std::env::current_dir()?;
-            let cfg = Config::load(&cwd);
+            let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
             let mut buf = String::new();
             io::stdin()
                 .read_to_string(&mut buf)
@@ -610,11 +593,8 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
-            let resolved_layout = cfg
-                .layout
-                .as_deref()
-                .map(LayoutMode::parse_str)
-                .unwrap_or(LayoutMode::Unified);
+            let resolved_layout = resolve_layout_opt(None, &cfg)?;
+            let export = resolve_export_opt(None, &cfg)?;
             open_review_from_text(
                 &buf,
                 &[],
@@ -626,11 +606,7 @@ fn run() -> Result<()> {
                 resolved_layout,
                 workdir,
                 ReviewOptions {
-                    export_on_quit: cfg
-                        .export_on_quit
-                        .as_deref()
-                        .map(ExportOnQuit::parse_str)
-                        .unwrap_or_default(),
+                    export_on_quit: export,
                     ..Default::default()
                 },
                 None,
@@ -762,7 +738,7 @@ fn run_serve(
     let cwd = std::env::current_dir()?;
     let repo = find_repo(&cwd)?;
 
-    let cfg = Config::load(&cwd);
+    let cfg = Config::load(&cwd).map_err(|e| anyhow::anyhow!("{e}"))?;
     let resolved = ResolvedConfig::resolve(
         &cfg,
         &CliFlags {
@@ -774,7 +750,8 @@ fn run_serve(
             layout,
             export_on_quit: bridge.export_on_quit_override,
         },
-    );
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
     if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
         eprintln!("note: `--watch` requires the `watch` feature (rebuild with --features watch)");
@@ -1154,26 +1131,33 @@ fn run_serve(
 
 /// clap value_parser for `--layout`. Accepts unified|stack|split (case-insensitive).
 fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
-    match s.trim().to_lowercase().as_str() {
-        "unified" => Ok(LayoutMode::Unified),
-        "stack" => Ok(LayoutMode::Stack),
-        "split" => Ok(LayoutMode::Split),
-        other => Err(format!(
-            "unknown layout '{other}' (expected unified, stack, or split)"
-        )),
-    }
+    LayoutMode::try_parse(s)
 }
 
 /// clap value_parser for `--export-on-quit`. Accepts none|json|markdown|both.
 fn parse_export_on_quit_arg(s: &str) -> Result<ExportOnQuit, String> {
-    match s.trim().to_lowercase().as_str() {
-        "none" => Ok(ExportOnQuit::None),
-        "json" => Ok(ExportOnQuit::Json),
-        "markdown" | "md" => Ok(ExportOnQuit::Markdown),
-        "both" => Ok(ExportOnQuit::Both),
-        other => Err(format!(
-            "unknown export_on_quit '{other}' (expected none, json, markdown, or both)"
-        )),
+    ExportOnQuit::try_parse(s)
+}
+
+/// CLI layout flag (if any) wins; otherwise parse config strictly.
+fn resolve_layout_opt(cli: Option<LayoutMode>, cfg: &Config) -> Result<LayoutMode> {
+    match cli {
+        Some(l) => Ok(l),
+        None => match cfg.layout.as_deref() {
+            Some(s) => LayoutMode::try_parse(s).map_err(|e| anyhow::anyhow!("{e}")),
+            None => Ok(LayoutMode::Unified),
+        },
+    }
+}
+
+/// CLI export flag (if any) wins; otherwise parse config strictly.
+fn resolve_export_opt(cli: Option<ExportOnQuit>, cfg: &Config) -> Result<ExportOnQuit> {
+    match cli {
+        Some(e) => Ok(e),
+        None => match cfg.export_on_quit.as_deref() {
+            Some(s) => ExportOnQuit::try_parse(s).map_err(|e| anyhow::anyhow!("{e}")),
+            None => Ok(ExportOnQuit::None),
+        },
     }
 }
 
@@ -1287,7 +1271,16 @@ fn open_review_from_text(
         if options.select_mode {
             bail!("--select requires an interactive terminal (stdout is not a tty)");
         }
-        if options.focus.is_some() {
+        if let Some(ref focus) = options.focus {
+            // Non-TTY cannot open the TUI, so a focus miss would be invisible.
+            // Fail with a clear message (path + "not found") rather than the
+            // generic "requires tty" only — agents need the miss reason.
+            if next_hunk::tui::app::resolve_focus_row(&review, focus).is_none() {
+                bail!(
+                    "focus not found: {} (and stdout is not a tty)",
+                    next_hunk::tui::app::focus_display(focus)
+                );
+            }
             bail!("--focus requires an interactive terminal (stdout is not a tty)");
         }
         if !options.notes.is_empty() {
