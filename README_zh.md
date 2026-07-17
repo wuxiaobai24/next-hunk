@@ -211,11 +211,16 @@ git show HEAD   # → 启动 review TUI
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
 | `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
+| `v` | 进入 **visual 行区间选区**（锚在视口顶部代码行） |
+| `j` / `k`（visual 内） | 向下 / 向上扩选 |
+| `c` | 批注：当前行（normal）或选区（visual） |
+| `C` | 对当前 hunk 批注 |
+| Enter / Esc（批注输入） | 保存 / 取消批注 |
 | `?` | 切换全屏快捷键帮助 |
 | `a` / `r` / `u` | `--select`：接受 / 拒绝 / 未决 当前 hunk（自动跳下一处） |
 | `A` / `R` | `--select`：接受 / 拒绝 当前文件剩余 hunk |
 | `Ctrl-A` / `Ctrl-R` | `--select`：接受 / 拒绝 从当前位置起全部剩余 hunk |
-| `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
+| `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除搜索 / 取消 visual） |
 
 ## 配置
 

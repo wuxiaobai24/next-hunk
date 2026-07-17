@@ -342,24 +342,33 @@ want notes; use `navigate` for focus-only.
 next-hunk comment add --file src/auth.rs --line 42 "Extracted token validation — fixes the OOM"
 # ok: comment added with id c0
 
-next-hunk comment add --file src/auth.rs --hunk 1 "Key change is the boundary shift"
+next-hunk comment add --file src/auth.rs --line 40 --line-end 55 "Rewrite this whole block"
 # ok: comment added with id c1
+
+next-hunk comment add --file src/auth.rs --hunk 1 "Key change is the boundary shift"
+# ok: comment added with id c2
 ```
 
-Comments are stored on the session. `--line` targets a specific new-side source
-line; `--hunk` targets a 1-based hunk ordinal. If neither is given, the comment
-becomes a banner note.
+Comments are stored on the session.
+
+| Flag | Meaning |
+|------|---------|
+| `--line N` | new-side source line (or **range start** when `--line-end` is set) |
+| `--line-end M` | inclusive end of a new-side line range (requires `--line`) |
+| `--hunk N` | 1-based hunk ordinal |
+| (none) | banner note |
 
 ```bash
 next-hunk comment list
-# c0  src/auth.rs line=42  Extracted token validation — fixes the OOM
-# c1  src/auth.rs hunk=1   Key change is the boundary shift
+# c0  src/auth.rs line=42     Extracted token validation — fixes the OOM
+# c1  src/auth.rs line=40-55  Rewrite this whole block
+# c2  src/auth.rs hunk=1      Key change is the boundary shift
 
 next-hunk comment rm c0
 # ok: comment removed
 ```
 
-To show comments in the TUI as note annotations, run:
+To show CLI-added comments in the TUI as note annotations, run:
 
 ```bash
 next-hunk comment apply
@@ -367,7 +376,45 @@ next-hunk comment apply
 ```
 
 This merges all session comments into the TUI's note renderer, so the human
-sees them as `💬 c1: ...` rows below the target line/hunk.
+sees them as `💬 c1:…` rows below the target line/hunk. (Comments the human
+authors **inside** the TUI via `v`/`c` already render immediately.)
+
+#### How the human marks ranges (TUI)
+
+Without leaving the viewer:
+
+1. Scroll so the top of the viewport is on the code of interest.
+2. Press **`v`** — visual select anchors on the first code row in view.
+3. **`j` / `k`** extend the selection (status shows `file:start-end`).
+4. Press **`c`** — type the note at the bottom prompt; **Enter** saves.
+5. Or **`C`** for a whole-hunk comment; bare **`c`** in normal mode comments
+   the current top code line only.
+6. Quit with `export_on_quit=json` (or `both`) to dump the structured report.
+
+Selection state is **viewport-only** (two stream-row indices). It never forces
+full IR materialization — large fixtures stay under the same PERF gates.
+
+#### How agents parse range comments
+
+`export_on_quit` JSON and `comment list` use the same shape:
+
+```json
+{
+  "comments": [
+    {"id": "c0", "file": "src/auth.rs", "text": "single line", "line": 42},
+    {"id": "c1", "file": "src/auth.rs", "text": "rewrite block", "line": 40, "line_end": 55},
+    {"id": "c2", "file": "src/auth.rs", "text": "hunk note", "hunk": 1}
+  ]
+}
+```
+
+- **`line`** — start line (treat as `line_start`). Always the lower bound.
+- **`line_end`** — inclusive end; **omitted** for single-line comments.
+- **`hunk`** — 1-based hunk ordinal (hunk-level; no line fields).
+- No line/hunk fields → banner.
+
+When applying human feedback, prefer the tightest placement: range → rewrite
+that span; single line → that line; hunk → the whole hunk.
 
 ### 7. Agent: poll decisions
 
@@ -462,6 +509,8 @@ Once the TUI is open, the human navigates with:
 - `]h` / `[h` — next / previous hunk (wraps across files)
 - `Tab` / `h` / `l` — next / previous file
 - `zc` / `zo` — fold / unfold current file
+- `v` — visual range select; then `j`/`k` extend, `c` comment, Esc cancel
+- `c` / `C` — comment current line / current hunk (Enter saves)
 - `a` / `r` / `u` — (**`--select` / `serve` only**) accept / reject / mark undecided on the current hunk
 - `o` — open the focused line in `$EDITOR`
 - `#` — toggle line-number gutter
@@ -502,7 +551,8 @@ export_on_quit = "json"   # none | json | markdown | both
   "rejected": [],
   "undecided": ["src/util.rs:h1"],
   "comments": [
-    {"id": "c0", "file": "src/auth.rs", "text": "…", "hunk": 1}
+    {"id": "c0", "file": "src/auth.rs", "text": "…", "hunk": 1},
+    {"id": "c1", "file": "src/auth.rs", "text": "rewrite this", "line": 40, "line_end": 55}
   ],
   "notes": [
     {"file": "src/auth.rs", "text": "…", "line": 42}

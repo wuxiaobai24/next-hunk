@@ -443,7 +443,6 @@ fn apply_server_command(
     reloader: Option<&mut Reloader>,
     workdir: Option<&std::path::Path>,
 ) -> server::ServerReply {
-    use crate::tui::app::{Note, NoteTarget};
     use server::{ServerCommand, ServerReply};
     match command {
         ServerCommand::Push { focus, notes } => {
@@ -493,11 +492,20 @@ fn apply_server_command(
             file,
             text,
             line,
+            line_end,
             hunk,
         } => {
             if let Some(err) = unknown_review_path_error(&app.review, &file) {
                 return err;
             }
+            // Normalize range: keep `line` as the lower bound; drop line_end
+            // when it doesn't extend past the start; ignore end without start.
+            let (line, line_end) = match (line, line_end) {
+                (Some(s), Some(e)) if e > s => (Some(s), Some(e)),
+                (Some(s), Some(e)) if e < s => (Some(e), Some(s)),
+                (Some(s), _) => (Some(s), None),
+                (None, _) => (None, None),
+            };
             use std::sync::atomic::{AtomicU64, Ordering};
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             let id = format!("c{}", COUNTER.fetch_add(1, Ordering::SeqCst));
@@ -506,6 +514,7 @@ fn apply_server_command(
                 file,
                 text,
                 line,
+                line_end,
                 hunk,
             });
             ServerReply::CommentAdded { id }
@@ -527,28 +536,10 @@ fn apply_server_command(
         ServerCommand::CommentApply => {
             // Merge comments into notes for TUI rendering. Each comment
             // becomes a Note attached to the appropriate target.
-            let new_notes: Vec<Note> = app
+            let new_notes: Vec<crate::tui::app::Note> = app
                 .comments
                 .iter()
-                .map(|c| {
-                    let target = if let Some(hunk) = c.hunk {
-                        NoteTarget::Hunk {
-                            path: c.file.clone(),
-                            hunk,
-                        }
-                    } else if let Some(line) = c.line {
-                        NoteTarget::Line {
-                            path: c.file.clone(),
-                            line,
-                        }
-                    } else {
-                        NoteTarget::Banner
-                    };
-                    Note {
-                        target,
-                        text: format!("💬 {}: {}", c.id, c.text),
-                    }
-                })
+                .map(crate::tui::app::App::comment_entry_to_note)
                 .collect();
             app.notes.extend(new_notes);
             app.status = "comments applied".into();
@@ -1297,6 +1288,7 @@ diff --git a/a.rs b/a.rs
                 file: "ghost.rs".into(),
                 text: "x".into(),
                 line: None,
+                line_end: None,
                 hunk: None,
             },
             None,
@@ -1333,6 +1325,7 @@ diff --git a/a.rs b/a.rs
                 file: "b.rs".into(),
                 text: "look here".into(),
                 line: Some(1),
+                line_end: None,
                 hunk: None,
             },
             None,
