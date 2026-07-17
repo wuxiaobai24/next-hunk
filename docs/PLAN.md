@@ -4,7 +4,7 @@
 > 对标：[modem-dev/hunk](https://github.com/modem-dev/hunk)（体验与 agent 主路径，不是 monorepo 克隆）。  
 > 差异化保留：紧凑 IR + 视口物化性能、`--select` 审批闸门、纯 Rust 静态分发。
 
-当前版本：**0.3.0**。本文件是产品路线源；实现细节见 `ARCHITECTURE.md` / `PERF.md`。
+当前版本：**0.4.0**。本文件是产品路线源；实现细节见 `ARCHITECTURE.md` / `PERF.md`。
 
 ---
 

@@ -152,8 +152,8 @@ verify_checksum() {
 }
 
 # ---- cargo fallback ----------------------------------------------------------
-# Prefer crates.io (`cargo install next-hunk`) once published; fall back to the
-# GitHub repo so install still works before/without a crates.io release.
+# Prefer crates.io (`cargo install next-hunk`); fall back to the GitHub repo
+# when the registry is unreachable or the version is not published yet.
 install_via_cargo() {
   if ! command -v cargo >/dev/null 2>&1; then
     die "no prebuilt binary for ${OS}/${ARCH} and cargo is not installed. \

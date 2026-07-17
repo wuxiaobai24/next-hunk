@@ -21,7 +21,7 @@
 
 ## 状态
 
-`v0.4-dev` — 日常 review diff 可用：
+`v0.4.0` — 日常 review diff 可用：
 
 - [x] 项目骨架 + 紧凑 unified-diff IR（运行时模型）
 - [x] 视口查询（基于文件 span 的二分查找）
@@ -69,15 +69,7 @@
 ```bash
 cargo install next-hunk
 # 固定版本：
-cargo install next-hunk --version 0.3.0
-```
-
-若 crates.io 尚未上架（或需要 `main` 分支），改用 GitHub：
-
-```bash
-cargo install --git https://github.com/wuxiaobai24/next-hunk --locked
-cargo install --path .          # 本地克隆
-cargo run --release -- diff     # 不安装直接跑
+cargo install next-hunk --version 0.4.0
 ```
 
 ### Homebrew
@@ -121,8 +113,8 @@ curl -fsSL https://github.com/wuxiaobai24/next-hunk/raw/main/scripts/install.sh 
 | `x86_64-apple-darwin` | macOS Intel |
 
 ```bash
-# 示例：Linux x86_64 / 0.3.0 — 按平台改 VER 与 TARGET
-VER=0.3.0
+# 示例：Linux x86_64 / 0.4.0 — 按平台改 VER 与 TARGET
+VER=0.4.0
 TARGET=x86_64-musl   # 或 aarch64-musl / aarch64-apple-darwin / x86_64-apple-darwin
 curl -fsSL "https://github.com/wuxiaobai24/next-hunk/releases/download/v${VER}/next-hunk-${VER}-${TARGET}.tar.xz" \
   | tar -xJ
@@ -131,6 +123,14 @@ next-hunk --version
 ```
 
 完整列表与 `.sha256` 见 [Releases](https://github.com/wuxiaobai24/next-hunk/releases)。
+
+### 源码 / 开发安装
+
+```bash
+cargo install --git https://github.com/wuxiaobai24/next-hunk --locked   # 最新 main
+cargo install --path .          # 本地克隆
+cargo run --release -- diff     # 不安装直接跑
+```
 
 #### 自己编 dist 二进制
 
