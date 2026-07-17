@@ -399,6 +399,36 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
     }
 }
 
+/// If `path` is not in the live review's file set, return a clear
+/// [`server::ServerReply::Error`] that lists (or truncates) the valid paths.
+/// Agent-bridge commands (`navigate`, `comment add`) use this so a bad path
+/// never reports `ok`.
+#[cfg(all(feature = "serve", unix))]
+fn unknown_review_path_error(review: &Review, path: &str) -> Option<server::ServerReply> {
+    use crate::ir::ViewportQuery;
+    if ViewportQuery::file_index_for_path(review, path).is_some() {
+        return None;
+    }
+    const MAX_LIST: usize = 20;
+    let total = review.file_count();
+    let listed: Vec<&str> = review
+        .files
+        .iter()
+        .take(MAX_LIST)
+        .map(|f| f.display_path.as_str())
+        .collect();
+    let files = if total == 0 {
+        "(none)".to_string()
+    } else if total > MAX_LIST {
+        format!("{}, …", listed.join(", "))
+    } else {
+        listed.join(", ")
+    };
+    Some(server::ServerReply::Error {
+        message: format!("'{path}' is not in the current review (files: {files})"),
+    })
+}
+
 /// Apply one server-mode command to the app and produce the reply to send back
 /// to the CLI client. Lives here (not on `App`) because it bridges the
 /// `server::ServerCommand` wire type with the App state — `App` stays free of
@@ -450,6 +480,10 @@ fn apply_server_command(
             ServerReply::Review(server::ReviewSummary::from(&app.review))
         }
         ServerCommand::Navigate { target } => {
+            // Reject unknown paths so agent-bridge clients don't get a false ok.
+            if let Some(err) = unknown_review_path_error(&app.review, target.path()) {
+                return err;
+            }
             // Set focus target and apply it (same path as --focus).
             app.focus_target = Some(target);
             app.apply_focus();
@@ -461,6 +495,9 @@ fn apply_server_command(
             line,
             hunk,
         } => {
+            if let Some(err) = unknown_review_path_error(&app.review, &file) {
+                return err;
+            }
             use std::sync::atomic::{AtomicU64, Ordering};
             static COUNTER: AtomicU64 = AtomicU64::new(0);
             let id = format!("c{}", COUNTER.fetch_add(1, Ordering::SeqCst));
@@ -1189,6 +1226,125 @@ diff --git a/a.rs b/a.rs
                 );
             }
             other => panic!("expected Error, got {other:?}"),
+        }
+    }
+
+    /// `navigate` with a path not in the review must Error (not silent Ok).
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn navigate_unknown_path_returns_error() {
+        use crate::tui::app::FocusTarget;
+        use server::{ServerCommand, ServerReply};
+
+        let mut app = sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::Navigate {
+                target: FocusTarget::File("nope.rs".into()),
+            },
+            None,
+            None,
+        );
+        match reply {
+            ServerReply::Error { message } => {
+                assert!(
+                    message.contains("nope.rs")
+                        && message.contains("not in the current review")
+                        && message.contains("a.rs")
+                        && message.contains("b.rs"),
+                    "expected unknown-path message listing valid files, got: {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // Focus must not have been applied.
+        assert!(app.focus_target.is_none());
+    }
+
+    /// `navigate` with a known path still succeeds.
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn navigate_known_path_returns_ok() {
+        use crate::tui::app::FocusTarget;
+        use server::{ServerCommand, ServerReply};
+
+        let mut app = sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::Navigate {
+                target: FocusTarget::File("a.rs".into()),
+            },
+            None,
+            None,
+        );
+        assert!(
+            matches!(reply, ServerReply::Ok),
+            "expected Ok for known path, got {reply:?}"
+        );
+    }
+
+    /// `comment add --file` with a path not in the review must Error and not
+    /// append a ghost comment.
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn comment_add_unknown_path_returns_error() {
+        use server::{ServerCommand, ServerReply};
+
+        let mut app = sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "ghost.rs".into(),
+                text: "x".into(),
+                line: None,
+                hunk: None,
+            },
+            None,
+            None,
+        );
+        match reply {
+            ServerReply::Error { message } => {
+                assert!(
+                    message.contains("ghost.rs")
+                        && message.contains("not in the current review")
+                        && message.contains("a.rs"),
+                    "expected unknown-path message listing valid files, got: {message}"
+                );
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(
+            app.comments.is_empty(),
+            "ghost comment must not be stored: {:?}",
+            app.comments
+        );
+    }
+
+    /// `comment add` with a known file still succeeds.
+    #[cfg(all(feature = "serve", unix))]
+    #[test]
+    fn comment_add_known_path_returns_id() {
+        use server::{ServerCommand, ServerReply};
+
+        let mut app = sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "b.rs".into(),
+                text: "look here".into(),
+                line: Some(1),
+                hunk: None,
+            },
+            None,
+            None,
+        );
+        match reply {
+            ServerReply::CommentAdded { id } => {
+                assert!(!id.is_empty());
+                assert_eq!(app.comments.len(), 1);
+                assert_eq!(app.comments[0].file, "b.rs");
+            }
+            other => panic!("expected CommentAdded, got {other:?}"),
         }
     }
 
