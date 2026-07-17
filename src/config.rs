@@ -141,6 +141,10 @@ pub struct Config {
     pub wrap: Option<bool>,
     /// On quit, emit an agent-readable report: "none" | "json" | "markdown" | "both".
     pub export_on_quit: Option<String>,
+    /// When a live `serve` exists for this repo, `diff --focus` / `--note`
+    /// forwards as `push` instead of opening a second TUI. Default: true.
+    /// Set `false` (or pass `--no-forward`) to always open a one-shot TUI.
+    pub auto_forward: Option<bool>,
 }
 
 impl Config {
@@ -176,6 +180,9 @@ impl Config {
         }
         if other.export_on_quit.is_some() {
             self.export_on_quit = other.export_on_quit;
+        }
+        if other.auto_forward.is_some() {
+            self.auto_forward = other.auto_forward;
         }
         self
     }
@@ -222,11 +229,14 @@ pub struct ResolvedConfig {
     pub wrap: bool,
     /// Emit a structured review report when the TUI quits.
     pub export_on_quit: ExportOnQuit,
+    /// When true (default), `diff --focus`/`--note` forwards into a live serve.
+    pub auto_forward: bool,
 }
 
 impl Default for ResolvedConfig {
     fn default() -> Self {
         // Defaults: highlight on (matches existing TUI behavior), worktree/watch off.
+        // auto_forward on so agents need not list/push when a human already has serve.
         Self {
             scope: DiffScope::Worktree,
             highlight: true,
@@ -237,6 +247,7 @@ impl Default for ResolvedConfig {
             layout: LayoutMode::Unified,
             wrap: false,
             export_on_quit: ExportOnQuit::None,
+            auto_forward: true,
         }
     }
 }
@@ -262,6 +273,8 @@ pub struct CliFlags {
     pub layout: Option<LayoutMode>,
     /// `--export-on-quit <mode>` → `Some(ExportOnQuit)`; absent → `None`.
     pub export_on_quit: Option<ExportOnQuit>,
+    /// `--no-forward` → `Some(false)`; absent → `None` (use config/default).
+    pub auto_forward: Option<bool>,
 }
 
 impl ResolvedConfig {
@@ -289,6 +302,10 @@ impl ResolvedConfig {
                 .export_on_quit
                 .or_else(|| cfg.export_on_quit.as_deref().map(ExportOnQuit::parse_str))
                 .unwrap_or(d.export_on_quit),
+            auto_forward: cli
+                .auto_forward
+                .or(cfg.auto_forward)
+                .unwrap_or(d.auto_forward),
         }
     }
 }
@@ -502,6 +519,31 @@ mod tests {
         assert!(r.highlight); // default on
         assert!(!r.watch);
         assert!(r.line_numbers); // default on
+        assert!(r.auto_forward); // default on
+    }
+
+    #[test]
+    fn resolve_auto_forward_false_from_config() {
+        let cfg = Config {
+            auto_forward: Some(false),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        assert!(!r.auto_forward);
+    }
+
+    #[test]
+    fn resolve_no_forward_cli_overrides_config() {
+        let cfg = Config {
+            auto_forward: Some(true),
+            ..Default::default()
+        };
+        let cli = CliFlags {
+            auto_forward: Some(false), // --no-forward
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.auto_forward);
     }
 
     #[test]

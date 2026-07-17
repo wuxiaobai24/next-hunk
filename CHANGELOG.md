@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — CLI auto-forward into live serve
+- **`diff --focus` / `--note` auto-forwards when `serve` is live** — if a
+  `next-hunk serve` is already running for the current repo, `next-hunk diff
+  --focus … --note …` pushes into that TUI (same semantics as `push`) instead
+  of opening a second one-shot review. Works **without a TTY**, so agents can
+  prefer the CLI and skip `list` first. No live socket → existing one-shot
+  behavior unchanged. Does not apply to `--select` / `--watch` (those need
+  their own interactive session).
+- **`--no-forward` / `auto_forward = false`** — opt out of auto-forward and
+  always open a one-shot TUI. Default is `auto_forward = true`.
+
 ### Fixed — Agent bridge consistency (dogfood P1)
 - **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
   (and `--export-on-quit`), matching `diff`. Agents can point humans at a

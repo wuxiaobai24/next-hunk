@@ -303,6 +303,13 @@ next-hunk decision
 
 `serve` binds a Unix socket derived from the repo root, so `push`/`decision`
 run from anywhere in the same repo find it automatically — no `--socket` flag.
+
+**Auto-forward:** when a serve is live for the current repo,
+`next-hunk diff --focus … --note …` (without `--select` / `--watch`) pushes
+into that TUI instead of opening a second one-shot review. Works without a
+TTY so agents can prefer the CLI. Disable with `--no-forward` or
+`auto_forward = false` in config.
+
 Requires the `serve` feature (on by default) and a Unix OS; on other builds the
 subcommands report that they're unavailable. The `decision` output matches the
 `--select` quit shape, so an agent parses both identically.

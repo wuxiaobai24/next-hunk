@@ -235,7 +235,11 @@ next-hunk decision
 # {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
 ```
 
-`serve` 绑定一个由仓库根目录派生的 Unix socket，所以 `push`/`decision` 在同仓库任意位置运行都能自动找到它 —— 无需 `--socket` 参数。需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。
+`serve` 绑定一个由仓库根目录派生的 Unix socket，所以 `push`/`decision` 在同仓库任意位置运行都能自动找到它 —— 无需 `--socket` 参数。
+
+**无感转发：** 当前仓库已有 live `serve` 时，`next-hunk diff --focus … --note …`（不含 `--select` / `--watch`）会自动推入该 TUI，而不是再开一个 one-shot。无需 TTY，agent 可直接调 CLI。关闭：`--no-forward` 或配置 `auto_forward = false`。
+
+需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。
 
 ## 测试与基准
 

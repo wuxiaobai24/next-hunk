@@ -132,4 +132,4 @@
 - STML / 富文本 note  
 - OpenTUI 式可嵌入组件  
 - parse fuzz、增量 IR 编辑（非全量 reload）  
-- CLI「有 socket 就转发」无感切换（可评估，非必须）
+- ~~CLI「有 socket 就转发」无感切换~~ → done (WXB-9: `diff --focus/--note` auto-forward)
