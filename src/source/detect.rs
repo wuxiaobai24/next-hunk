@@ -8,7 +8,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, Result};
 
 use crate::config::VcsPreference;
 
@@ -48,13 +48,14 @@ pub fn detect_workspace(start: &Path, pref: VcsPreference) -> Result<Workspace> 
             }
             // Fall back to gix discover for linked worktrees / unusual layouts
             // where a bare `.git` file may not walk cleanly from our marker scan.
+            // Replace the error (no chain) so user-facing output stays short.
             crate::source::git::find_repo(start)
                 .map(|root| Workspace {
                     root,
                     kind: VcsKind::Git,
                 })
-                .with_context(|| {
-                    format!(
+                .map_err(|_| {
+                    anyhow!(
                         "not a git repository (or any parent): {} (vcs=git)",
                         start.display()
                     )

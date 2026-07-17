@@ -106,9 +106,13 @@ fn abs_path(path: &Path) -> PathBuf {
 }
 
 /// Open a repository discovered from `start`.
+///
+/// On failure returns a short user-facing message only — the underlying gix
+/// discovery string is intentionally discarded so CLI errors never leak
+/// library phrasing (see list --all-worktrees outside a repo).
 pub fn open_repo(start: &Path) -> Result<Repository> {
     gix::discover(start)
-        .with_context(|| format!("not a git repository (or any parent): {}", start.display()))
+        .map_err(|_| anyhow!("not a git repository (or any parent): {}", start.display()))
 }
 
 /// Diff two arbitrary files on disk, producing a unified-diff string.
