@@ -42,6 +42,7 @@
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
 - [x] Working-set 全量审查：`diff --all` / `scope = "working-set"`（staged+unstaged；文件栏 `S`/`M`/`?`）
+- [x] 分支级审查：`diff --base <rev>` / `--range A..B` / `--strategy upstream-ahead|merge-base`
 - [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
@@ -106,8 +107,12 @@ next-hunk                  # 工作区 diff（仅 unstaged）
 next-hunk diff --staged    # 仅 staged（`git diff --cached`）
 next-hunk diff --all       # 完整工作集：staged + unstaged
 next-hunk diff --all --include-untracked  # git status 里能看到的本地改动全量
+next-hunk diff --base origin/main   # 相对 base 的整支分支（含本地 worktree）
+next-hunk diff --strategy merge-base --base origin/main  # PR 视角：fork 点
+next-hunk diff --strategy upstream-ahead  # 相对 @{upstream}（merge-base）
+next-hunk diff --range main..HEAD   # 显式 commit range（同 show）
 next-hunk diff --watch     # 文件变化时实时重载
-next-hunk diff --include-untracked  # 包含未跟踪文件（worktree / --all）
+next-hunk diff --include-untracked  # 包含未跟踪文件（worktree / --all / --base）
 next-hunk filediff old.rs new.rs    # 对比磁盘上两个文件
 next-hunk show HEAD
 git diff | next-hunk patch -
@@ -167,6 +172,8 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | 字段 | 类型 | 默认 | 说明 |
 |------|------|------|------|
 | `scope` | string | `"worktree"` | `"worktree"`（unstaged）、`"staged"`、或 `"working-set"`（staged+unstaged；CLI `--all`） |
+| `strategy` | string | — | `"worktree"` / `"staged"` / `"working-set"` / `"upstream-ahead"` / `"merge-base"`（CLI `--strategy`） |
+| `base` | string | — | 分支审查默认 base rev（CLI `--base`；可与 `strategy = "merge-base"` 联用） |
 | `staged` | bool | `false` | 兼容别名：未设置 `scope` 时 `staged = true` 等价于 `scope = "staged"` |
 | `highlight` | bool | `true` | 语法高亮 |
 | `watch` | bool | `false` | 文件变化时实时重载 |

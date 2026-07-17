@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Branch-level base / range review (WXB-8)
+- **`diff --base <rev>`** — review the whole branch (and local worktree) against
+  a base revision, like `git diff <rev>`. File rail shows +/− relative to that
+  base. Same flags on `serve` and `inspect` (`inspect --base origin/main --json`).
+- **`diff --range A..B` / `A...B`** — explicit commit range (same semantics as
+  `show`). Prefer this when you want committed-only trees without worktree noise.
+- **`--strategy`** — `worktree` | `staged` | `working-set` | `upstream-ahead`
+  (vs `@{upstream}`, merge-base style) | `merge-base` (requires `--base <branch>`
+  for PR-style fork-point left side). Config: `strategy` + optional `base`.
+- Large branch diffs still go through the unified-diff IR + viewport path (no
+  full-widget fallback). README + skill recommend agents use `--base` after
+  finishing a feature branch.
+
 ### Fixed — Agent bridge consistency (dogfood P1)
 - **`show` / `patch` / `filediff` accept `--focus` / `--note` / `--select`**
   (and `--export-on-quit`), matching `diff`. Agents can point humans at a

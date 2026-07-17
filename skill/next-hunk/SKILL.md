@@ -45,17 +45,43 @@ and **misses staged** files — a half review.
 | Unstaged only (default) | `next-hunk diff` |
 | Staged only | `next-hunk diff --staged` |
 | Staged + unstaged, no untracked | `next-hunk diff --all` |
+| **Whole feature branch vs main** (recommended after finishing a feature) | `next-hunk diff --base origin/main` |
+| PR-style fork point (merge-base) | `next-hunk diff --strategy merge-base --base origin/main` |
+| Commits ahead of `@{upstream}` | `next-hunk diff --strategy upstream-ahead` |
+| Explicit range (same as `show`) | `next-hunk diff --range main..HEAD` |
 
-Config equivalent of the recommended path:
+### After finishing a feature branch
+
+When the human should review **everything the branch changed relative to
+upstream/main** (not just uncommitted worktree noise), prefer a base review:
+
+```bash
+# Direct base tree vs worktree (includes local uncommitted edits):
+next-hunk diff --base origin/main \
+  --focus <path>:<line> --note banner="feature complete — full branch vs main"
+
+# PR-style: left side is merge-base(origin/main, HEAD):
+next-hunk diff --strategy merge-base --base origin/main
+```
+
+`inspect --base origin/main --json` gives the same structure headless (no TUI).
+Large branch diffs still use viewport IR — do not fall back to dumping the full
+patch into chat.
+
+Config equivalent of the recommended local path:
 
 ```toml
 # .next-hunk/config.toml  or  ~/.config/next-hunk/config.toml
 scope = "working-set"
 include_untracked = true
+# Optional default branch base:
+# base = "origin/main"
+# strategy = "merge-base"
 ```
 
 In the file rail, origins are marked **`S`** staged / **`M`** modified /
-**`?`** untracked. A path with both staged and unstaged hunks appears twice.
+**`?`** untracked for local scopes. Base/range reviews show +/− relative to the
+chosen base (rail still lists per-file insert/delete counts).
 
 Default remains worktree-only so everyday `git diff` muscle memory is unchanged.
 

@@ -49,6 +49,71 @@ impl DiffScope {
     }
 }
 
+/// High-level diff selection for `diff` / `serve` / `inspect`.
+///
+/// Local scopes stay the default. Branch-level reviews use [`Self::AgainstBase`]
+/// (`--base` / `--strategy upstream-ahead|merge-base`) or [`Self::Range`]
+/// (`--range A..B`). All paths still produce unified-diff text for the IR layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DiffRequest {
+    /// Local worktree / staged / working-set buckets.
+    Local(DiffScope),
+    /// Base tree (optionally merge-base with HEAD) vs worktree — like
+    /// `git diff <base>` / PR-style review of the whole branch + local edits.
+    AgainstBase {
+        base: String,
+        use_merge_base: bool,
+    },
+    /// Explicit range `A..B` or `A...B` (same semantics as `show`).
+    Range(String),
+}
+
+impl Default for DiffRequest {
+    fn default() -> Self {
+        DiffRequest::Local(DiffScope::Worktree)
+    }
+}
+
+/// Named strategies for choosing a [`DiffRequest`] (CLI `--strategy` / config).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffStrategy {
+    /// Unstaged worktree only (default local mode).
+    #[default]
+    Worktree,
+    /// Staged only.
+    Staged,
+    /// Staged + unstaged.
+    WorkingSet,
+    /// Diff against the current branch's `@{upstream}` (merge-base style).
+    UpstreamAhead,
+    /// Diff against merge-base(`--base`, HEAD); requires an explicit base rev.
+    MergeBase,
+}
+
+impl DiffStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DiffStrategy::Worktree => "worktree",
+            DiffStrategy::Staged => "staged",
+            DiffStrategy::WorkingSet => "working-set",
+            DiffStrategy::UpstreamAhead => "upstream-ahead",
+            DiffStrategy::MergeBase => "merge-base",
+        }
+    }
+
+    /// Parse CLI/config values. Unknown → `None` (caller keeps other defaults).
+    pub fn parse_str(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "worktree" | "unstaged" | "wt" => Some(DiffStrategy::Worktree),
+            "staged" | "cached" | "index" => Some(DiffStrategy::Staged),
+            "working-set" | "working_set" | "all" | "ws" => Some(DiffStrategy::WorkingSet),
+            "upstream-ahead" | "upstream_ahead" | "upstream" => Some(DiffStrategy::UpstreamAhead),
+            "merge-base" | "merge_base" | "mb" => Some(DiffStrategy::MergeBase),
+            _ => None,
+        }
+    }
+}
+
 /// Layout mode for the diff stream pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LayoutMode {
@@ -127,6 +192,13 @@ pub struct Config {
     /// Diff bucket scope: `"worktree"` | `"staged"` | `"working-set"`.
     /// Preferred over `staged` when both are set.
     pub scope: Option<String>,
+    /// Default branch-level strategy: `"worktree"` | `"staged"` | `"working-set"` |
+    /// `"upstream-ahead"` | `"merge-base"`. Used when CLI omits `--strategy` /
+    /// `--base` / `--range`. Branch strategies still need a base or upstream.
+    pub strategy: Option<String>,
+    /// Default base revision for branch reviews (e.g. `"origin/main"`).
+    /// Combined with `strategy = "merge-base"` or CLI `--base` overrides.
+    pub base: Option<String>,
     pub highlight: Option<bool>,
     pub watch: Option<bool>,
     /// Show a line-number gutter column.
@@ -152,6 +224,12 @@ impl Config {
         }
         if other.scope.is_some() {
             self.scope = other.scope;
+        }
+        if other.strategy.is_some() {
+            self.strategy = other.strategy;
+        }
+        if other.base.is_some() {
+            self.base = other.base;
         }
         if other.highlight.is_some() {
             self.highlight = other.highlight;
@@ -205,13 +283,15 @@ impl Config {
 /// The effective values after merging config layers with CLI flags.
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
-    /// Which local change buckets to review.
+    /// Which local change buckets to review (when [`Self::request`] is local).
     pub scope: DiffScope,
+    /// Fully resolved what to diff (local / base / range).
+    pub request: DiffRequest,
     pub highlight: bool,
     pub watch: bool,
     /// Show a line-number gutter column. ON by default.
     pub line_numbers: bool,
-    /// Include untracked files in worktree / working-set diff. OFF by default (safe).
+    /// Include untracked files in worktree / working-set / base diff. OFF by default (safe).
     pub include_untracked: bool,
     /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
     /// (dark). Config-only in this pass — no CLI flag yet.
@@ -229,6 +309,7 @@ impl Default for ResolvedConfig {
         // Defaults: highlight on (matches existing TUI behavior), worktree/watch off.
         Self {
             scope: DiffScope::Worktree,
+            request: DiffRequest::Local(DiffScope::Worktree),
             highlight: true,
             watch: false,
             line_numbers: true,
@@ -252,6 +333,12 @@ pub struct CliFlags {
     pub staged: Option<bool>,
     /// `--all` → full working-set (staged + unstaged).
     pub all: Option<bool>,
+    /// `--base <rev>` — branch-level review against this revision.
+    pub base: Option<String>,
+    /// `--range A..B` / `A...B` — explicit commit range (same as `show`).
+    pub range: Option<String>,
+    /// `--strategy <name>` — worktree | staged | working-set | upstream-ahead | merge-base.
+    pub strategy: Option<DiffStrategy>,
     /// `--watch` / no flag.
     pub watch: Option<bool>,
     /// `--no-highlight` → `Some(false)`; absent → `None`.
@@ -268,10 +355,16 @@ impl ResolvedConfig {
     /// Resolve the final config.
     ///
     /// CLI `Some` wins; otherwise the merged config; otherwise defaults.
+    ///
+    /// Branch-level requests that need a live repo (upstream resolution) are
+    /// completed by [`Self::resolve_request`] once the repo path is known.
     pub fn resolve(cfg: &Config, cli: &CliFlags) -> Self {
         let d = Self::default();
+        let scope = resolve_scope(cfg, cli);
+        let request = resolve_request_partial(cfg, cli, scope);
         Self {
-            scope: resolve_scope(cfg, cli),
+            scope,
+            request,
             highlight: cli.highlight.or(cfg.highlight).unwrap_or(d.highlight),
             watch: cli.watch.or(cfg.watch).unwrap_or(d.watch),
             line_numbers: cfg.line_numbers.unwrap_or(d.line_numbers),
@@ -291,7 +384,31 @@ impl ResolvedConfig {
                 .unwrap_or(d.export_on_quit),
         }
     }
+
+    /// Finish resolving [`Self::request`] when it needs the repository
+    /// (e.g. `upstream-ahead` → tracking ref). Call after discovering the repo.
+    pub fn finalize_request(
+        &mut self,
+        resolve_upstream: impl FnOnce() -> anyhow::Result<String>,
+    ) -> anyhow::Result<()> {
+        match &self.request {
+            DiffRequest::AgainstBase { base, use_merge_base }
+                if base == UPSTREAM_PLACEHOLDER =>
+            {
+                let up = resolve_upstream()?;
+                self.request = DiffRequest::AgainstBase {
+                    base: up,
+                    use_merge_base: *use_merge_base,
+                };
+            }
+            _ => {}
+        }
+        Ok(())
+    }
 }
+
+/// Sentinel base string meaning "resolve @{upstream} at finalize time".
+pub const UPSTREAM_PLACEHOLDER: &str = "@{upstream}";
 
 /// Resolve [`DiffScope`] from CLI + config.
 ///
@@ -316,6 +433,54 @@ fn resolve_scope(cfg: &Config, cli: &CliFlags) -> DiffScope {
         return DiffScope::Staged;
     }
     DiffScope::Worktree
+}
+
+/// Build a [`DiffRequest`] from CLI + config (before live upstream resolution).
+///
+/// Precedence (highest first):
+/// 1. CLI `--range`
+/// 2. CLI `--base` (merge-base if `--strategy merge-base`)
+/// 3. CLI `--strategy upstream-ahead` / `merge-base` / local strategies
+/// 4. Config `strategy` + `base`
+/// 5. Local [`DiffScope`] from staged/all/scope
+fn resolve_request_partial(cfg: &Config, cli: &CliFlags, scope: DiffScope) -> DiffRequest {
+    if let Some(range) = cli.range.as_ref().filter(|s| !s.is_empty()) {
+        return DiffRequest::Range(range.clone());
+    }
+
+    let strategy = cli
+        .strategy
+        .or_else(|| cfg.strategy.as_deref().and_then(DiffStrategy::parse_str));
+    let base = cli
+        .base
+        .clone()
+        .or_else(|| cfg.base.clone())
+        .filter(|s| !s.is_empty());
+
+    // Explicit --base wins (optionally merge-base via strategy).
+    if let Some(base) = base {
+        let use_merge_base = matches!(strategy, Some(DiffStrategy::MergeBase));
+        return DiffRequest::AgainstBase {
+            base,
+            use_merge_base,
+        };
+    }
+
+    match strategy {
+        Some(DiffStrategy::UpstreamAhead) => DiffRequest::AgainstBase {
+            base: UPSTREAM_PLACEHOLDER.to_string(),
+            use_merge_base: true,
+        },
+        Some(DiffStrategy::MergeBase) => {
+            // No base provided — keep local scope; main will error if merge-base
+            // was requested without a base. Prefer a clear runtime message.
+            DiffRequest::Local(scope)
+        }
+        Some(DiffStrategy::Worktree) => DiffRequest::Local(DiffScope::Worktree),
+        Some(DiffStrategy::Staged) => DiffRequest::Local(DiffScope::Staged),
+        Some(DiffStrategy::WorkingSet) => DiffRequest::Local(DiffScope::WorkingSet),
+        None => DiffRequest::Local(scope),
+    }
 }
 
 // ─── file discovery ───────────────────────────────────────────────────────────
@@ -499,9 +664,73 @@ mod tests {
         let cfg = Config::default();
         let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
         assert_eq!(r.scope, DiffScope::Worktree);
+        assert_eq!(r.request, DiffRequest::Local(DiffScope::Worktree));
         assert!(r.highlight); // default on
         assert!(!r.watch);
         assert!(r.line_numbers); // default on
+    }
+
+    #[test]
+    fn resolve_cli_base_against_base() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            base: Some("origin/main".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(
+            r.request,
+            DiffRequest::AgainstBase {
+                base: "origin/main".into(),
+                use_merge_base: false,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_cli_base_with_merge_base_strategy() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            base: Some("origin/main".into()),
+            strategy: Some(DiffStrategy::MergeBase),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(
+            r.request,
+            DiffRequest::AgainstBase {
+                base: "origin/main".into(),
+                use_merge_base: true,
+            }
+        );
+    }
+
+    #[test]
+    fn resolve_cli_range() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            range: Some("main..HEAD".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(r.request, DiffRequest::Range("main..HEAD".into()));
+    }
+
+    #[test]
+    fn resolve_cli_upstream_ahead_strategy() {
+        let cfg = Config::default();
+        let cli = CliFlags {
+            strategy: Some(DiffStrategy::UpstreamAhead),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert_eq!(
+            r.request,
+            DiffRequest::AgainstBase {
+                base: UPSTREAM_PLACEHOLDER.into(),
+                use_merge_base: true,
+            }
+        );
     }
 
     #[test]

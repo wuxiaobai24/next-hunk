@@ -12,11 +12,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use next_hunk::config::DiffScope;
+use next_hunk::config::{DiffRequest, DiffScope};
 use next_hunk::ir::FileOrigin;
 use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
 use next_hunk::source::{
-    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, open_repo,
+    find_repo, git_diff, git_diff_produced, git_diff_request, git_file_diff, git_show, open_repo,
 };
 
 /// Skip the test if `git` is unavailable.
@@ -497,4 +497,129 @@ fn filediff_with_relative_paths() {
     assert!(!text.trim().is_empty());
     let review = parse_unified_diff(&text).unwrap();
     assert_eq!(review.file_count(), 1);
+}
+
+/// Branch with commits on `main` and `feature`, plus uncommitted worktree edits.
+/// Used for `--base` / `--range` / merge-base reviews.
+fn setup_branch_repo() -> RepoGuard {
+    let repo = RepoGuard::new();
+    let root = repo.path();
+    write(&root.join("base.txt"), "base-v1\n");
+    write(&root.join("shared.txt"), "shared-v1\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "main base"]);
+    // Ensure the default branch is named main for explicit --base main tests.
+    git_in(root, &["branch", "-M", "main"]);
+
+    git_in(root, &["checkout", "-q", "-b", "feature"]);
+    write(&root.join("feature.txt"), "feature only\n");
+    write(&root.join("shared.txt"), "shared-v2-on-feature\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "feature commit"]);
+
+    // Uncommitted worktree edit on the feature branch.
+    write(&root.join("shared.txt"), "shared-v3-worktree\n");
+    write(&root.join("wip.txt"), "untracked-ish worktree file\n");
+    git_in(root, &["add", "wip.txt"]); // staged new file
+    write(&root.join("wip.txt"), "staged then further edited\n"); // unstaged on top
+    repo
+}
+
+#[test]
+fn base_diff_reviews_full_branch_plus_worktree() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_branch_repo();
+    let request = DiffRequest::AgainstBase {
+        base: "main".into(),
+        use_merge_base: false,
+    };
+    let produced = git_diff_request(&repo.workdir(), &request, &[], false).unwrap();
+    assert!(
+        !produced.is_empty(),
+        "base main..worktree should not be empty"
+    );
+
+    let review = parse_unified_diff(&produced.text).unwrap();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("feature.txt")),
+        "branch-added file should appear vs main: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("shared.txt")),
+        "shared file changed on branch+worktree should appear: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p.ends_with("wip.txt")),
+        "local staged/worktree file should appear vs main: {paths:?}"
+    );
+
+    // Viewport IR path: materialize only a window, not the full widget tree.
+    let rows = ViewportQuery::rows(
+        &review,
+        Viewport {
+            start: 0,
+            height: review.stream_len.min(16),
+        },
+        &std::collections::HashSet::new(),
+    );
+    assert!(!rows.is_empty());
+    assert!(rows.len() <= 16);
+}
+
+#[test]
+fn base_merge_base_strategy_uses_fork_point() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_branch_repo();
+    // Discard uncommitted noise so we can switch branches and advance main.
+    git_in(repo.path(), &["reset", "--hard", "-q"]);
+    git_in(repo.path(), &["clean", "-fdq"]);
+    // Advance main after the fork so direct base vs merge-base can differ in
+    // general; here we only assert merge-base mode succeeds and includes the
+    // feature commit files.
+    git_in(repo.path(), &["checkout", "-q", "main"]);
+    write(&repo.path().join("base.txt"), "base-v2-on-main\n");
+    git_in(repo.path(), &["add", "base.txt"]);
+    git_in(repo.path(), &["commit", "-q", "-m", "main advances"]);
+    git_in(repo.path(), &["checkout", "-q", "feature"]);
+
+    let request = DiffRequest::AgainstBase {
+        base: "main".into(),
+        use_merge_base: true,
+    };
+    let produced = git_diff_request(&repo.workdir(), &request, &[], false).unwrap();
+    let review = parse_unified_diff(&produced.text).unwrap();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("feature.txt")),
+        "merge-base review should still show feature-only files: {paths:?}"
+    );
+}
+
+#[test]
+fn range_diff_matches_show() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_branch_repo();
+    let show = git_show(&repo.workdir(), "main..HEAD").unwrap();
+    let produced = git_diff_request(
+        &repo.workdir(),
+        &DiffRequest::Range("main..HEAD".into()),
+        &[],
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        produced.text, show,
+        "diff --range should match show for the same revspec"
+    );
+    let review = parse_unified_diff(&produced.text).unwrap();
+    assert!(review.file_count() >= 1);
 }

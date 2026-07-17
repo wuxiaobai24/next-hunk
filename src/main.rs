@@ -6,9 +6,13 @@ use std::process::ExitCode;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
-use next_hunk::config::{CliFlags, Config, DiffScope, ExportOnQuit, LayoutMode, ResolvedConfig};
+use next_hunk::config::{
+    CliFlags, Config, DiffRequest, DiffStrategy, ExportOnQuit, LayoutMode, ResolvedConfig,
+};
 use next_hunk::ir::{parse_unified_diff, FileOrigin, Review};
-use next_hunk::source::{find_repo, git_diff_produced, git_file_diff, git_show, open_repo};
+use next_hunk::source::{
+    find_repo, git_diff_request, git_file_diff, git_show, open_repo, resolve_upstream_rev,
+};
 use next_hunk::tui::app::ReviewReport;
 use next_hunk::tui::{run_review_tui, ReviewOptions};
 
@@ -25,18 +29,32 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Review working-tree (or staged / full working-set) diff.
+    /// Review working-tree (or staged / full working-set / branch-level) diff.
     Diff {
         /// Review staged changes (`git diff --cached`).
-        #[arg(long, short = 's', conflicts_with = "all")]
+        #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
         staged: bool,
         /// Review the full working set: staged + unstaged (+ optional untracked).
         ///
         /// One command to see everything `git status` would list as local
         /// changes. File rail marks origins as `S` staged / `M` modified /
         /// `?` untracked when `--include-untracked` is set.
-        #[arg(long, short = 'a', conflicts_with = "staged")]
+        #[arg(long, short = 'a', conflicts_with_all = ["staged", "base", "range"])]
         all: bool,
+        /// Branch-level review against `<rev>` (like `git diff <rev>`): base
+        /// tree vs worktree, including uncommitted edits. File rail shows
+        /// +/− relative to that base. Use with `--strategy merge-base` for
+        /// PR-style `merge-base(<rev>, HEAD)` as the left side.
+        #[arg(long, conflicts_with_all = ["staged", "all", "range"])]
+        base: Option<String>,
+        /// Explicit commit range `A..B` or `A...B` (same as `show <range>`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "base"])]
+        range: Option<String>,
+        /// Diff strategy: `worktree` | `staged` | `working-set` |
+        /// `upstream-ahead` (relative to `@{upstream}`, merge-base style) |
+        /// `merge-base` (requires `--base <branch>`).
+        #[arg(long, value_parser = parse_strategy_arg)]
+        strategy: Option<DiffStrategy>,
         /// Re-run on filesystem changes (live reload). Requires the `watch`
         /// feature; otherwise reports that it is unavailable.
         #[arg(long)]
@@ -44,7 +62,7 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
-        /// Include untracked files in worktree / working-set diff (default: off).
+        /// Include untracked files in worktree / working-set / base diff (default: off).
         #[arg(long)]
         include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
@@ -150,12 +168,21 @@ enum Commands {
     Inspect {
         /// Path to patch file, or `-` for stdin. If omitted, uses worktree diff.
         path: Option<PathBuf>,
-        #[arg(long, short = 's', conflicts_with = "all")]
+        #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
         staged: bool,
         /// Full working set (staged + unstaged); see `diff --all`.
-        #[arg(long, short = 'a', conflicts_with = "staged")]
+        #[arg(long, short = 'a', conflicts_with_all = ["staged", "base", "range"])]
         all: bool,
-        /// Include untracked files when reviewing the worktree / working-set.
+        /// Branch-level base revision (see `diff --base`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "range"])]
+        base: Option<String>,
+        /// Explicit range `A..B` / `A...B` (see `diff --range`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "base"])]
+        range: Option<String>,
+        /// Diff strategy (see `diff --strategy`).
+        #[arg(long, value_parser = parse_strategy_arg)]
+        strategy: Option<DiffStrategy>,
+        /// Include untracked files when reviewing the worktree / working-set / base.
         #[arg(long)]
         include_untracked: bool,
         /// Emit file/hunk structure as JSON (same shape as `next-hunk review`).
@@ -172,11 +199,20 @@ enum Commands {
     /// accept/reject results.
     Serve {
         /// Review staged changes (`git diff --cached`).
-        #[arg(long, short = 's', conflicts_with = "all")]
+        #[arg(long, short = 's', conflicts_with_all = ["all", "base", "range"])]
         staged: bool,
         /// Review the full working set: staged + unstaged (+ optional untracked).
-        #[arg(long, short = 'a', conflicts_with = "staged")]
+        #[arg(long, short = 'a', conflicts_with_all = ["staged", "base", "range"])]
         all: bool,
+        /// Branch-level review against `<rev>` (see `diff --base`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "range"])]
+        base: Option<String>,
+        /// Explicit commit range (see `diff --range`).
+        #[arg(long, conflicts_with_all = ["staged", "all", "base"])]
+        range: Option<String>,
+        /// Diff strategy (see `diff --strategy`).
+        #[arg(long, value_parser = parse_strategy_arg)]
+        strategy: Option<DiffStrategy>,
         /// Re-run on filesystem changes (live reload). Requires the `watch`
         /// feature.
         #[arg(long)]
@@ -184,7 +220,7 @@ enum Commands {
         /// Disable syntax highlighting (overrides config/highlight default).
         #[arg(long)]
         no_highlight: bool,
-        /// Include untracked files in worktree / working-set diff (default: off).
+        /// Include untracked files in worktree / working-set / base diff (default: off).
         #[arg(long)]
         include_untracked: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
@@ -333,6 +369,9 @@ fn run() -> Result<()> {
     match cli.command.unwrap_or(Commands::Diff {
         staged: false,
         all: false,
+        base: None,
+        range: None,
+        strategy: None,
         watch: false,
         no_highlight: false,
         include_untracked: false,
@@ -346,6 +385,9 @@ fn run() -> Result<()> {
         Commands::Diff {
             staged,
             all,
+            base,
+            range,
+            strategy,
             watch,
             no_highlight,
             include_untracked,
@@ -368,11 +410,14 @@ fn run() -> Result<()> {
             // Layered config: project (.next-hunk/config.toml) > user
             // (~/.config/next-hunk/config.toml). CLI flags override on top.
             let cfg = Config::load(&cwd);
-            let resolved = ResolvedConfig::resolve(
+            let mut resolved = ResolvedConfig::resolve(
                 &cfg,
                 &CliFlags {
                     staged: if staged { Some(true) } else { None },
                     all: if all { Some(true) } else { None },
+                    base,
+                    range,
+                    strategy,
                     watch: if watch { Some(true) } else { None },
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
@@ -380,6 +425,7 @@ fn run() -> Result<()> {
                     export_on_quit: options.export_on_quit_override,
                 },
             );
+            validate_and_finalize_request(&mut resolved, &repo, strategy)?;
 
             if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
                 eprintln!(
@@ -387,12 +433,16 @@ fn run() -> Result<()> {
                 );
             }
 
-            let produced =
-                git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
+            let produced = git_diff_request(
+                &repo,
+                &resolved.request,
+                &extra,
+                resolved.include_untracked,
+            )?;
             let reloader = if resolved.watch {
                 Some(make_diff_reloader(
                     repo.clone(),
-                    resolved.scope,
+                    resolved.request.clone(),
                     extra,
                     resolved.include_untracked,
                 ))
@@ -550,6 +600,9 @@ fn run() -> Result<()> {
             path,
             staged,
             all,
+            base,
+            range,
+            strategy,
             include_untracked,
             json,
         } => {
@@ -558,14 +611,30 @@ fn run() -> Result<()> {
             } else {
                 let cwd = std::env::current_dir()?;
                 let repo = find_repo(&cwd)?;
-                let scope = if all {
-                    DiffScope::WorkingSet
-                } else if staged {
-                    DiffScope::Staged
-                } else {
-                    DiffScope::Worktree
-                };
-                let produced = git_diff_produced(&repo, scope, &[], include_untracked)?;
+                let cfg = Config::load(&cwd);
+                let mut resolved = ResolvedConfig::resolve(
+                    &cfg,
+                    &CliFlags {
+                        staged: if staged { Some(true) } else { None },
+                        all: if all { Some(true) } else { None },
+                        base,
+                        range,
+                        strategy,
+                        include_untracked: if include_untracked {
+                            Some(true)
+                        } else {
+                            None
+                        },
+                        ..Default::default()
+                    },
+                );
+                validate_and_finalize_request(&mut resolved, &repo, strategy)?;
+                let produced = git_diff_request(
+                    &repo,
+                    &resolved.request,
+                    &[],
+                    resolved.include_untracked,
+                )?;
                 (produced.text, produced.origins)
             };
             if text.trim().is_empty() {
@@ -639,6 +708,9 @@ fn run() -> Result<()> {
         Commands::Serve {
             staged,
             all,
+            base,
+            range,
+            strategy,
             watch,
             no_highlight,
             include_untracked,
@@ -650,6 +722,9 @@ fn run() -> Result<()> {
         } => run_serve(
             staged,
             all,
+            base,
+            range,
+            strategy,
             watch,
             no_highlight,
             include_untracked,
@@ -718,17 +793,55 @@ fn parse_agent_bridge_options(
 }
 
 /// Build the live-reload closure for `--watch`: re-runs the same git diff.
-/// Captures the repo path, scope, pathspecs, and untracked flag by value.
+/// Captures the repo path, request, pathspecs, and untracked flag by value.
 fn make_diff_reloader(
     repo: PathBuf,
-    scope: DiffScope,
+    request: DiffRequest,
     extra: Vec<String>,
     include_untracked: bool,
 ) -> next_hunk::tui::Reloader {
     Box::new(move || {
-        git_diff_produced(&repo, scope, &extra, include_untracked)
+        git_diff_request(&repo, &request, &extra, include_untracked)
             .context("re-run git diff for --watch")
     })
+}
+
+/// Validate strategy/base combos and resolve `@{upstream}` when needed.
+fn validate_and_finalize_request(
+    resolved: &mut ResolvedConfig,
+    repo: &std::path::Path,
+    strategy_flag: Option<DiffStrategy>,
+) -> Result<()> {
+    let strategy = strategy_flag.or_else(|| {
+        // Detect merge-base / upstream from the already-built request.
+        match &resolved.request {
+            DiffRequest::AgainstBase {
+                base,
+                use_merge_base: true,
+            } if base == next_hunk::config::UPSTREAM_PLACEHOLDER => {
+                Some(DiffStrategy::UpstreamAhead)
+            }
+            DiffRequest::AgainstBase {
+                use_merge_base: true,
+                ..
+            } => Some(DiffStrategy::MergeBase),
+            _ => None,
+        }
+    });
+    if matches!(strategy, Some(DiffStrategy::MergeBase)) {
+        match &resolved.request {
+            DiffRequest::AgainstBase { .. } => {}
+            DiffRequest::Local(_) => {
+                bail!(
+                    "--strategy merge-base requires --base <branch> \
+                     (e.g. next-hunk diff --strategy merge-base --base origin/main)"
+                );
+            }
+            DiffRequest::Range(_) => {}
+        }
+    }
+    resolved.finalize_request(|| resolve_upstream_rev(repo))?;
+    Ok(())
 }
 
 /// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
@@ -741,6 +854,9 @@ fn make_diff_reloader(
 fn run_serve(
     staged: bool,
     all: bool,
+    base: Option<String>,
+    range: Option<String>,
+    strategy: Option<DiffStrategy>,
     watch: bool,
     no_highlight: bool,
     include_untracked: bool,
@@ -763,11 +879,14 @@ fn run_serve(
     let repo = find_repo(&cwd)?;
 
     let cfg = Config::load(&cwd);
-    let resolved = ResolvedConfig::resolve(
+    let mut resolved = ResolvedConfig::resolve(
         &cfg,
         &CliFlags {
             staged: if staged { Some(true) } else { None },
             all: if all { Some(true) } else { None },
+            base,
+            range,
+            strategy,
             watch: if watch { Some(true) } else { None },
             highlight: if no_highlight { Some(false) } else { None },
             include_untracked: if include_untracked { Some(true) } else { None },
@@ -775,6 +894,7 @@ fn run_serve(
             export_on_quit: bridge.export_on_quit_override,
         },
     );
+    validate_and_finalize_request(&mut resolved, &repo, strategy)?;
 
     if resolved.watch && !next_hunk::tui::watch::Watcher::is_enabled() {
         eprintln!("note: `--watch` requires the `watch` feature (rebuild with --features watch)");
@@ -785,13 +905,18 @@ fn run_serve(
     // (e.g. another serve running) is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&repo)?;
 
-    let produced = git_diff_produced(&repo, resolved.scope, &extra, resolved.include_untracked)?;
+    let produced = git_diff_request(
+        &repo,
+        &resolved.request,
+        &extra,
+        resolved.include_untracked,
+    )?;
     // Reloader is installed only with `--watch` (also drives FS auto-reload).
     // Without it, `next-hunk reload` returns a clear server error rather than EOF.
     let reloader = if resolved.watch {
         Some(make_diff_reloader(
             repo.clone(),
-            resolved.scope,
+            resolved.request.clone(),
             extra,
             resolved.include_untracked,
         ))
@@ -1140,6 +1265,9 @@ fn spawn_serve_listener(repo: &std::path::Path) -> Result<next_hunk::tui::Server
 fn run_serve(
     _staged: bool,
     _all: bool,
+    _base: Option<String>,
+    _range: Option<String>,
+    _strategy: Option<DiffStrategy>,
     _watch: bool,
     _no_highlight: bool,
     _include_untracked: bool,
@@ -1162,6 +1290,16 @@ fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
             "unknown layout '{other}' (expected unified, stack, or split)"
         )),
     }
+}
+
+/// clap value_parser for `--strategy`.
+fn parse_strategy_arg(s: &str) -> Result<DiffStrategy, String> {
+    DiffStrategy::parse_str(s).ok_or_else(|| {
+        format!(
+            "unknown strategy '{s}' (expected worktree, staged, working-set, \
+             upstream-ahead, or merge-base)"
+        )
+    })
 }
 
 /// clap value_parser for `--export-on-quit`. Accepts none|json|markdown|both.

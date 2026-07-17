@@ -42,6 +42,7 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] Working-set review: `diff --all` / `scope = "working-set"` (staged + unstaged; rail `S`/`M`/`?`)
+- [x] Branch-level review: `diff --base <rev>` / `--range A..B` / `--strategy upstream-ahead|merge-base`
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
 - [x] Stack layout: `layout = "stack"` config (unified default)
@@ -141,14 +142,19 @@ next-hunk                  # working tree diff (unstaged only)
 next-hunk diff --staged    # staged only (`git diff --cached`)
 next-hunk diff --all       # full working set: staged + unstaged
 next-hunk diff --all --include-untracked  # everything `git status` would list
+next-hunk diff --base origin/main   # whole branch vs base (+ local worktree edits)
+next-hunk diff --strategy merge-base --base origin/main  # PR-style fork point
+next-hunk diff --strategy upstream-ahead  # vs @{upstream} (merge-base)
+next-hunk diff --range main..HEAD   # explicit commit range (same as show)
 next-hunk diff --watch     # live-reload on file changes
-next-hunk diff --include-untracked  # include untracked files (worktree / --all)
+next-hunk diff --include-untracked  # include untracked (worktree / --all / --base)
 next-hunk filediff old.rs new.rs    # diff two arbitrary files
 next-hunk show HEAD
 git diff | next-hunk patch -
 next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
 next-hunk inspect --json path/to.patch  # same shape as `review` (agent-friendly)
 next-hunk inspect --all --include-untracked  # script: list all local buckets
+next-hunk inspect --base origin/main --json  # branch-level structure for agents
 
 # Use next-hunk as git's pager for everyday diff/show/log:
 git config core.pager "next-hunk pager"
@@ -204,6 +210,8 @@ Fields:
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
 | `scope` | string | `"worktree"` | `"worktree"` (unstaged), `"staged"`, or `"working-set"` (staged+unstaged; CLI `--all`) |
+| `strategy` | string | — | `"worktree"` / `"staged"` / `"working-set"` / `"upstream-ahead"` / `"merge-base"` (CLI `--strategy`) |
+| `base` | string | — | default base rev for branch reviews (CLI `--base`; pair with `strategy = "merge-base"`) |
 | `staged` | bool | `false` | legacy alias for `scope = "staged"` when `scope` is unset |
 | `highlight` | bool | `true` | syntax highlighting |
 | `watch` | bool | `false` | live-reload on file changes |
@@ -221,7 +229,10 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--all` / `--staged` (mutually exclusive), `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`, `--export-on-quit <none|json|markdown|both>`.
+CLI overrides: `--all` / `--staged` / `--base` / `--range` (mutually exclusive modes),
+`--strategy <worktree|staged|working-set|upstream-ahead|merge-base>`,
+`--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`,
+`--export-on-quit <none|json|markdown|both>`.
 
 When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail
 tags each path with its git bucket: **`S`** staged, **`M`** modified (unstaged),
