@@ -230,6 +230,7 @@ Fields:
 | `export_on_quit` | string | `"none"` | on TUI quit, emit agent report: `"none"` / `"json"` / `"markdown"` / `"both"` (`--export-on-quit`) |
 | `vcs` | string | `"auto"` | `"auto"` (prefer jj when `.jj` exists) / `"git"` / `"jj"` — see [`docs/VCS.md`](./docs/VCS.md) |
 | `persist_review` | bool | `true` | save accept/reject decisions under `.git/next-hunk/decisions-<scope>.json` and restore on reopen (`--no-persist` disables) |
+| `auto_forward` | bool | `true` | when a live `serve` exists, `diff --focus`/`--note` push into it (`--no-forward` disables) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -242,7 +243,7 @@ watch = true
 CLI overrides: `--all` / `--staged` / `--base` / `--range` (mutually exclusive modes),
 `--strategy <worktree|staged|working-set|upstream-ahead|merge-base>`,
 `--watch`, `--no-highlight`, `--include-untracked`, `--layout <unified|stack|split>`,
-`--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`.
+`--export-on-quit <none|json|markdown|both>`, `--vcs <auto|git|jj>`, `--no-persist`, `--no-forward`.
 
 When reviewing a working-set (`--all` or `scope = "working-set"`), the file rail
 tags each path with its git bucket: **`S`** staged, **`M`** modified (unstaged),
@@ -339,6 +340,12 @@ next-hunk list
 # Only sessions for worktrees of the current repository:
 next-hunk list --all-worktrees
 ```
+
+**Auto-forward:** when a serve is live for the current worktree,
+`next-hunk diff --focus … --note …` (without `--select` / `--watch`) pushes
+into that TUI instead of opening a second one-shot review. Works without a
+TTY so agents can prefer the CLI. Disable with `--no-forward` or
+`auto_forward = false` in config.
 
 Requires the `serve` feature (on by default) and a Unix OS; on other builds the
 subcommands report that they're unavailable. The `decision` output matches the

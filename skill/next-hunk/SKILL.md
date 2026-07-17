@@ -28,9 +28,10 @@ Use this skill **after** you finish a change and **before** you commit, when:
 - The change is already committed and the human will review it in the **PR UI**.
 - The human is clearly **not at a terminal** (then describe in chat instead).
 - You're in a **non-interactive** context (piped/scripted) and only want to show
-  something — plain `next-hunk diff` / `inspect` still print a summary, but
-  **do not pass `--focus` / `--note` / `--select` without a TTY** (they exit
-  non-zero instead of silently dropping your annotations). Prefer
+  something — plain `next-hunk diff` / `inspect` still print a summary.
+  **Exception:** `diff --focus` / `--note` auto-forwards into a live `serve`
+  (no TTY needed). Without a live serve, `--focus` / `--note` / `--select`
+  exit non-zero instead of silently dropping annotations. Prefer
   `next-hunk inspect --json` for headless structure.
 
 ## Which command shows *all* local changes?
@@ -112,9 +113,9 @@ next-hunk show @ --vcs jj
 
 Details: repository `docs/VCS.md`.
 
-## Quick start: one-shot review (no approval needed)
+## Quick start: prefer the CLI (auto-forward when serve is live)
 
-When you want the human informed but don't need a decision:
+**You do not need to `list` first.** Call `diff --focus` / `--note` directly:
 
 ```bash
 # Prefer --all when you may have staged some files already:
@@ -122,7 +123,15 @@ next-hunk diff --all --include-untracked \
   --focus <path>:<line> --note <path>:<line>="<your explanation>"
 ```
 
-- `--focus <where>`: scroll the TUI to this location on open.
+What happens:
+
+| Situation | Result |
+|-----------|--------|
+| Human has `next-hunk serve` open for this repo | CLI **auto-forwards** as `push` into that TUI (works **without a TTY**). Prints `ok: forwarded to running serve`. |
+| No live serve | Opens a **one-shot** TUI (needs an interactive terminal). |
+| You need a second independent TUI | Pass `--no-forward` (or set `auto_forward = false` in config). |
+
+- `--focus <where>`: scroll the TUI to this location.
   - `<path>` — first hunk of that file, e.g. `src/auth.rs`
   - `<path>:<line>` — the code line with this **new-side** line number, e.g. `src/auth.rs:42`
   - `<path>:h<n>` — the `n`-th hunk (1-based) in that file, e.g. `src/auth.rs:h2`
@@ -131,7 +140,9 @@ next-hunk diff --all --include-untracked \
   - `<path>:h<n>=<text>` — shows under that hunk header
   - `banner=<text>` — shows in the status bar (high-level summary)
 
-The human opens the TUI, reviews, and quits. You don't receive any signal back.
+Without a live serve, the human opens the one-shot TUI, reviews, and quits.
+You don't receive any signal back (use `--select` or `serve` + `decision` for
+approval).
 
 ## Approval: one-shot `--select`
 
@@ -156,7 +167,16 @@ not apply them unless the human asked you to.
 
 For **ongoing** reviews where you expect to iterate (adjust focus, inspect
 structure, add notes, poll decisions) without re-launching a process per
-interaction, use server mode:
+interaction, use server mode.
+
+### Preferred agent path (no list required)
+
+1. Human: `next-hunk serve --all --include-untracked`
+2. Agent: `next-hunk diff --focus … --note …` → auto-forwards into that serve
+3. Agent: `next-hunk decision` / `comment` / `reload` as needed
+
+Only use `list` / `get` when multiple worktrees are live and you need to
+disambiguate, or when debugging why forward did not happen.
 
 ### 1. Human opens the persistent TUI
 
@@ -172,7 +192,21 @@ needed. **Each `git worktree` checkout gets its own session** — two agents in
 two linked worktrees can `serve` in parallel without stealing each other's
 socket.
 
-### 2. Agent: discover the session
+### 2. Agent: point / annotate (prefer this over list → navigate)
+
+```bash
+next-hunk diff --focus src/auth.rs:42 --note banner="please check token expiry"
+# ok: forwarded to running serve
+```
+
+Same as `push --focus … --note …`, but you can keep the muscle memory of
+`diff`. Explicit push still works:
+
+```bash
+next-hunk push --focus src/auth.rs:42 --note banner="please check token expiry"
+```
+
+### 3. Agent: discover sessions (only when needed)
 
 ```bash
 next-hunk list
@@ -290,7 +324,7 @@ next-hunk show main..HEAD --focus src/auth.rs:h1 --note banner="please review"
 next-hunk patch changes.patch --focus src/a.rs --note src/a.rs:h1="why"
 ```
 
-### 4. Agent: navigate to what matters
+### 5. Agent: navigate to what matters
 
 ```bash
 next-hunk navigate src/auth.rs:42
@@ -299,9 +333,10 @@ next-hunk navigate src/auth.rs:42
 
 Target syntax: `<path>` (file start), `<path>:<line>` (new-side line number),
 or `<path>:h<n>` (1-based hunk ordinal). The TUI scrolls to the target and
-syncs the file rail selection.
+syncs the file rail selection. Prefer `diff --focus` / `push` when you also
+want notes; use `navigate` for focus-only.
 
-### 5. Agent: add comments
+### 6. Agent: add comments
 
 ```bash
 next-hunk comment add --file src/auth.rs --line 42 "Extracted token validation — fixes the OOM"
@@ -334,7 +369,7 @@ next-hunk comment apply
 This merges all session comments into the TUI's note renderer, so the human
 sees them as `💬 c1: ...` rows below the target line/hunk.
 
-### 6. Agent: poll decisions
+### 7. Agent: poll decisions
 
 ```bash
 next-hunk decision
@@ -345,7 +380,7 @@ Returns immediately — does **not** wait for the human to quit. The JSON shape
 matches `--select` quit output exactly, so your parser handles both identically.
 `undecided` means "not yet reviewed" — do not apply.
 
-### 7. Agent: reload the diff (optional)
+### 8. Agent: reload the diff (optional)
 
 If the diff content changes (e.g. you made more edits), refresh the session:
 
@@ -358,29 +393,30 @@ Re-fetches the diff from the same source the `serve` was started with and
 re-parses the review, preserving focus/notes/decisions best-effort (by path
 matching). Requires `serve` to have been started with `--watch` (or a reloader).
 
-### 8. Agent: push additional focus/notes
+### 9. Agent: push additional focus/notes
 
 ```bash
+# Prefer the same command you already use:
+next-hunk diff --focus src/util.rs:15 --note banner="Also fixed the batch size"
+# ok: forwarded to running serve
+
+# Or the explicit form:
 next-hunk push --focus src/util.rs:15 --note banner="Also fixed the batch size"
 # ok: pushed to running server
 ```
 
-`push` replaces the focus target and appends notes to the TUI. Useful for
-iterating after the initial setup.
+`push` / auto-forward replaces the focus target and appends notes to the TUI.
 
 ## Complete session workflow summary
 
 ```
 Human:  next-hunk serve
-Agent:  next-hunk list                          # discover session
-        next-hunk review                        # inspect structure
-        next-hunk navigate src/auth.rs:h1       # scroll to key hunk
-        next-hunk comment add --file src/auth.rs --hunk 1 "explanation"
-        next-hunk comment apply                 # show in TUI
+Agent:  next-hunk diff --focus … --note …       # auto-forwards (no list needed)
         next-hunk decision                      # poll human's decisions
-        # ... iterate: navigate → comment → apply → decision ...
-        next-hunk push --focus ...              # adjust focus
+        # ... iterate: diff --focus → comment → decision ...
         next-hunk reload                        # refresh if content changed
+# Optional when multi-worktree or debugging:
+        next-hunk list / get / review / navigate
 ```
 
 ## One-shot `--select` vs server mode
@@ -388,22 +424,22 @@ Agent:  next-hunk list                          # discover session
 | Situation | What to do |
 |-----------|------------|
 | Single review, you can block once for the answer | `diff --select` (simpler, no server to manage) |
-| Review is ongoing; you'll navigate, comment, or poll repeatedly | `serve` + session commands |
+| Review is ongoing; you'll navigate, comment, or poll repeatedly | `serve` + `diff --focus` / session commands |
 | Human isn't at a terminal / you can't run `serve` first | `decision` errors: "no server running" — fall back to `--select` |
 
 `serve` and all session commands (`list`, `get`, `review`, `navigate`,
 `comment`, `reload`, `push`, `decision`) require a Unix OS and the `serve`
-feature (on by default).
+feature (on by default). Auto-forward on `diff` uses the same socket.
 
 ## Decision guide
 
 | Situation | What to do |
 |-----------|------------|
 | Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
-| Just want them informed, you continue | no `--select` (they review, you move on) |
+| Just want them informed, you continue | `diff --focus` / `--note` (auto-forwards if serve is live) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
 | `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
-| Iterating with the human | `serve` + session workflow (list → review → navigate → comment → decision) |
+| Iterating with the human | `serve` + `diff --focus` (prefer) or explicit `push` / `navigate` |
 
 If unsure, prefer **no `--select`** first. The human can always ask you to roll
 back; but a blocking `--select` that no one answers will hang.

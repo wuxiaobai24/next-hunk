@@ -256,6 +256,8 @@ next-hunk list
 next-hunk list --all-worktrees
 ```
 
+**无感转发：** 当前 worktree 已有 live `serve` 时，`next-hunk diff --focus … --note …`（不含 `--select` / `--watch`）会自动推入该 TUI，而不是再开一个 one-shot。无需 TTY，agent 可直接调 CLI。关闭：`--no-forward` 或配置 `auto_forward = false`。
+
 需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
 
 ## 测试与基准
