@@ -1,10 +1,36 @@
 use super::model::{DiffLine, DiffLineKind, FileDiff, Hunk, Review};
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq, Eq)]
 pub enum ParseError {
+    /// Stdin / input string was empty (zero length).
     #[error("empty diff input")]
     Empty,
+    /// Input was non-empty but produced no reviewable hunks (garbage text,
+    /// pure rename/mode-only with no content change, etc.).
+    ///
+    /// `context` is either empty or a short suffix like
+    /// ` (first line: "hello")` to help debug miswired pagers.
+    #[error("no valid '@@ ... @@' hunk header found{context}")]
+    NoHunkHeader { context: String },
+}
+
+/// Build [`ParseError::NoHunkHeader`] with an optional first-line hint.
+fn no_hunk_header(input: &str) -> ParseError {
+    const MAX_CHARS: usize = 80;
+    let context = input
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .map(|line| {
+            let truncated: String = if line.chars().count() > MAX_CHARS {
+                format!("{}…", line.chars().take(MAX_CHARS).collect::<String>())
+            } else {
+                line.to_string()
+            };
+            format!(" (first line: {truncated:?})")
+        })
+        .unwrap_or_default();
+    ParseError::NoHunkHeader { context }
 }
 
 /// Parse a unified diff into a compact [`Review`].
@@ -156,7 +182,9 @@ pub fn parse_unified_diff(input: &str) -> Result<Review, ParseError> {
     review.stream_len = stream_row;
 
     if review.files.is_empty() {
-        return Err(ParseError::Empty);
+        // Non-empty input with nothing reviewable — do not report this as
+        // "empty diff input" (that message is reserved for zero-length input).
+        return Err(no_hunk_header(input));
     }
 
     Ok(review)
@@ -357,8 +385,11 @@ fn parse_hunk_header(line: &str) -> (u32, u32, u32, u32) {
 
 fn parse_range(spec: &str) -> (u32, u32) {
     if let Some((a, b)) = spec.split_once(',') {
-        (a.parse().unwrap_or(0), b.parse().unwrap_or(1).max(1))
+        // Count may legitimately be 0 for pure additions (`-1,0`) or pure
+        // deletions (`+0,0`). Do not clamp zero to 1.
+        (a.parse().unwrap_or(0), b.parse().unwrap_or(1))
     } else {
+        // Omitted count means 1 per the unified diff format.
         (spec.parse().unwrap_or(0), 1)
     }
 }
@@ -400,7 +431,36 @@ diff --git a/src/b.rs b/src/b.rs
 
     #[test]
     fn empty_errors() {
-        assert!(parse_unified_diff("").is_err());
+        let err = parse_unified_diff("").unwrap_err();
+        assert_eq!(err, ParseError::Empty);
+        assert_eq!(err.to_string(), "empty diff input");
+    }
+
+    #[test]
+    fn non_empty_garbage_is_not_empty_error() {
+        // Dogfood: `echo "this is not a diff" | next-hunk pager` used to say
+        // "empty diff input" even though stdin was non-empty. The message must
+        // name the real failure mode (no hunk header).
+        let err = parse_unified_diff("this is not a diff at all\n").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("empty diff input"),
+            "must not claim empty input: {msg}"
+        );
+        assert!(
+            msg.contains("no valid") && msg.contains("@@"),
+            "should name missing hunk header: {msg}"
+        );
+        assert!(
+            msg.contains("this is not a diff at all"),
+            "should include first line for debugging: {msg}"
+        );
+        // No trailing newline / multi-line garbage still not Empty.
+        let err2 = parse_unified_diff("x\ny\nz").unwrap_err();
+        assert!(
+            !matches!(err2, ParseError::Empty),
+            "non-empty no-newline garbage must not be Empty: {err2}"
+        );
     }
 
     #[test]
@@ -470,7 +530,12 @@ similarity index 100%
 rename from old.rs
 rename to new.rs
 ";
-        assert!(parse_unified_diff(patch).is_err());
+        let err = parse_unified_diff(patch).unwrap_err();
+        // Not Empty — input had content, just no reviewable hunks.
+        assert!(
+            matches!(err, ParseError::NoHunkHeader { .. }),
+            "pure rename should be NoHunkHeader, got: {err}"
+        );
     }
 
     #[test]
@@ -517,6 +582,54 @@ diff --git a/a.rs b/a.rs
         assert_eq!(h.old_count, 3);
         assert_eq!(h.new_start, 5);
         assert_eq!(h.new_count, 4);
+    }
+
+    #[test]
+    fn zero_count_ranges_preserved_for_add_and_delete_only() {
+        // Pure file addition: old side has 0 lines.
+        // Pure file deletion: new side has 0 lines.
+        let patch = "\
+diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+--- a/gone.txt
++++ /dev/null
+@@ -1,3 +0,0 @@
+-line one
+-line two
+-line three
+diff --git a/c.md b/c.md
+new file mode 100644
+--- /dev/null
++++ b/c.md
+@@ -1,0 +1,2 @@
++# New doc
++fresh content
+";
+        let review = parse_unified_diff(patch).unwrap();
+        assert_eq!(review.file_count(), 2);
+
+        let deleted = &review.files[0].hunks[0];
+        assert_eq!(review.text(deleted.header.clone()), "@@ -1,3 +0,0 @@");
+        assert_eq!(deleted.old_start, 1);
+        assert_eq!(deleted.old_count, 3);
+        assert_eq!(deleted.new_start, 0);
+        assert_eq!(deleted.new_count, 0);
+
+        let added = &review.files[1].hunks[0];
+        assert_eq!(review.text(added.header.clone()), "@@ -1,0 +1,2 @@");
+        assert_eq!(added.old_start, 1);
+        assert_eq!(added.old_count, 0);
+        assert_eq!(added.new_start, 1);
+        assert_eq!(added.new_count, 2);
+    }
+
+    #[test]
+    fn parse_range_allows_zero_count() {
+        assert_eq!(parse_range("1,0"), (1, 0));
+        assert_eq!(parse_range("0,0"), (0, 0));
+        assert_eq!(parse_range("1,3"), (1, 3));
+        // Omitted count defaults to 1.
+        assert_eq!(parse_range("1"), (1, 1));
     }
 
     #[test]

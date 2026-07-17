@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when export-on-quit will carry them in the report. Alone (no export),
   `--note` still errors on non-TTY rather than being dropped.
 - **Docs** — README + agent skill state the non-TTY export contract explicitly.
+- **`pager` / parse: non-empty non-diff input no longer reports `empty diff input`**
+  (WXB-34). Zero-length input still yields `empty diff input`; non-empty input
+  with no recognisable `@@` hunk now says
+  `no valid '@@ ... @@' hunk header found` (with the first line as a debug
+  hint). Genuine empty stdin in pager mode remains exit 0 silent no-op.
 
 ### Added — Jujutsu (jj) first-class support
 - **VCS auto-detect** — walk for `.jj` / `.git`; `vcs = "auto" | "git" | "jj"`

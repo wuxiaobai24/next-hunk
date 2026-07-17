@@ -1588,12 +1588,7 @@ fn parse_layout_arg(s: &str) -> Result<LayoutMode, String> {
 
 /// clap value_parser for `--strategy`.
 fn parse_strategy_arg(s: &str) -> Result<DiffStrategy, String> {
-    DiffStrategy::parse_str(s).ok_or_else(|| {
-        format!(
-            "unknown strategy '{s}' (expected worktree, staged, working-set, \
-             upstream-ahead, or merge-base)"
-        )
-    })
+    DiffStrategy::try_parse(s)
 }
 
 /// clap value_parser for `--export-on-quit`. Accepts none|json|markdown|both.
