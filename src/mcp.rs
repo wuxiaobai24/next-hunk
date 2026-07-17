@@ -316,6 +316,9 @@ fn call_tool_impl(name: &str, args: &Value) -> Result<Value> {
     }
 }
 
+/// Success tool payload. Only used by the Unix+serve tool implementations;
+/// non-Unix builds return a fixed error from `call_tool` before calling this.
+#[cfg(all(feature = "serve", unix))]
 fn tool_text_result(text: &str) -> Result<Value> {
     Ok(json!({
         "content": [{ "type": "text", "text": text }],
