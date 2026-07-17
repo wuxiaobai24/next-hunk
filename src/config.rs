@@ -833,7 +833,7 @@ mod tests {
             auto_forward: Some(false),
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default());
+        let r = ResolvedConfig::resolve(&cfg, &CliFlags::default()).unwrap();
         assert!(!r.auto_forward);
     }
 
@@ -847,7 +847,7 @@ mod tests {
             auto_forward: Some(false), // --no-forward
             ..Default::default()
         };
-        let r = ResolvedConfig::resolve(&cfg, &cli);
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert!(!r.auto_forward);
     }
 
