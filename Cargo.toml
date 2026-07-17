@@ -7,9 +7,20 @@ license = "MIT"
 readme = "README.md"
 repository = "https://github.com/wuxiaobai24/next-hunk"
 homepage = "https://github.com/wuxiaobai24/next-hunk"
+documentation = "https://github.com/wuxiaobai24/next-hunk#readme"
 keywords = ["diff", "git", "tui", "review", "performance"]
 categories = ["command-line-utilities", "development-tools"]
 rust-version = "1.85"
+# Keep the crates.io package lean: skip agent/runtime notes and the Homebrew
+# formula (distribution metadata, not needed to build or test the crate).
+exclude = [
+  "AGENTS.md",
+  "Formula/",
+  ".agent_context/",
+  ".grok/",
+  ".multica/",
+  ".spec-workflow/",
+]
 
 [lib]
 name = "next_hunk"

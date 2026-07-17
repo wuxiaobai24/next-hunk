@@ -72,55 +72,106 @@ the viewport materializes only what's on screen. Full numbers live in
 
 ## Install
 
-### One-click (Linux x86_64)
+**Recommended paths** (pick one):
 
-Downloads the latest static musl binary from Releases, verifies its sha256, and
-installs it to `/usr/local/bin` (or `~/.local/bin` if that isn't writable):
+| Path | Platforms | Needs Rust? | Command |
+|------|-----------|-------------|---------|
+| **crates.io** | all | yes (build) | `cargo install next-hunk` |
+| **Homebrew** | macOS (Linux brew OK) | yes (build dep) | see below |
+| **install.sh** | Linux x86_64/aarch64, macOS arm64/amd64 | no | `curl … \| bash` |
+| **GitHub Release** | same as install.sh | no | download `.tar.xz` |
+| **from source** | all | yes | `cargo install --git …` |
+
+### crates.io (official Cargo path)
+
+```bash
+cargo install next-hunk
+# pin a version:
+cargo install next-hunk --version 0.3.0
+```
+
+If the crate is not yet on crates.io (or you want `main`), use GitHub:
+
+```bash
+cargo install --git https://github.com/wuxiaobai24/next-hunk --locked
+cargo install --path .          # local clone
+cargo run --release -- diff     # run without installing
+```
+
+### Homebrew
+
+```bash
+brew tap wuxiaobai24/next-hunk https://github.com/wuxiaobai24/next-hunk
+brew install next-hunk
+```
+
+One-shot (no permanent tap):
+
+```bash
+brew install --formula \
+  https://raw.githubusercontent.com/wuxiaobai24/next-hunk/main/Formula/next-hunk.rb
+```
+
+The formula builds from the latest tagged source (`depends_on "rust" => :build`).
+Upgrade after a release with `brew update && brew upgrade next-hunk` (tap) or
+re-run the one-shot URL.
+
+### One-click installer (prebuilt)
+
+Downloads the latest prebuilt from Releases, verifies sha256, and installs to
+`/usr/local/bin` (or `~/.local/bin` if that isn't writable). Covers **Linux
+x86_64 / aarch64** (static musl) and **macOS arm64 / x86_64**. Other platforms
+fall back to `cargo install` (crates.io, then git).
 
 ```bash
 curl -fsSL https://github.com/wuxiaobai24/next-hunk/raw/main/scripts/install.sh | bash
 ```
 
-Inspect the script first if you prefer; options include `--prefix <dir>`,
-`--bin-dir <dir>`, `--version <ver>`, `--as-pager` (also wires it into
-`git core.pager`), and `--force`. On platforms without a prebuilt binary
-(macOS, aarch64) it falls back to `cargo install --git`.
+Options: `--prefix <dir>`, `--bin-dir <dir>`, `--version <ver>`, `--as-pager`
+(also wires `git core.pager`), `--force`. Inspect the script first if you prefer.
+
+### Prebuilt Release archives
+
+Each `v*` tag publishes multi-platform **all-features** archives (via the
+`release` workflow). Linux musl builds are **fully static** (~2–3 MB xz) and run
+on Alpine / distroless / old glibc without a C library. macOS builds use the
+same `dist` profile (fat LTO + strip).
+
+| Asset suffix | Target |
+|---|---|
+| `x86_64-musl` | Linux x86_64, static musl |
+| `aarch64-musl` | Linux aarch64, static musl |
+| `aarch64-apple-darwin` | macOS Apple Silicon |
+| `x86_64-apple-darwin` | macOS Intel |
 
 ```bash
-# from GitHub (canonical release channel)
-cargo install --git https://github.com/wuxiaobai24/next-hunk
-# or build from a local clone
-cargo install --path .
-# or just run it
-cargo run --release -- diff
-```
-
-### Prebuilt static binary (musl)
-
-Each tagged release publishes a **fully static, all-features** x86_64 musl
-binary — a single ~2.6 MB (xz) file with no runtime dependencies, so it runs on
-any Linux (Alpine, distroless, old glibc, etc.) without installing Rust or a C
-library. Grab it from the [Releases page](https://github.com/wuxiaobai24/next-hunk/releases):
-
-```bash
-# example for v0.1.0 (adjust the URL/version as needed):
-curl -L https://github.com/wuxiaobai24/next-hunk/releases/latest/download/next-hunk-0.1.0-x86_64-musl.tar.xz \
+# example: Linux x86_64, version 0.3.0 — adjust version + suffix for your platform
+VER=0.3.0
+TARGET=x86_64-musl   # or aarch64-musl / aarch64-apple-darwin / x86_64-apple-darwin
+curl -fsSL "https://github.com/wuxiaobai24/next-hunk/releases/download/v${VER}/next-hunk-${VER}-${TARGET}.tar.xz" \
   | tar -xJ
-sudo install -m 0755 next-hunk-0.1.0-x86_64-musl/next-hunk /usr/local/bin/
+sudo install -m 0755 "next-hunk-${VER}-${TARGET}/next-hunk" /usr/local/bin/
 next-hunk --version
 ```
 
-#### Build a static binary yourself
+See the [Releases page](https://github.com/wuxiaobai24/next-hunk/releases) for
+the full asset list and `.sha256` checksums.
+
+#### Build a dist binary yourself
 
 next-hunk is pure Rust (gix instead of libgit2, syntect's default-fancy regex,
-`zlib-rs`), so **no C cross-toolchain is needed** — just the musl rust-std
-target:
+`zlib-rs`), so **no C cross-toolchain is needed** beyond `musl-tools` for static
+Linux targets:
 
 ```bash
+# Linux static (example: x86_64 musl)
 rustup target add x86_64-unknown-linux-musl
 cargo build --profile dist --all-features --target x86_64-unknown-linux-musl
 # → target/x86_64-unknown-linux-musl/dist/next-hunk  (statically linked)
 ldd target/x86_64-unknown-linux-musl/dist/next-hunk   # "statically linked"
+
+# macOS (native)
+cargo build --profile dist --all-features
 ```
 
 The `dist` profile (fat LTO + strip + `panic=abort`) yields a ~7 MB binary

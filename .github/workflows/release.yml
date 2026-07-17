@@ -1,61 +1,164 @@
 name: release
 
-# Build a fully-static, all-features musl binary and attach it to a GitHub
-# Release whenever a `v*` tag is pushed. The binary is pure-Rust (gix, not
-# libgit2; syntect default-fancy, not oniguruma; zlib-rs, not C zlib), so no C
-# cross-toolchain is needed — a standard ubuntu runner + the musl rust-std
-# target produces a `statically linked` ELF.
+# Build multi-platform dist binaries and attach them to a GitHub Release whenever
+# a `v*` tag is pushed. Optionally publish the crate to crates.io when the
+# CARGO_REGISTRY_TOKEN repository secret is configured.
+#
+# Targets:
+#   - x86_64-unknown-linux-musl   (static ELF; asset suffix x86_64-musl)
+#   - aarch64-unknown-linux-musl  (static ELF; asset suffix aarch64-musl)
+#   - aarch64-apple-darwin        (macOS arm64)
+#   - x86_64-apple-darwin         (macOS amd64)
+#
+# Binaries are pure-Rust (gix, not libgit2; syntect default-fancy, not
+# oniguruma; zlib-rs), so no C cross-toolchain is needed beyond musl-tools
+# for the Linux static targets.
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: write # needed by softprops/action-gh-release to create the Release
+  contents: write # softprops/action-gh-release
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  musl-static:
-    runs-on: ubuntu-latest
+  build:
+    name: build (${{ matrix.asset }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            asset: x86_64-musl
+            static: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            asset: aarch64-musl
+            static: true
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset: aarch64-apple-darwin
+            static: false
+          # Cross-compile Intel macOS from the arm64 runner (macos-13 Intel is
+          # sunsetting; rustc + Apple linker handle x86_64-apple-darwin fine).
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            asset: x86_64-apple-darwin
+            static: false
     steps:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: musl-dist
+          key: dist-${{ matrix.target }}
+
+      - name: Install musl linker (Linux static)
+        if: matrix.static
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       # `--profile dist` = fat LTO + strip + panic=abort (see Cargo.toml).
-      # `--all-features` = highlight + watch, the full default feature set.
-      - name: Build static musl binary (all features)
-        run: cargo build --profile dist --all-features --target x86_64-unknown-linux-musl
+      # `--all-features` = highlight + watch + serve (full default set).
+      - name: Build dist binary (all features)
+        run: cargo build --profile dist --all-features --target ${{ matrix.target }}
 
-      - name: Verify static linkage
+      - name: Verify binary
         run: |
-          bin="target/x86_64-unknown-linux-musl/dist/next-hunk"
-          file "$bin"
-          ldd "$bin" || true
+          bin="target/${{ matrix.target }}/dist/next-hunk"
+          file "$bin" || true
+          if [[ "${{ matrix.static }}" == "true" ]]; then
+            # Fully static musl ELF: ldd reports "not a dynamic executable" / fails.
+            (ldd "$bin" 2>&1 || true) | tee /tmp/ldd.out
+            if grep -qiE 'not a dynamic|statically linked' /tmp/ldd.out; then
+              echo "static linkage ok"
+            elif ! ldd "$bin" >/dev/null 2>&1; then
+              echo "ldd failed (expected for static musl) — ok"
+            else
+              echo "warning: binary appears dynamically linked" >&2
+              cat /tmp/ldd.out
+            fi
+          fi
           "$bin" --version
 
       - name: Stage dist artifact
         run: |
           version="${GITHUB_REF_NAME#v}"
-          dir="next-hunk-${version}-x86_64-musl"
+          asset="${{ matrix.asset }}"
+          dir="next-hunk-${version}-${asset}"
           mkdir -p "$dir"
-          cp target/x86_64-unknown-linux-musl/dist/next-hunk "$dir/"
+          cp "target/${{ matrix.target }}/dist/next-hunk" "$dir/"
           cp README.md LICENSE CHANGELOG.md "$dir/"
-          tar -caf "next-hunk-${version}-x86_64-musl.tar.xz" "$dir"
-          shasum -a 256 "next-hunk-${version}-x86_64-musl.tar.xz" > \
-            "next-hunk-${version}-x86_64-musl.tar.xz.sha256"
-          echo "version=$version" >> "$GITHUB_ENV"
+          tar -caf "${dir}.tar.xz" "$dir"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${dir}.tar.xz" > "${dir}.tar.xz.sha256"
+          else
+            shasum -a 256 "${dir}.tar.xz" > "${dir}.tar.xz.sha256"
+          fi
+          ls -la "${dir}.tar.xz" "${dir}.tar.xz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: next-hunk-${{ matrix.asset }}
+          path: |
+            next-hunk-*-${{ matrix.asset }}.tar.xz
+            next-hunk-*-${{ matrix.asset }}.tar.xz.sha256
+          if-no-files-found: error
+
+  github-release:
+    name: github-release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List release assets
+        run: find dist -type f | sort
 
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            next-hunk-${{ env.version }}-x86_64-musl.tar.xz
-            next-hunk-${{ env.version }}-x86_64-musl.tar.xz.sha256
+          files: dist/*
+
+  # Publish to crates.io so `cargo install next-hunk` works.
+  # Requires repository secret CARGO_REGISTRY_TOKEN (crates.io API token).
+  # Skipped cleanly when the secret is absent so tag releases still succeed.
+  crates-io:
+    name: crates.io publish
+    needs: github-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check for CARGO_REGISTRY_TOKEN
+        id: token
+        env:
+          TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [[ -n "${TOKEN}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish"
+          fi
+
+      - name: cargo publish
+        if: steps.token.outputs.present == 'true'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        # Verify the packaged crate builds once on the publisher, then upload.
+        # Re-publishing the same version fails (expected); bump Cargo.toml first.
+        run: cargo publish --locked
