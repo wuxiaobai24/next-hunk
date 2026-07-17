@@ -6,5 +6,6 @@
 mod git;
 
 pub use git::{
-    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, open_repo, ProducedDiff,
+    find_repo, git_diff, git_diff_produced, git_file_diff, git_show, list_repo_worktree_roots,
+    open_repo, ProducedDiff,
 };
