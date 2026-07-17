@@ -38,6 +38,32 @@ const SPLIT_MIN_WIDTH: u16 = 80;
 /// back to unified so the layout never collapses.
 const STACK_MIN_WIDTH: u16 = 40;
 
+/// `layout = "auto"` minimum stream-pane width for side-by-side split. Auto
+/// uses a higher bar than explicit `split` so the side-by-side pane pair is
+/// genuinely readable when the user has delegated the choice (WXB-25). The
+/// exact value is a soft tuning knob, not a hard architectural constraint —
+/// bump it (e.g. to 140) if wide-screen users still report cramped panes.
+pub const AUTO_SPLIT_MIN_WIDTH: u16 = 120;
+
+/// `layout = "auto"` minimum stream-pane width for stack. Kept equal to
+/// [`STACK_MIN_WIDTH`] so the auto ladder is just a stricter split threshold
+/// bolted on top of the existing presentation fallback.
+pub const AUTO_STACK_MIN_WIDTH: u16 = STACK_MIN_WIDTH;
+
+/// Resolve `mode` against the live stream-pane width into one of the three
+/// concrete draw paths. Presentation only — IR indices and `app.scroll_y` are
+/// untouched, so width changes (including drag-resize) never rebuild a full
+/// widget tree (WXB-25, PERF gate §1–2).
+fn effective_layout(mode: crate::config::LayoutMode, width: u16) -> crate::config::LayoutMode {
+    use crate::config::LayoutMode;
+    match mode {
+        LayoutMode::Auto if width >= AUTO_SPLIT_MIN_WIDTH => LayoutMode::Split,
+        LayoutMode::Auto if width >= AUTO_STACK_MIN_WIDTH => LayoutMode::Stack,
+        LayoutMode::Auto => LayoutMode::Unified,
+        other => other,
+    }
+}
+
 /// Draw the whole app. Takes `&mut App` because highlighting populates the
 /// cache lazily during render.
 pub fn draw(app: &mut App, frame: &mut Frame) {
@@ -144,11 +170,16 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
     // Responsive layout ladder (presentation only — IR/scroll indices unchanged):
-    //   split  (>= 80 cols) → stack (40..79) → unified (< 40)
-    //   stack  (>= 40 cols) → unified (< 40)
+    //   auto   (≥ AUTO_SPLIT_MIN_WIDTH=120) → split → stack → unified
+    //   split  (≥ 80) → stack (40..79) → unified (< 40)
+    //   stack  (≥ 40) → unified (< 40)
     //   unified always
+    //
+    // Auto is resolved per-frame via [`effective_layout`] so a width change
+    // (terminal resize, pane split) re-picks the path on the next draw without
+    // touching the IR or rebuilding a widget tree (WXB-25, PERF gate).
     use crate::config::LayoutMode;
-    match app.layout_mode {
+    match effective_layout(app.layout_mode, area.width) {
         LayoutMode::Split if area.width >= SPLIT_MIN_WIDTH => {
             draw_stream_split(app, frame, area);
         }
@@ -2024,6 +2055,78 @@ diff --git a/a.rs b/a.rs
         assert!(
             rendered.contains("old") || rendered.contains("new") || rendered.contains("a.rs"),
             "narrow fallback should still render content: {rendered}"
+        );
+    }
+
+    /// `layout = "auto"` resolves per-frame based on stream width:
+    /// ≥ AUTO_SPLIT_MIN_WIDTH → split, ≥ AUTO_STACK_MIN_WIDTH → stack, else
+    /// unified. Verifies the resolution helper directly so the threshold
+    /// contract is pinned independent of the renderer (WXB-25).
+    #[test]
+    fn auto_layout_resolves_by_width() {
+        use crate::config::LayoutMode;
+        assert_eq!(
+            effective_layout(LayoutMode::Auto, AUTO_SPLIT_MIN_WIDTH),
+            LayoutMode::Split,
+            "auto at AUTO_SPLIT_MIN_WIDTH must pick split"
+        );
+        assert_eq!(
+            effective_layout(LayoutMode::Auto, AUTO_SPLIT_MIN_WIDTH - 1),
+            LayoutMode::Stack,
+            "auto just below AUTO_SPLIT_MIN_WIDTH must fall back to stack"
+        );
+        assert_eq!(
+            effective_layout(LayoutMode::Auto, AUTO_STACK_MIN_WIDTH),
+            LayoutMode::Stack,
+            "auto at AUTO_STACK_MIN_WIDTH must pick stack"
+        );
+        assert_eq!(
+            effective_layout(LayoutMode::Auto, AUTO_STACK_MIN_WIDTH - 1),
+            LayoutMode::Unified,
+            "auto just below AUTO_STACK_MIN_WIDTH must fall back to unified"
+        );
+        // Explicit modes pass through unchanged — auto only fans out for Auto.
+        assert_eq!(effective_layout(LayoutMode::Split, 200), LayoutMode::Split);
+        assert_eq!(effective_layout(LayoutMode::Stack, 200), LayoutMode::Stack);
+        assert_eq!(
+            effective_layout(LayoutMode::Unified, 200),
+            LayoutMode::Unified
+        );
+    }
+
+    /// `layout = "auto"` on a wide terminal must render the side-by-side split
+    /// path (no crash, content present). The view ladder handles the render;
+    /// this just exercises the full path end-to-end (WXB-25).
+    #[test]
+    fn draw_auto_wide_renders_split() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old_line
++new_line
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.layout_mode = crate::config::LayoutMode::Auto;
+        app.viewport_height = 12;
+        // 200 wide: rail ~25, stream ~175, well above AUTO_SPLIT_MIN_WIDTH (120).
+        let backend = ratatui::backend::TestBackend::new(200, 12);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains('│') || rendered.contains("▌"),
+            "auto on wide terminal should render the split pane separator: {rendered}"
         );
     }
 

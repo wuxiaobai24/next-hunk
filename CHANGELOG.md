@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — responsive `layout = "auto"` (WXB-25)
+- **`layout = "auto"`** / **`--layout auto`** — pick `split` / `stack` /
+  `unified` at render time based on the live stream-pane width. Recommended
+  for wide terminals; default stays `unified` (deliberate, see PERF gate).
+- **Width ladder** — `auto` uses a stricter split threshold than explicit
+  `split`: ≥120 cols → side-by-side split, ≥40 → stack, else unified. The
+  thresholds are exposed as `AUTO_SPLIT_MIN_WIDTH` / `AUTO_STACK_MIN_WIDTH`
+  in `tui::view` for tuning; the existing 80/40 ladder for explicit
+  `split`/`stack` is unchanged.
+- **Resize-safe** — width changes re-pick the path on the next draw via
+  `effective_layout()`; the IR and `scroll_y` are untouched so resizing
+  never rebuilds a full widget tree (PERF gate §1–2, ARCHITECTURE §2.1).
+- **Docs** — README / README_zh now list `auto` in the layout row and CLI
+  override; wide-screen users nudged toward `auto` or `split`.
+
 ### Added — tmux/zellij overlay + in-session one-shot review (WXB-24)
 - **`next-hunk overlay`** — one command for agent sessions inside a multiplexer:
   detects `$TMUX` / `$ZELLIJ`, opens a floating review (`diff --select
