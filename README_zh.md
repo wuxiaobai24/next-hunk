@@ -48,6 +48,7 @@
 - [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
 - [x] Split 布局：`layout = "split"` / `--layout split` 左右分栏
+- [x] Auto 布局：`layout = "auto"` / `--layout auto` 响应式 —— 宽屏 ≥120 列用 split、≥40 列用 stack、再窄用 unified，缩放窗口时即时切换、不重建 IR
 - [x] 折行配置：`wrap = true` 折行显示（默认截断）
 - [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
 - [x] 对常见工具（如 delta）的公开性能说明（设计对比 + bench 见 `docs/PERF.md`）
@@ -242,7 +243,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `watch` | bool | `false` | 文件变化时实时重载 |
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
 | `include_untracked` | bool | `false` | 在 worktree / working-set diff 中包含未跟踪文件（`--include-untracked`） |
-| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、或 `"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified） |
+| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件旧/新上下两块）、`"split"`（左右分栏；流区 <80 列退化为 stack，<40 列退化为 unified）、或 `"auto"`（响应式：≥120 列 split，≥40 列 stack，否则 unified；**宽屏推荐**） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `export_on_quit` | string | `"none"`（pager/diff）；**serve 未设置时默认 `"json"`** | 退出 TUI 时导出 agent 可读报告：`"none"` / `"json"` / `"markdown"` / `"both"`（`--export-on-quit`）。serve 默认 json 以便 agent 拿到 comments+notes；pager 保持 none 以免污染 `core.pager`。非 TTY 时立即输出报告（全部 `undecided` + notes），不回退到 inspect 摘要 |
 | `vcs` | string | `"auto"` | `"auto"`（有 `.jj` 时优先 jj）/ `"git"` / `"jj"`，见 [`docs/VCS.md`](./docs/VCS.md) |
@@ -274,7 +275,7 @@ theme_preset = "catppuccin-mocha"
 # status = "#181825"
 ```
 
-CLI 覆盖:`--all` / `--staged`（互斥）、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split>`、`--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`、`--export-on-quit <none|json|markdown|both>`。
+CLI 覆盖:`--all` / `--staged`（互斥）、`--watch`、`--no-highlight`、`--include-untracked`、`--layout <unified|stack|split|auto>`、`--theme-preset <default|catppuccin-mocha|catppuccin-latte|tokyonight>`、`--export-on-quit <none|json|markdown|both>`。
 
 使用 working-set（`--all` 或 `scope = "working-set"`）时，文件栏会标注来源：**`S`** staged、**`M`** modified（unstaged）、**`?`** untracked。同一路径若既有 staged 又有 unstaged，会各出现一次。
 

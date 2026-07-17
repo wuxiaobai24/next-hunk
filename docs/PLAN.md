@@ -55,6 +55,7 @@
 
 - [x] 落地 **一种** 布局：优先 **split** 或 **stack**（先一种 + 窄终端可退化）
 - [x] 真·split 左右分栏（`layout = "split"` / `--layout split`；窄宽 stack→unified 退化）
+- [x] `layout = "auto"` 响应式（宽 ≥120 split、≥40 stack、再窄 unified；运行时切换不重建 widget 树）— WXB-25
 - [x] 布局变更不破坏 viewport-only 物化；过 PERF 门禁再考虑默认
 - [x] light/dark 与 syntect 语法主题一致（至少 light 不再固定 dark 语法）
 - [x] wrap / 长行策略可预期（截断或 wrap，配置生效）

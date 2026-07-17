@@ -178,6 +178,15 @@ pub enum LayoutMode {
     /// Side-by-side split: old (left) and new (right) panes for the same file.
     /// Narrow terminals fall back to stack, then unified (see view layer).
     Split,
+    /// Responsive auto: pick split / stack / unified at render time based on
+    /// the live stream-pane width (split ≥ [`AUTO_SPLIT_MIN_WIDTH`], stack
+    /// ≥ [`AUTO_STACK_MIN_WIDTH`], else unified). The choice is presentation
+    /// only — IR / scroll indices stay stable across width changes, so
+    /// resizing never rebuilds a full widget tree (WXB-25).
+    ///
+    /// [`AUTO_SPLIT_MIN_WIDTH`]: crate::tui::view::AUTO_SPLIT_MIN_WIDTH
+    /// [`AUTO_STACK_MIN_WIDTH`]: crate::tui::view::AUTO_STACK_MIN_WIDTH
+    Auto,
 }
 
 /// What to print on TUI quit for agents (and humans pasting into chat).
@@ -235,6 +244,7 @@ impl LayoutMode {
             LayoutMode::Unified => "unified",
             LayoutMode::Stack => "stack",
             LayoutMode::Split => "split",
+            LayoutMode::Auto => "auto",
         }
     }
 
@@ -244,8 +254,9 @@ impl LayoutMode {
             "unified" => Ok(LayoutMode::Unified),
             "stack" => Ok(LayoutMode::Stack),
             "split" => Ok(LayoutMode::Split),
+            "auto" => Ok(LayoutMode::Auto),
             other => Err(format!(
-                "unknown layout '{other}' (expected unified, stack, or split)"
+                "unknown layout '{other}' (expected unified, stack, split, or auto)"
             )),
         }
     }
@@ -300,7 +311,8 @@ pub struct Config {
     pub theme_preset: Option<String>,
     /// Optional per-slot color overrides (`[theme_colors]` table).
     pub theme_colors: Option<ThemeColorsConfig>,
-    /// Layout mode: "unified" (default), "stack", or "split".
+    /// Layout mode: "unified" (default), "stack", "split", or "auto"
+    /// (responsive: split on wide terminals, stack mid, unified narrow).
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
@@ -426,7 +438,8 @@ pub struct ResolvedConfig {
     pub theme_preset: Option<String>,
     /// Optional per-slot color overrides from `[theme_colors]`.
     pub theme_colors: Option<ThemeColorsConfig>,
-    /// Layout mode for the diff stream: "unified" (default), "stack", or "split".
+    /// Layout mode for the diff stream: "unified" (default), "stack", "split",
+    /// or "auto" (responsive width-based pick at render time).
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
@@ -1431,11 +1444,14 @@ add = \"#a6e3a1\"
         assert_eq!(LayoutMode::parse_str("unified"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str("stack"), LayoutMode::Stack);
         assert_eq!(LayoutMode::parse_str("split"), LayoutMode::Split);
+        assert_eq!(LayoutMode::parse_str("auto"), LayoutMode::Auto);
         assert_eq!(LayoutMode::parse_str("SPLIT"), LayoutMode::Split);
+        assert_eq!(LayoutMode::parse_str("AUTO"), LayoutMode::Auto);
         assert_eq!(LayoutMode::parse_str("unknown"), LayoutMode::Unified);
         assert_eq!(LayoutMode::parse_str(""), LayoutMode::Unified);
         assert!(LayoutMode::try_parse("sidebyside").is_err());
         assert!(LayoutMode::try_parse("stack").is_ok());
+        assert!(LayoutMode::try_parse("auto").is_ok());
     }
 
     #[test]
@@ -1443,6 +1459,7 @@ add = \"#a6e3a1\"
         assert_eq!(LayoutMode::Unified.as_str(), "unified");
         assert_eq!(LayoutMode::Stack.as_str(), "stack");
         assert_eq!(LayoutMode::Split.as_str(), "split");
+        assert_eq!(LayoutMode::Auto.as_str(), "auto");
     }
 
     #[test]
@@ -1453,6 +1470,16 @@ add = \"#a6e3a1\"
         let cli = CliFlags::default();
         let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
         assert_eq!(r.layout, LayoutMode::Split);
+    }
+
+    #[test]
+    fn layout_mode_auto_from_config() {
+        let (dir, _path) = write_tmp_config("layout = \"auto\"\n");
+        let cfg = Config::load_project(&dir.0).unwrap();
+        assert_eq!(cfg.layout.as_deref(), Some("auto"));
+        let cli = CliFlags::default();
+        let r = ResolvedConfig::resolve(&cfg, &cli).unwrap();
+        assert_eq!(r.layout, LayoutMode::Auto);
     }
 
     #[test]

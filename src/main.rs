@@ -88,7 +88,7 @@ enum Commands {
         /// unless the human used `a`/`r` in select/serve).
         #[arg(long, value_parser = parse_export_on_quit_arg)]
         export_on_quit: Option<ExportOnQuit>,
-        /// Diff stream layout: `unified` (default), `stack`, or `split`.
+        /// Diff stream layout: `unified` (default), `stack`, `split`, or `auto` (responsive).
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
@@ -132,7 +132,7 @@ enum Commands {
         /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
         #[arg(long, value_parser = parse_export_on_quit_arg)]
         export_on_quit: Option<ExportOnQuit>,
-        /// Diff stream layout: `unified`, `stack`, or `split`.
+        /// Diff stream layout: `unified`, `stack`, `split`, or `auto` (responsive).
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
         /// Chrome palette preset (see `diff --theme-preset`).
@@ -160,7 +160,7 @@ enum Commands {
         /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
         #[arg(long, value_parser = parse_export_on_quit_arg)]
         export_on_quit: Option<ExportOnQuit>,
-        /// Diff stream layout: `unified`, `stack`, or `split`.
+        /// Diff stream layout: `unified`, `stack`, `split`, or `auto` (responsive).
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
         /// Chrome palette preset (see `diff --theme-preset`).
@@ -186,7 +186,7 @@ enum Commands {
         /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
         #[arg(long, value_parser = parse_export_on_quit_arg)]
         export_on_quit: Option<ExportOnQuit>,
-        /// Diff stream layout: `unified`, `stack`, or `split`.
+        /// Diff stream layout: `unified`, `stack`, `split`, or `auto` (responsive).
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
         /// Chrome palette preset (see `diff --theme-preset`).
@@ -278,7 +278,7 @@ enum Commands {
         /// On quit, emit an agent-readable review report (see `diff --export-on-quit`).
         #[arg(long, value_parser = parse_export_on_quit_arg)]
         export_on_quit: Option<ExportOnQuit>,
-        /// Diff stream layout: `unified` (default), `stack`, or `split`.
+        /// Diff stream layout: `unified` (default), `stack`, `split`, or `auto` (responsive).
         /// Overrides `layout` from config.toml.
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
@@ -426,7 +426,7 @@ enum Commands {
         /// Attach an agent annotation, repeatable (same as `diff --note`).
         #[arg(long, action = clap::ArgAction::Append)]
         note: Vec<String>,
-        /// Diff stream layout: `unified`, `stack`, or `split`.
+        /// Diff stream layout: `unified`, `stack`, `split`, or `auto` (responsive).
         #[arg(long, value_parser = parse_layout_arg)]
         layout: Option<LayoutMode>,
         /// Chrome palette preset (see `diff --theme-preset`).
