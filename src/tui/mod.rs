@@ -132,10 +132,7 @@ pub fn run_review_tui(
     // alone is easy to miss). Review still opens; the status bar also shows it.
     if let Some(ref focus) = options.focus {
         if app::resolve_focus_row(&review, focus).is_none() {
-            eprintln!(
-                "warning: focus not found: {}",
-                app::focus_display(focus)
-            );
+            eprintln!("warning: focus not found: {}", app::focus_display(focus));
         }
     }
 

@@ -541,8 +541,7 @@ fn illegal_project_config_fails_diff() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("layout")
-            && (stderr.contains("sidebyside") || stderr.contains("unified")),
+        stderr.contains("layout") && (stderr.contains("sidebyside") || stderr.contains("unified")),
         "error must name field + allowed values, got: {stderr}"
     );
 }

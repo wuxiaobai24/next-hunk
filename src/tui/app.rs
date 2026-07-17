@@ -32,10 +32,8 @@ pub fn focus_display(target: &FocusTarget) -> String {
 /// the CLI pre-TTY warning path so both agree on "found vs miss".
 pub fn resolve_focus_row(review: &Review, target: &FocusTarget) -> Option<usize> {
     match target {
-        FocusTarget::File(path) => {
-            ViewportQuery::file_index_for_path(review, path)
-                .map(|idx| ViewportQuery::file_start_row(review, idx))
-        }
+        FocusTarget::File(path) => ViewportQuery::file_index_for_path(review, path)
+            .map(|idx| ViewportQuery::file_start_row(review, idx)),
         FocusTarget::FileLine(path, line) => ViewportQuery::file_index_for_path(review, path)
             .and_then(|idx| ViewportQuery::row_for_new_line(review, idx, *line)),
         FocusTarget::FileHunk(path, hunk) => {
@@ -515,9 +513,8 @@ impl App {
         {
             return Some(id);
         }
-        ViewportQuery::hunk_id_at_row(&self.review, self.scroll_y).map(|(file_idx, hunk_idx)| {
-            HunkId { file_idx, hunk_idx }
-        })
+        ViewportQuery::hunk_id_at_row(&self.review, self.scroll_y)
+            .map(|(file_idx, hunk_idx)| HunkId { file_idx, hunk_idx })
     }
 
     /// Record a decision for the current hunk, then advance to the next hunk so
@@ -554,7 +551,8 @@ impl App {
         };
         let mut n = 0usize;
         for hunk_idx in id.hunk_idx..file.hunks.len() {
-            self.decisions.insert(HunkId { file_idx, hunk_idx }, decision);
+            self.decisions
+                .insert(HunkId { file_idx, hunk_idx }, decision);
             n += 1;
         }
         let path = file.display_path.clone();
@@ -584,7 +582,8 @@ impl App {
                 0
             };
             for hunk_idx in start..file.hunks.len() {
-                self.decisions.insert(HunkId { file_idx, hunk_idx }, decision);
+                self.decisions
+                    .insert(HunkId { file_idx, hunk_idx }, decision);
                 n += 1;
             }
         }

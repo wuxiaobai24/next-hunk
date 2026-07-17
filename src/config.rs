@@ -414,8 +414,8 @@ fn load_file(path: &Path) -> Result<Option<Config>, String> {
             return Err(format!("cannot read config {}: {e}", path.display()));
         }
     };
-    let cfg: Config = toml::from_str(&text)
-        .map_err(|e| format!("invalid config {}: {e}", path.display()))?;
+    let cfg: Config =
+        toml::from_str(&text).map_err(|e| format!("invalid config {}: {e}", path.display()))?;
     validate_config_enums(&cfg, path)?;
     Ok(Some(cfg))
 }
