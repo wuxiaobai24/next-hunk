@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — Multi-worktree session discovery (dogfood P2)
+- **`next-hunk list --all-worktrees`** — filter live sessions to worktrees of
+  the **current** repository (main + linked `git worktree` checkouts) and list
+  known worktree roots that do not yet have a live `serve`. Default `list`
+  still scans all live sockets system-wide.
+- **`list` marks `(current)`** when a session's worktree matches the cwd, so
+  agents can pick among parallel worktree sessions at a glance.
+- **Socket hash is per worktree root** (canonical path when available), not the
+  shared git common dir — documented as intentional: two linked worktrees can
+  `serve` simultaneously without socket collision. Skill + README cover the
+  recommended multi-agent layout (one `serve` per worktree, tmux split) and
+  how agents should choose a session (`list` / `--all-worktrees` / cwd auto).
+
 ### Fixed — Daily-driver polish (dogfood P1 / WXB-16)
 - **Exclude `.next-hunk/` from untracked reviews** — writing project config no
   longer lists `.next-hunk/config.toml` as an undecided untracked file under

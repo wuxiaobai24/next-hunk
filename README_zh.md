@@ -238,7 +238,16 @@ next-hunk decision
 # {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
 ```
 
-`serve` 绑定一个由仓库根目录派生的 Unix socket，所以 `push`/`decision` 在同仓库任意位置运行都能自动找到它 —— 无需 `--socket` 参数。需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。
+`serve` 绑定一个由 **worktree 根路径**（不是共享的 `.git` common dir）派生的 Unix socket，所以 `push`/`decision` 在同一 worktree 任意位置运行都能自动找到它 —— 无需 `--socket` 参数。每个 linked `git worktree` 有独立 session，可并行 `serve` 而互不抢 socket。
+
+```bash
+# 发现存活 session（repo= 是绝对 worktree 根路径）：
+next-hunk list
+# 仅聚合「当前仓库」下各 worktree 的 session：
+next-hunk list --all-worktrees
+```
+
+需要 `serve` 特性（默认开启）和 Unix 系统；其它构建下子命令会报告不可用。`decision` 输出与 `--select` 退出时的格式一致，所以 agent 可以用同一套逻辑解析。多 agent / 多 worktree 推荐布局见 `skill/next-hunk/SKILL.md`。
 
 ## 测试与基准
 
