@@ -15,7 +15,7 @@
 | 算对齐 | 不算 0.8 范围 |
 |--------|----------------|
 | 大 diff 丝滑 review（已有基础，继续守门） | 复刻 OpenTUI / React 栈 |
-| 两文件 diff、untracked worktree（可关） | jj / Sapling 一等支持 |
+| 两文件 diff、untracked worktree（可关） | Sapling 一等支持（jj 已推 0.8 后交付） |
 | 文件折叠 | 完整 HTTP/WS session-broker monorepo |
 | 至少一种 split **或** stack 布局（auto 可选） | STML 富文本 note、可嵌入组件库 |
 | 配置真接线（`line_numbers` 等，消灭 silent no-op） | Homebrew / 社区运营对标 |
@@ -120,14 +120,22 @@
 
 1. **为抄 split 破坏 IR** — 布局单独一层，继续只物化视口。  
 2. **为抄 broker 上大 daemon** — 0.6 只加厚 CLI 语义。  
-3. **jj/sl 挤进 0.8 关键路径** — 推后。  
+3. **sl 挤进主路径** — Sapling 仍推后；jj 已单独交付。  
 4. **文档再漂移** — 以本文件为准，发版时同步勾选。
 
 ---
 
-## 暂缓（0.8 后）
+## 0.8 后 — Jujutsu
 
-- jj / Sapling 适配  
+- [x] **jj 一等支持** — auto-detect、`vcs` 配置、`jj diff --git` → 统一 IR；
+  serve/skill 路径可用；见 `docs/VCS.md`
+- [ ] Sapling (`sl`) 适配（可选）
+
+---
+
+## 暂缓（其余）
+
+- Sapling 适配  
 - 完整 session-broker / MCP  
 - STML / 富文本 note  
 - OpenTUI 式可嵌入组件  
