@@ -179,20 +179,29 @@ fn run_loop(
     let watcher: Option<Watcher> = if reloader.is_some() {
         match Watcher::spawn(&std::env::current_dir().unwrap_or_default()) {
             Ok(w) => {
-                app.status = "watching for changes…".into();
+                app.watch_mode = true;
+                app.set_info("watching for changes…");
                 Some(w)
             }
             Err(e) => {
-                app.status = format!("watch disabled: {e}");
+                app.set_error(format!("watch disabled: {e}"));
                 None
             }
         }
     } else {
         None
     };
+    // Surface the run mode as a status-bar badge. `select_mode` is already set
+    // by the CLI before entering the loop.
+    app.serve_mode = server.is_some();
     let mut last_event: Option<Instant> = None;
 
     loop {
+        // Drop a status toast that has outlived its TTL (idle auto-clear) so a
+        // transient message or red error doesn't linger on screen. Sticky
+        // toasts (the initial hint) are never cleared here.
+        app.expire_status();
+
         // Apply finished highlight jobs before draw so the next frame can
         // pick up styles. Stale gens are discarded inside apply_result.
         if let Some(w) = hl_worker.as_ref() {
@@ -260,8 +269,8 @@ fn run_loop(
                 let result = launch_editor(&target, workdir.as_deref());
                 resume_tui(terminal)?;
                 match result {
-                    Ok(msg) => app.status = msg,
-                    Err(e) => app.status = format!("open failed: {e}"),
+                    Ok(msg) => app.set_success(msg),
+                    Err(e) => app.set_error(format!("open failed: {e}")),
                 }
                 terminal.clear()?;
             }
@@ -328,7 +337,7 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
     match reloader() {
         Ok(text) => app.reload_review(&text),
         Err(e) => {
-            app.status = format!("reload error: {e}");
+            app.set_error(format!("reload error: {e}"));
         }
     }
 }
@@ -442,14 +451,14 @@ fn apply_server_command(
                 })
                 .collect();
             app.notes.extend(new_notes);
-            app.status = "comments applied".into();
+            app.set_success("comments applied");
             ServerReply::Ok
         }
         ServerCommand::Reload => match reloader {
             Some(r) => match (*r)() {
                 Ok(text) => {
                     app.reload_review(&text);
-                    app.status = "reloaded by agent".into();
+                    app.set_success("reloaded by agent");
                     ServerReply::Ok
                 }
                 Err(e) => ServerReply::Error(format!("reload failed: {e}")),
