@@ -52,6 +52,9 @@ pub struct ReviewOptions {
     pub notes: Vec<app::Note>,
     /// `--select`: enable the per-hunk accept/reject gate; emit JSON on quit.
     pub select_mode: bool,
+    /// `--watch`: start a filesystem watcher and live-reload on changes. The
+    /// reloader (which enables manual `r` reloads) is passed separately.
+    pub watch: bool,
 }
 
 /// The server-listener handle threaded into the run loop, or `()` on builds
@@ -155,28 +158,33 @@ pub fn run_review_tui(
     // Background highlight worker: viewport misses enqueue; main loop drains.
     let hl_worker = crate::highlight::HighlightWorker::spawn();
     app.hl_job_tx = Some(hl_worker.job_sender());
+    let watch = options.watch;
     run_loop(
         &mut terminal,
         &mut app,
         reloader,
+        watch,
         workdir,
         server.as_ref(),
         Some(hl_worker),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
     mut reloader: Option<Reloader>,
+    watch: bool,
     workdir: Option<PathBuf>,
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
 ) -> Result<Selections> {
-    // If a reloader was provided, start a filesystem watcher for the current
-    // directory. Watcher setup can fail (e.g. feature off, permissions); in
-    // that case we keep running without live reload and surface a status note.
-    let watcher: Option<Watcher> = if reloader.is_some() {
+    // If a reloader was provided AND watch was requested, start a filesystem
+    // watcher for the current directory. Watcher setup can fail (e.g. feature
+    // off, permissions); in that case we keep running without live reload and
+    // surface a status note.
+    let watcher: Option<Watcher> = if watch && reloader.is_some() {
         match Watcher::spawn(&std::env::current_dir().unwrap_or_default()) {
             Ok(w) => {
                 app.watch_mode = true;
@@ -261,7 +269,7 @@ fn run_loop(
                 // Emit the per-hunk decisions (empty buckets outside --select).
                 return Ok(app.selections());
             }
-            // `o` requested opening a file in the editor. Suspend the TUI
+            // `e` requested opening a file in the editor. Suspend the TUI
             // (leave alt screen + raw mode so the editor gets a clean terminal),
             // run the editor as a foreground child, then resume the TUI.
             if let Some(target) = app.open_request.take() {
@@ -273,6 +281,15 @@ fn run_loop(
                     Err(e) => app.set_error(format!("open failed: {e}")),
                 }
                 terminal.clear()?;
+            }
+            // `r` requested a manual reload: re-fetch through the reloader
+            // (present for repo-backed sources) or explain why not.
+            if app.reload_request {
+                app.reload_request = false;
+                match reloader.as_mut() {
+                    Some(r) => reload_once(app, r),
+                    None => app.set_error("nothing to reload (this view has no live source)"),
+                }
             }
         } else if let Event::Mouse(ev) = event {
             app.handle_mouse(ev);
@@ -303,7 +320,7 @@ fn launch_editor(target: &app::OpenTarget, workdir: Option<&std::path::Path>) ->
         .unwrap_or_else(|| "vi".to_string());
 
     // Resolve the file path against the repo workdir, else the cwd. This keeps
-    // `o` working even when the review was launched from a subdirectory.
+    // `e` working even when the review was launched from a subdirectory.
     let base = workdir.map(|w| w.to_path_buf()).unwrap_or_else(|| {
         std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
     });
@@ -750,7 +767,7 @@ diff --git a/a.rs b/a.rs
         use ratatui::style::Modifier;
         let mut app = word_diff_app();
         // Turn word-diff off.
-        app.handle_key(key(KeyCode::Char('w')));
+        app.handle_key(key(KeyCode::Char('i')));
         assert!(!app.word_diff_on);
 
         let backend = TestBackend::new(60, 12);

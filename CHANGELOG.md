@@ -6,6 +6,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — **BREAKING** — Vim-style flat keymap
+The TUI keymap is redesigned around flat, single-key Vim-style gestures (no
+two-key sequences, no uppercase-page keys, `Esc` never quits). Full mapping:
+
+| Action | Old | New |
+|---|---|---|
+| next / prev hunk | `]h` / `[h`, `Space` | `]` / `[` |
+| next / prev file | `Tab`/`l`/`→`, `BackTab`/`h`/`←` | `.` / `,` (Tab/BackTab still work) |
+| half page down / up | `J` / `K` | `d` / `u` (Ctrl-D/U unchanged) |
+| full page down / up | Ctrl-F/B, PgDn/PgUp (half) | `Space` / `b` (+Ctrl-F/B, PgDn/PgUp now full page) |
+| fold / unfold | `zc` / `zo` | `z` (toggle) |
+| sidebar | `b` | `s` |
+| line numbers | `#` | `l` |
+| word diff | `w` | `i` |
+| open in editor | `o` | `e` |
+| jump to Nth file | `1`–`9` | removed (`.`/`,` + rail cover it) |
+| quit | `q` / `Esc` | `q` / `Ctrl+C` (**`Esc` no longer quits** — it only clears search/help state) |
+
+- **New runtime toggles** (previously config-only or missing): `w` wrap, `1`/`2`
+  layout unified/stacked, and `r` manual reload (re-fetches the diff; works for
+  `diff`/`show`/`serve` even without `--watch`; explains itself when the view
+  has no live source).
+- **Hint line cut from ~20 keys to 7 groups** — `j/k scroll · d/u half ·
+  Space/b page · ]/[ hunk · ,/. file · / search · ? keys · q quit` — with the
+  full reference behind `?`. The `--select` hint leads with `a/r/u` as before.
+- `--watch` (file watching) is now independent of having a reloader: repo-backed
+  views always carry a reloader so `r` works, while the watcher only starts with
+  `--watch`.
+- In `--select` mode, `a`/`r`/`u` keep priority over the new `r` (reload) and
+  `u` (half-page up) meanings.
+
 ### Changed — feedback & discoverability
 - **Severity-colored status messages.** The single dim status string is now a
   typed toast: errors render red (bold), confirmations green, navigation/neutral

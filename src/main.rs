@@ -308,16 +308,15 @@ fn run() -> Result<()> {
             }
 
             let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
-            let reloader = if resolved.watch {
-                Some(make_diff_reloader(
-                    repo.clone(),
-                    resolved.staged,
-                    extra,
-                    resolved.include_untracked,
-                ))
-            } else {
-                None
-            };
+            // A reloader is always available for repo-backed diffs: it powers
+            // the TUI's manual `r` reload; `--watch` additionally starts a
+            // filesystem watcher (see ReviewOptions::watch).
+            let reloader = Some(make_diff_reloader(
+                repo.clone(),
+                resolved.staged,
+                extra,
+                resolved.include_untracked,
+            ));
             open_review_from_text(
                 &text,
                 reloader,
@@ -331,6 +330,7 @@ fn run() -> Result<()> {
                     focus: focus_target,
                     notes,
                     select_mode: select,
+                    watch: resolved.watch,
                 },
                 None,
             )
@@ -339,12 +339,19 @@ fn run() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
             let text = git_show(&repo, &rev)?;
-            // `show` is a one-shot snapshot: no watch, highlight default on.
+            // `show` has no file watcher, but a reloader still enables the
+            // manual `r` reload (re-runs the same rev).
+            let reloader = {
+                let repo = repo.clone();
+                let rev = rev.clone();
+                Box::new(move || git_show(&repo, &rev).context("re-run git show for reload"))
+                    as next_hunk::tui::Reloader
+            };
             // Honor the user/project theme config even for `show`.
             let cfg = Config::load(&cwd);
             open_review_from_text(
                 &text,
-                None,
+                Some(reloader),
                 true,
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
@@ -420,7 +427,7 @@ fn run() -> Result<()> {
             if buf.trim().is_empty() {
                 return Ok(());
             }
-            // `o` (open in editor) resolves relative paths against the repo
+            // `e` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
             open_review_from_text(
@@ -529,16 +536,14 @@ fn run_serve(
     let server = spawn_serve_listener(&repo)?;
 
     let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
-    let reloader = if resolved.watch {
-        Some(make_diff_reloader(
-            repo.clone(),
-            resolved.staged,
-            extra,
-            resolved.include_untracked,
-        ))
-    } else {
-        None
-    };
+    // Always provide the reloader (manual `r` reload); `--watch` starts the
+    // filesystem watcher on top (ReviewOptions::watch).
+    let reloader = Some(make_diff_reloader(
+        repo.clone(),
+        resolved.staged,
+        extra,
+        resolved.include_untracked,
+    ));
     open_review_from_text(
         &text,
         reloader,
@@ -553,6 +558,7 @@ fn run_serve(
             notes,
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
+            watch: resolved.watch,
         },
         Some(server),
     )

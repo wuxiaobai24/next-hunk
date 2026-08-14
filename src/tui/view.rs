@@ -840,13 +840,13 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            // In `--select` mode the decision keys (a/r/u) are the primary
-            // actions, so lead with them — the long base cheatsheet would push
-            // them to the tail, where narrow-terminal truncation hides them.
+            // Keep it short: the seven groups that cover 95% of a review
+            // session; `?` reveals the full list. In `--select` mode the
+            // decision keys (a/r/u) lead instead — they're the primary actions.
             if app.select_mode {
-                " a accept · r reject · u undecided · ]h/[h hunk · j/k scroll · / search · ? help · q quit ".to_string()
+                " a accept · r reject · u undecided · ]/[ hunk · j/k scroll · / search · ? keys · q quit ".to_string()
             } else {
-                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
+                " j/k scroll · d/u half · Space/b page · ]/[ hunk · ,/. file · / search · ? keys · q quit ".to_string()
             }
         }
     };
@@ -911,21 +911,16 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
         &mut lines,
         "Navigation",
         &[
-            ("j / ↓", "scroll down one row"),
-            ("k / ↑", "scroll up one row"),
-            ("J / PgDn", "scroll half a page"),
-            ("K / PgUp", "scroll half a page up"),
-            ("Ctrl-D / Ctrl-U", "scroll half a page down / up"),
-            ("Ctrl-F / Ctrl-B", "scroll a full page down / up"),
-            ("g / Home", "jump to top"),
-            ("G / End", "jump to bottom"),
-            ("]h / [h", "next / previous hunk (wraps files)"),
-            ("SPC", "next hunk"),
-            ("Tab / l", "next file"),
-            ("BackTab / h", "previous file"),
-            ("1-9", "jump to the Nth file"),
-            ("b", "toggle file rail"),
-            ("o", "open focused line in $EDITOR"),
+            ("j / ↓  ·  k / ↑", "scroll one row"),
+            ("d / u", "scroll half a page down / up"),
+            ("Space / b", "scroll a full page down / up"),
+            ("Ctrl-D / Ctrl-U", "half page; Ctrl-F / Ctrl-B full page"),
+            ("g / G", "jump to top / bottom"),
+            ("] / [", "next / previous hunk (wraps files)"),
+            (". / ,  ·  Tab", "next / previous file"),
+            ("z", "fold / unfold current file"),
+            ("s", "toggle file rail"),
+            ("e", "open focused line in $EDITOR"),
         ],
         head,
         key,
@@ -936,11 +931,12 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
         "View",
         &[
             ("H", "toggle syntax highlight"),
-            ("#", "toggle line-number gutter"),
-            ("w", "toggle word-level inline diff"),
+            ("l", "toggle line-number gutter"),
+            ("w", "toggle line wrap"),
+            ("i", "toggle word-level inline diff"),
             ("W", "toggle ignore-whitespace"),
             ("t", "cycle theme (dark → light → auto)"),
-            ("zc / zo", "fold / unfold current file"),
+            ("1 / 2", "layout: unified / stacked"),
         ],
         head,
         key,
@@ -960,8 +956,22 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     );
     push_help_section(
         &mut lines,
+        "Other",
+        &[
+            ("r", "reload the diff"),
+            ("q  ·  Ctrl+C", "quit (Esc only clears state)"),
+        ],
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
         "Agent (--select)",
-        &[("a / r / u", "accept / reject / undecided on hunk")],
+        &[
+            ("a / r / u", "accept / reject / undecided on hunk"),
+            ("", "(overrides r reload / u half-page in select mode)"),
+        ],
         head,
         key,
         dim,
