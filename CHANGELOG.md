@@ -27,6 +27,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error. Pathspecs after `--` (or trailing) still limit any diff form.
 - `--watch` reload re-runs the same target diff.
 
+### Changed — feedback & discoverability
+- **Severity-colored status messages.** The single dim status string is now a
+  typed toast: errors render red (bold), confirmations green, navigation/neutral
+  feedback stays dim. Errors and successes no longer look identical.
+- **Transient toasts auto-expire.** A status message clears itself after a few
+  seconds idle (info/success ~4s, errors ~8s) instead of lingering on screen
+  until the next keypress. The startup hint is sticky and never auto-clears.
+- **Run-mode badges in the status bar.** `--select`, `serve`, and `--watch`
+  now show a `[SELECT]` / `[SERVE]` / `[WATCH]` badge so the active mode is
+  visible at a glance, not just inferable from transient status text.
+- **Context-aware hint line in `--select` mode.** The bottom cheatsheet leads
+  with the decision keys (`a accept · r reject · u undecided`) — previously
+  these were only discoverable via the `?` overlay despite being the primary
+  keys in select mode.
+- **Graceful hint/prompt truncation.** On narrow terminals the help line and
+  the `/`/`f` prompts truncate with a trailing `…` instead of being silently
+  clipped, so it's clear there is more (and `?` shows the full reference).
+
+### Fixed
+- Help overlay listed the theme cycle order as `light → auto → dark`; the
+  actual order (`dark → light → auto`, per `ThemeMode::cycle`) is now shown.
+
 ## [0.4.0] - 2026-07-17
 
 ### Added — optional structural diff via difftastic (WXB-28)

@@ -25,7 +25,7 @@ use ratatui::Frame;
 use crate::ir::{
     word_diff_regions, DiffLineKind, Review, StreamRow, Viewport, ViewportQuery, WordRegion,
 };
-use crate::tui::app::{App, Decision, HunkId, InputMode};
+use crate::tui::app::{App, Decision, HunkId, InputMode, ToastKind};
 
 /// Rail width (left file list). Capped to a fraction of the area at draw time.
 const RAIL_MAX_WIDTH: u16 = 32;
@@ -788,10 +788,37 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(totals, Style::default().fg(app.theme.dim)),
     ];
+    // Run-mode badges: make the active mode discoverable. SELECT uses the
+    // orange edit color (it's an action mode where a/r/u matter); WATCH/SERVE
+    // share the cyan note color. Kept short (≤8 chars) so they don't crowd a
+    // narrow status bar.
+    if app.select_mode {
+        spans.push(Span::styled(
+            " SELECT ",
+            Style::default()
+                .fg(app.theme.edit_mode_fg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if app.watch_mode {
+        spans.push(Span::styled(" WATCH ", Style::default().fg(app.theme.note)));
+    }
+    if app.serve_mode {
+        spans.push(Span::styled(" SERVE ", Style::default().fg(app.theme.note)));
+    }
     if let Some(b) = banner {
         spans.push(Span::styled(b, Style::default().fg(app.theme.note)));
     }
-    spans.push(Span::styled(right, Style::default().fg(app.theme.dim)));
+    // Color the status message by severity so errors (red) and confirmations
+    // (green) stand out from the dim default.
+    let status_style = match app.status.kind {
+        ToastKind::Error => Style::default()
+            .fg(app.theme.delete)
+            .add_modifier(Modifier::BOLD),
+        ToastKind::Success => Style::default().fg(app.theme.add),
+        ToastKind::Info => Style::default().fg(app.theme.dim),
+    };
+    spans.push(Span::styled(right, status_style));
     let line = Line::from(spans);
     let para = Paragraph::new(line).style(Style::default().bg(app.theme.status_bg));
     frame.render_widget(para, area);
@@ -801,7 +828,10 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
 fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     let content = match app.mode {
         InputMode::Search => {
-            format!("/{}▌  (Enter search · Enter confirm · Esc cancel)", app.search.query)
+            format!(
+                "/{}▌  (Enter search · Enter confirm · Esc cancel)",
+                app.search.query
+            )
         }
         InputMode::Filter => {
             format!(
@@ -810,10 +840,20 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
-            " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit "
-                .to_string()
+            // In `--select` mode the decision keys (a/r/u) are the primary
+            // actions, so lead with them — the long base cheatsheet would push
+            // them to the tail, where narrow-terminal truncation hides them.
+            if app.select_mode {
+                " a accept · r reject · u undecided · ]h/[h hunk · j/k scroll · / search · ? help · q quit ".to_string()
+            } else {
+                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
+            }
         }
     };
+    // Graceful truncation: a single-row Paragraph silently clips past the area
+    // width, hiding the tail keys on narrow terminals. Truncate with an
+    // ellipsis instead so the user can tell there's more (and `?` shows all).
+    let content = truncate_to_width(&content, area.width as usize);
     let style = match app.mode {
         InputMode::Normal => Style::default().fg(app.theme.dim),
         _ => Style::default()
@@ -822,6 +862,24 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     };
     let para = Paragraph::new(content).style(style);
     frame.render_widget(para, area);
+}
+
+/// Truncate `s` to fit within `width` display columns, appending a single
+/// trailing `…` when it would overflow. Widths are measured in `char` count
+/// (a close-enough approximation for the ASCII-heavy hint/prompt text and
+/// avoids pulling in a unicode-width dependency). `width == 0` yields empty.
+fn truncate_to_width(s: &str, width: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= width {
+        return s.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let take = width.saturating_sub(1);
+    let mut out: String = chars.iter().take(take).collect();
+    out.push('…');
+    out
 }
 
 /// Full-screen keybinding reference, drawn on top of the review when the user
@@ -881,7 +939,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("#", "toggle line-number gutter"),
             ("w", "toggle word-level inline diff"),
             ("W", "toggle ignore-whitespace"),
-            ("t", "cycle theme (light → auto → dark)"),
+            ("t", "cycle theme (dark → light → auto)"),
             ("zc / zo", "fold / unfold current file"),
         ],
         head,
@@ -1357,6 +1415,159 @@ diff --git a/very/deeply/nested/module/path/file_with_long_name.rs b/very/deeply
         assert!(
             row_text.contains('…'),
             "expected the path to be truncated with an ellipsis, got: {row_text:?}"
+        );
+    }
+
+    // ---- truncate_to_width (graceful hint/prompt truncation) ---------------
+
+    #[test]
+    fn truncate_to_width_unchanged_when_fits() {
+        assert_eq!(truncate_to_width("abc", 10), "abc");
+        assert_eq!(truncate_to_width("abc", 3), "abc");
+    }
+
+    #[test]
+    fn truncate_to_width_appends_ellipsis_on_overflow() {
+        assert_eq!(truncate_to_width("abcdef", 4), "abc…");
+        assert_eq!(truncate_to_width("abcdefg", 3), "ab…");
+    }
+
+    #[test]
+    fn truncate_to_width_zero_width_returns_empty() {
+        assert_eq!(truncate_to_width("abc", 0), "");
+    }
+
+    // ---- mode badge + context-aware hint (render) --------------------------
+
+    /// Read a whole terminal row as a String (cells → first char each).
+    fn row_text(buf: &ratatui::buffer::Buffer, y: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn select_mode_shows_status_badge_and_decision_hint() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.select_mode = true;
+        app.viewport_height = 6;
+        let backend = ratatui::backend::TestBackend::new(80, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // status row = height - 2 = 4; help row = height - 1 = 5
+        let status = row_text(buf, 4, 80);
+        let help = row_text(buf, 5, 80);
+        assert!(
+            status.contains("SELECT"),
+            "select mode should surface a status-bar badge, got: {status:?}"
+        );
+        assert!(
+            help.contains("a accept"),
+            "select mode hint should mention the decision keys, got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn select_mode_off_hides_decision_hint() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        let backend = ratatui::backend::TestBackend::new(80, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let help = row_text(terminal.backend().buffer(), 5, 80);
+        assert!(
+            !help.contains("a accept"),
+            "decision keys should not show outside select mode, got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn help_line_truncates_with_ellipsis_on_narrow_terminal() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        // 30 cols — far narrower than the ~150-char cheatsheet. The help row
+        // must be truncated with an ellipsis rather than silently clipped.
+        let backend = ratatui::backend::TestBackend::new(30, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let help = row_text(terminal.backend().buffer(), 5, 30);
+        assert!(
+            help.trim_end().ends_with('…'),
+            "expected the help line to end with an ellipsis on a narrow terminal, got: {help:?}"
+        );
+    }
+
+    #[test]
+    fn error_toast_is_painted_in_the_delete_color() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.set_error("ZZBOOMZZ");
+        app.viewport_height = 6;
+        let backend = ratatui::backend::TestBackend::new(80, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let status_row = 4u16;
+        // Find at least one cell whose glyph is part of the error token and
+        // whose foreground is the delete (red) color — proving severity drives
+        // the status-message styling, not just the dim default. `Color` derives
+        // PartialEq, so a direct comparison to the theme's delete slot suffices.
+        let red = app.theme.delete;
+        let painted_red = (0..80u16).any(|x| {
+            let cell = &buf[(x, status_row)];
+            cell.symbol() == "Z" && cell.fg == red
+        });
+        assert!(
+            painted_red,
+            "expected the error toast text to be painted in the delete color"
         );
     }
 }

@@ -10,6 +10,7 @@
 use std::collections::HashSet;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
+use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -82,6 +83,103 @@ impl Search {
     }
 }
 
+/// Severity of a status-line message, used by the view to color it and by the
+/// run loop to pick an auto-expire timeout. Errors pop in red, successes in
+/// green, everything else stays in the dim default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToastKind {
+    /// Neutral navigation/toggle feedback — the dim default (current behavior).
+    #[default]
+    Info,
+    /// A positive confirmation ("highlight on", "reloaded", "opened …").
+    Success,
+    /// Something went wrong ("no matches", "reload failed", …).
+    Error,
+}
+
+/// How long (in seconds) a toast of this kind stays on screen before the run
+/// loop clears it during idle. Sticky toasts (`set_at == None`) never expire.
+impl ToastKind {
+    pub fn ttl_secs(self) -> u64 {
+        match self {
+            ToastKind::Error => 8,
+            ToastKind::Info | ToastKind::Success => 4,
+        }
+    }
+}
+
+/// A status-line message with a severity and a timestamp so the run loop can
+/// auto-expire it and the view can color it. Replaces a bare `String` so every
+/// existing `app.status = "...".into()` keeps working (defaults to `Info`,
+/// stamped now); tests that assert `app.status.contains(...)` still work via
+/// the inherent [`Toast::contains`] shim.
+#[derive(Debug, Clone, Default)]
+pub struct Toast {
+    /// The message text.
+    pub message: String,
+    /// Severity — drives color and expire timeout.
+    pub kind: ToastKind,
+    /// When the toast was set; `None` = sticky (never auto-expire).
+    /// Used by [`App::expire_status`] in the run loop.
+    pub set_at: Option<Instant>,
+}
+
+impl Toast {
+    /// A sticky (non-expiring) info toast — used for the initial hint.
+    pub fn sticky(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            kind: ToastKind::Info,
+            set_at: None,
+        }
+    }
+
+    /// True if the message contains `needle`. Delegates to the inner string so
+    /// existing `app.status.contains(...)` assertions keep working unchanged.
+    pub fn contains(&self, needle: &str) -> bool {
+        self.message.contains(needle)
+    }
+
+    /// True when the message is empty.
+    pub fn is_empty(&self) -> bool {
+        self.message.is_empty()
+    }
+
+    /// True if this toast has outlived its kind's TTL. Sticky toasts never do.
+    pub fn expired(&self) -> bool {
+        match self.set_at {
+            None => false,
+            Some(t) => t.elapsed().as_secs() >= self.kind.ttl_secs(),
+        }
+    }
+}
+
+impl From<&str> for Toast {
+    fn from(s: &str) -> Self {
+        Self {
+            message: s.to_string(),
+            kind: ToastKind::Info,
+            set_at: Some(Instant::now()),
+        }
+    }
+}
+
+impl From<String> for Toast {
+    fn from(s: String) -> Self {
+        Self {
+            message: s,
+            kind: ToastKind::Info,
+            set_at: Some(Instant::now()),
+        }
+    }
+}
+
+impl std::fmt::Display for Toast {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
 /// Review application state. The single source of truth for scroll/focus.
 pub struct App {
     pub review: Review,
@@ -99,8 +197,10 @@ pub struct App {
     pub viewport_height: usize,
     /// Set when the user requests to quit.
     pub should_quit: bool,
-    /// Transient status/help message for the status line.
-    pub status: String,
+    /// Transient status/help message for the status line. Carries a severity
+    /// ([`ToastKind`]) and timestamp so the view can color it and the run loop
+    /// can auto-expire it.
+    pub status: Toast,
 
     /// Syntax highlight on/off. ON by default.
     pub highlight_on: bool,
@@ -158,6 +258,12 @@ pub struct App {
     /// `--select`: when true, `a`/`r`/`?` set per-hunk decisions and the run
     /// loop emits [`Selections`] JSON on quit.
     pub select_mode: bool,
+    /// `--watch`: live-reload is active. Set by the run loop; surfaced as a
+    /// `[WATCH]` badge in the status bar.
+    pub watch_mode: bool,
+    /// `serve` subcommand: the TUI is driven by an agent socket. Set by the run
+    /// loop; surfaced as a `[SERVE]` badge in the status bar.
+    pub serve_mode: bool,
     /// `--select`: per-hunk decisions keyed by [`HunkId`].
     pub decisions: std::collections::HashMap<HunkId, Decision>,
     /// Set of file indices whose bodies are folded (collapsed).
@@ -274,9 +380,9 @@ impl App {
         theme_mode: ThemeMode,
     ) -> Self {
         let status = if review.is_empty() {
-            "empty diff".to_string()
+            Toast::sticky("empty diff")
         } else {
-            format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count())
+            Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count()))
         };
         let theme = theme_mode.to_theme();
         Self {
@@ -309,10 +415,49 @@ impl App {
             focus_target: None,
             notes: Vec::new(),
             select_mode: false,
+            watch_mode: false,
+            serve_mode: false,
             decisions: std::collections::HashMap::new(),
             comments: Vec::new(),
             folded: HashSet::new(),
             layout_mode: LayoutMode::Unified,
+        }
+    }
+
+    /// Set an info toast (neutral feedback), stamped now.
+    pub fn set_info(&mut self, message: impl Into<String>) {
+        self.status = Toast {
+            message: message.into(),
+            kind: ToastKind::Info,
+            set_at: Some(Instant::now()),
+        };
+    }
+
+    /// Set a success toast (green), stamped now.
+    pub fn set_success(&mut self, message: impl Into<String>) {
+        self.status = Toast {
+            message: message.into(),
+            kind: ToastKind::Success,
+            set_at: Some(Instant::now()),
+        };
+    }
+
+    /// Set an error toast (red, longer TTL), stamped now.
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.status = Toast {
+            message: message.into(),
+            kind: ToastKind::Error,
+            set_at: Some(Instant::now()),
+        };
+    }
+
+    /// Clear a stale toast if it has outlived its TTL. Called by the run loop
+    /// each idle tick so the status line doesn't keep a transient message (or
+    /// a red error) on screen after the user stops interacting. Sticky toasts
+    /// (the initial hint, banner notes) are never cleared here.
+    pub fn expire_status(&mut self) {
+        if self.status.expired() {
+            self.status = Toast::default();
         }
     }
 
@@ -373,10 +518,10 @@ impl App {
             Some(row) => {
                 self.scroll_y = row.min(self.max_scroll());
                 self.sync_selected_file();
-                self.status = format!("📍 focus: {}", focus_display(&target));
+                self.set_info(format!("📍 focus: {}", focus_display(&target)));
             }
             None => {
-                self.status = format!("focus not found: {}", focus_display(&target));
+                self.set_error(format!("focus not found: {}", focus_display(&target)));
             }
         }
     }
@@ -405,7 +550,7 @@ impl App {
         if let Some(id) = self.current_hunk_id() {
             self.decisions.insert(id, decision);
             self.jump_hunk(true);
-            self.status = format!(
+            self.set_info(format!(
                 "{:?} — {}",
                 decision,
                 self.review
@@ -413,9 +558,9 @@ impl App {
                     .get(id.file_idx)
                     .map(|f| f.display_path.as_str())
                     .unwrap_or("?")
-            );
+            ));
         } else {
-            self.status = "no hunk in view".into();
+            self.set_error("no hunk in view");
         }
     }
 
@@ -528,7 +673,7 @@ impl App {
                                         .min(self.max_scroll());
                                 self.selected_file = fidx;
                                 self.scroll_y = row;
-                                self.status = format!("→ {}", self.review.display_path(fidx));
+                                self.set_info(format!("→ {}", self.review.display_path(fidx)));
                             }
                             return;
                         }
@@ -617,7 +762,7 @@ impl App {
                 // If a search is active, Esc clears it; otherwise quit.
                 if self.search.active {
                     self.search.clear();
-                    self.status = "search cleared".into();
+                    self.set_success("search cleared");
                 } else {
                     self.should_quit = true;
                 }
@@ -658,7 +803,7 @@ impl App {
                 {
                     self.selected_file = idx;
                     self.scroll_y = row;
-                    self.status = format!("→ {}", self.review.display_path(idx));
+                    self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
             KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => {
@@ -667,7 +812,7 @@ impl App {
                 {
                     self.selected_file = idx;
                     self.scroll_y = row;
-                    self.status = format!("← {}", self.review.display_path(idx));
+                    self.set_info(format!("← {}", self.review.display_path(idx)));
                 }
             }
             // Number keys 1-9 jump directly to the Nth file (1-based). A
@@ -680,22 +825,22 @@ impl App {
                     let idx = n - 1;
                     self.selected_file = idx;
                     self.scroll_y = ViewportQuery::file_start_row(&self.review, idx);
-                    self.status = format!("→ {}", self.review.display_path(idx));
+                    self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
             // hunk navigation prefixes: `]` / `[` await a following `h`
             KeyCode::Char(']') => {
                 self.pending_prefix = Some(']');
-                self.status = "]".into();
+                self.set_info("]");
             }
             KeyCode::Char('[') => {
                 self.pending_prefix = Some('[');
-                self.status = "[".into();
+                self.set_info("[");
             }
             // fold/unfold prefixes: `z` awaits `c` (close) or `o` (open).
             KeyCode::Char('z') => {
                 self.pending_prefix = Some('z');
-                self.status = "z".into();
+                self.set_info("z");
             }
             // space: jump to the next hunk (wraps across files). A fast
             // single-key alternative to the `]h` two-key sequence.
@@ -707,47 +852,47 @@ impl App {
                 self.highlight_on = !self.highlight_on;
                 if !self.highlight_on {
                     self.cache.invalidate();
-                    self.status = "highlight off".into();
+                    self.set_info("highlight off");
                 } else {
-                    self.status = "highlight on".into();
+                    self.set_success("highlight on");
                 }
             }
             // toggle line-number gutter
             KeyCode::Char('#') => {
                 self.line_numbers_on = !self.line_numbers_on;
-                self.status = if self.line_numbers_on {
-                    "line numbers on".into()
+                if self.line_numbers_on {
+                    self.set_success("line numbers on");
                 } else {
-                    "line numbers off".into()
-                };
+                    self.set_info("line numbers off");
+                }
             }
             // toggle word-level inline diff
             KeyCode::Char('w') => {
                 self.word_diff_on = !self.word_diff_on;
-                self.status = if self.word_diff_on {
-                    "word diff on".into()
+                if self.word_diff_on {
+                    self.set_success("word diff on");
                 } else {
-                    "word diff off".into()
-                };
+                    self.set_info("word diff off");
+                }
             }
             // toggle ignore-whitespace view (collapse whitespace-only changes)
             KeyCode::Char('W') => {
                 self.ignore_ws = !self.ignore_ws;
                 self.apply_ignore_ws();
-                self.status = if self.ignore_ws {
-                    "ignore-whitespace on".into()
+                if self.ignore_ws {
+                    self.set_success("ignore-whitespace on");
                 } else {
-                    "ignore-whitespace off".into()
-                };
+                    self.set_info("ignore-whitespace off");
+                }
             }
             // toggle the file-rail sidebar
             KeyCode::Char('b') => {
                 self.show_rail = !self.show_rail;
-                self.status = if self.show_rail {
-                    "rail shown".into()
+                if self.show_rail {
+                    self.set_success("rail shown");
                 } else {
-                    "rail hidden".into()
-                };
+                    self.set_info("rail hidden");
+                }
             }
             // cycle theme: dark → light → auto → dark; reload syntect palette
             KeyCode::Char('t') => {
@@ -759,28 +904,28 @@ impl App {
                         .unwrap_or_else(|_| Highlighter::load_noop()),
                 );
                 self.cache.invalidate();
-                self.status = format!("theme: {}", self.theme_mode.name());
+                self.set_info(format!("theme: {}", self.theme_mode.name()));
             }
             // begin in-stream search
             KeyCode::Char('/') => {
                 self.mode = InputMode::Search;
                 self.search.query.clear();
-                self.status = "search: ".into();
+                self.set_info("search: ");
             }
             // begin path filter
             KeyCode::Char('f') => {
                 self.mode = InputMode::Filter;
                 self.path_filter.clear();
-                self.status = "filter: ".into();
+                self.set_info("filter: ");
             }
             // open the focused line's file in $EDITOR
             KeyCode::Char('o') => match self.compute_open_target() {
                 Some(t) => {
-                    self.status = format!("opening {}:{}…", t.path, t.line);
+                    self.set_info(format!("opening {}:{}…", t.path, t.line));
                     self.open_request = Some(t);
                 }
                 None => {
-                    self.status = "nothing to open here (move to a code line)".into();
+                    self.set_error("nothing to open here (move to a code line)");
                 }
             },
             // next / prev search match
@@ -818,12 +963,12 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.search.query.clear();
-                    self.status = "search: ".into();
+                    self.set_info("search: ");
                     return;
                 }
                 KeyCode::Char('w') => {
                     drop_last_word(&mut self.search.query);
-                    self.status = format!("search: {}", self.search.query);
+                    self.set_info(format!("search: {}", self.search.query));
                     return;
                 }
                 _ => {}
@@ -837,15 +982,15 @@ impl App {
             KeyCode::Esc => {
                 self.mode = InputMode::Normal;
                 self.search.clear();
-                self.status = "search cancelled".into();
+                self.set_info("search cancelled");
             }
             KeyCode::Backspace => {
                 self.search.query.pop();
-                self.status = format!("search: {}", self.search.query);
+                self.set_info(format!("search: {}", self.search.query));
             }
             KeyCode::Char(c) => {
                 self.search.query.push(c);
-                self.status = format!("search: {}", self.search.query);
+                self.set_info(format!("search: {}", self.search.query));
             }
             _ => {}
         }
@@ -857,12 +1002,12 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.path_filter.clear();
-                    self.status = "filter: ".into();
+                    self.set_info("filter: ");
                     return;
                 }
                 KeyCode::Char('w') => {
                     drop_last_word(&mut self.path_filter);
-                    self.status = format!("filter: {}", self.path_filter);
+                    self.set_info(format!("filter: {}", self.path_filter));
                     return;
                 }
                 _ => {}
@@ -876,15 +1021,15 @@ impl App {
             KeyCode::Esc => {
                 self.mode = InputMode::Normal;
                 self.path_filter.clear();
-                self.status = "filter cleared".into();
+                self.set_success("filter cleared");
             }
             KeyCode::Backspace => {
                 self.path_filter.pop();
-                self.status = format!("filter: {}", self.path_filter);
+                self.set_info(format!("filter: {}", self.path_filter));
             }
             KeyCode::Char(c) => {
                 self.path_filter.push(c);
-                self.status = format!("filter: {}", self.path_filter);
+                self.set_info(format!("filter: {}", self.path_filter));
             }
             _ => {}
         }
@@ -894,7 +1039,7 @@ impl App {
     fn finalize_search(&mut self) {
         if self.search.query.trim().is_empty() {
             self.search.clear();
-            self.status = "search empty".into();
+            self.set_error("search empty");
             return;
         }
         let needle = self.search.query.to_lowercase();
@@ -910,17 +1055,17 @@ impl App {
         self.search.current = 0;
         self.search.active = true;
         if self.search.matches.is_empty() {
-            self.status = format!("no matches for {:?}", self.search.query);
+            self.set_error(format!("no matches for {:?}", self.search.query));
         } else {
             let row = self.search.matches[0];
             self.scroll_y = row.min(self.max_scroll());
             self.sync_selected_file();
-            self.status = format!(
+            self.set_info(format!(
                 "match {}/{}: {:?}",
                 self.search.current + 1,
                 self.search.matches.len(),
                 self.search.query
-            );
+            ));
         }
     }
 
@@ -930,9 +1075,9 @@ impl App {
             // Silent no-op previously: the user pressed n/N and saw nothing
             // happen, which reads as a broken keybind. Surface why instead.
             if self.search.active {
-                self.status = format!("no matches for {:?}", self.search.query);
+                self.set_error(format!("no matches for {:?}", self.search.query));
             } else {
-                self.status = "no search active (press / to search)".into();
+                self.set_error("no search active (press / to search)");
             }
             return;
         }
@@ -945,18 +1090,18 @@ impl App {
         let row = self.search.matches[self.search.current];
         self.scroll_y = row.min(self.max_scroll());
         self.sync_selected_file();
-        self.status = format!(
+        self.set_info(format!(
             "match {}/{}: {:?}",
             self.search.current + 1,
             self.search.matches.len(),
             self.search.query
-        );
+        ));
     }
 
     /// Apply the path filter: clamp selected_file into the visible set.
     fn apply_filter(&mut self) {
         if self.path_filter.trim().is_empty() {
-            self.status = "filter cleared".into();
+            self.set_success("filter cleared");
             return;
         }
         // Keep selected_file valid: if it no longer matches, jump to the first
@@ -972,15 +1117,15 @@ impl App {
                 self.selected_file = first;
                 self.scroll_y = ViewportQuery::file_start_row(&self.review, first);
             } else {
-                self.status = format!("no files match {:?}", self.path_filter);
+                self.set_error(format!("no files match {:?}", self.path_filter));
                 return;
             }
         }
-        self.status = format!(
+        self.set_info(format!(
             "filter: {:?} ({} files)",
             self.path_filter,
             self.visible_files().len()
-        );
+        ));
     }
 
     /// Indices of files matching the current path filter (all if empty).
@@ -1017,13 +1162,13 @@ impl App {
     /// On parse failure the old review is kept and an error status is set.
     pub fn reload_review(&mut self, text: &str) {
         if text.trim().is_empty() {
-            self.status = "reloaded (empty diff)".into();
+            self.set_info("reloaded (empty diff)");
             return;
         }
         let new_review = match crate::ir::parse_unified_diff(text) {
             Ok(r) => r,
             Err(e) => {
-                self.status = format!("reload failed: {e}");
+                self.set_error(format!("reload failed: {e}"));
                 return;
             }
         };
@@ -1111,7 +1256,7 @@ impl App {
             }
         }
 
-        self.status = format!("reloaded ({} files)", self.review.file_count());
+        self.set_success(format!("reloaded ({} files)", self.review.file_count()));
     }
 
     /// Run the search without jumping/overwriting a caller-set status prefix.
@@ -1144,10 +1289,10 @@ impl App {
                 self.sync_selected_file();
                 let path = self.current_path().to_string();
                 let dir = if forward { "→" } else { "←" };
-                self.status = format!("{dir} hunk @ {path}:{}", row);
+                self.set_info(format!("{dir} hunk @ {path}:{}", row));
             }
             None => {
-                self.status = "no hunks to jump to".into();
+                self.set_error("no hunks to jump to");
             }
         }
     }
@@ -1155,21 +1300,21 @@ impl App {
     /// Fold (collapse) the currently selected file so only its header is visible.
     fn fold_current(&mut self) {
         if self.folded.insert(self.selected_file) {
-            self.status = format!("▼ {} (folded)", self.current_path());
+            self.set_info(format!("▼ {} (folded)", self.current_path()));
             // Clamp scroll in case the fold leaves the viewport past the end.
             self.scroll_y = self.scroll_y.min(self.max_scroll());
             self.sync_selected_file();
         } else {
-            self.status = format!("already folded: {}", self.current_path());
+            self.set_error(format!("already folded: {}", self.current_path()));
         }
     }
 
     /// Unfold (expand) the currently selected file, revealing its body.
     fn unfold_current(&mut self) {
         if self.folded.remove(&self.selected_file) {
-            self.status = format!("▶ {} (unfolded)", self.current_path());
+            self.set_success(format!("▶ {} (unfolded)", self.current_path()));
         } else {
-            self.status = format!("not folded: {}", self.current_path());
+            self.set_error(format!("not folded: {}", self.current_path()));
         }
     }
 
@@ -1268,6 +1413,63 @@ diff --git a/b.rs b/b.rs
 
     fn ctrl(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::CONTROL)
+    }
+
+    // ---- Toast / feedback system -------------------------------------------
+
+    #[test]
+    fn toast_from_str_defaults_to_info_and_is_stamped() {
+        let t: Toast = "no matches".into();
+        assert_eq!(t.kind, ToastKind::Info);
+        assert!(t.set_at.is_some(), "non-sticky toast is stamped now");
+        assert_eq!(t.message, "no matches");
+    }
+
+    #[test]
+    fn toast_contains_delegates_to_message() {
+        // Backward-compat shim: existing `app.status.contains(...)` assertions
+        // must keep working now that `status` is a Toast, not a String.
+        let t: Toast = "reloaded (3 files)".into();
+        assert!(t.contains("reloaded"));
+        assert!(!t.contains("failed"));
+        assert!(!t.is_empty());
+        assert!(Toast::default().is_empty());
+    }
+
+    #[test]
+    fn set_error_marks_error_kind() {
+        let mut app = two_file_app();
+        app.set_error("boom");
+        assert_eq!(app.status.kind, ToastKind::Error);
+        assert_eq!(app.status.message, "boom");
+        assert!(app.status.contains("boom"));
+    }
+
+    #[test]
+    fn set_success_marks_success_kind() {
+        let mut app = two_file_app();
+        app.set_success("highlight on");
+        assert_eq!(app.status.kind, ToastKind::Success);
+    }
+
+    #[test]
+    fn expire_status_clears_a_past_toast_but_not_sticky() {
+        let mut app = two_file_app();
+        // Initial status is the sticky startup hint.
+        assert!(app.status.set_at.is_none(), "startup hint is sticky");
+        app.expire_status();
+        assert!(!app.status.is_empty(), "sticky toast never expires");
+
+        // A freshly-set info toast hasn't elapsed its TTL, so it survives.
+        app.set_info("search: foo");
+        app.expire_status();
+        assert!(!app.status.is_empty(), "fresh toast not yet expired");
+    }
+
+    #[test]
+    fn toast_kind_ttl_error_outlasts_info() {
+        assert!(ToastKind::Error.ttl_secs() > ToastKind::Info.ttl_secs());
+        assert_eq!(ToastKind::Info.ttl_secs(), ToastKind::Success.ttl_secs());
     }
 
     #[test]
