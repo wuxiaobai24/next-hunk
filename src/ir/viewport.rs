@@ -217,7 +217,7 @@ impl ViewportQuery {
     ///
     /// Computed by locating the row's hunk within its file and walking from the
     /// hunk's `old_start`/`new_start`, incrementing per line kind. Used by the
-    /// line-number gutter and by `o` (open in editor).
+    /// line-number gutter and by `e` (open in editor).
     pub fn row_line_numbers(review: &Review, row: usize) -> Option<(Option<u32>, Option<u32>)> {
         use crate::ir::model::DiffLineKind;
         let (file_idx, line_in_file) = Self::file_and_line(review, row)?;

@@ -33,10 +33,10 @@
 - [x] 基准测试：解析 + 视口物化
 - [x] 语法高亮（syntect，仅视口 + 缓存，默认开启）
 - [x] 搜索：stream 内 `/` 内容搜索 + 文件栏 `f` 路径过滤
-- [x] Hunk 跳转：`]h` / `[h` 下一个/上一个 hunk（二分定位 hunk 索引）
+- [x] Hunk 跳转：`]` / `[` 下一个/上一个 hunk（二分定位 hunk 索引）
 - [x] Watch 模式：`--watch` 实时重载（notify，debounce；保持滚动/选中）
 - [x] Pager 模式：`next-hunk pager` 作 git 的 `core.pager`
-- [x] `o` 打开到编辑器：跳转到光标行
+- [x] `e` 打开到编辑器：跳转到光标行
 - [x] 状态栏 diff 统计（per-file + 全局 `+ins/−del`）
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
@@ -44,7 +44,7 @@
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
 - [x] `next-hunk filediff <旧文件> <新文件>` — 对比磁盘上两个任意文件
-- [x] 文件折叠/展开：`zc`（收起）/ `zo`（展开）
+- [x] 文件折叠/展开：`z` 切换当前文件
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
 - [x] 折行配置：`wrap = true` 折行显示（默认截断）
 - [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
@@ -130,37 +130,39 @@ nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 
 ### 快捷键
 
+扁平的 Vim 风格单键 —— 没有两键序列。`Esc` 永不退出（只清除状态）；
+退出用 `q` / `Ctrl+C`。
+
 | 按键 | 动作 |
 |-----|------|
 | `j` / `↓` | 向下滚动一行 |
 | `k` / `↑` | 向上滚动一行 |
-| `J` / `PgDn` | 向下滚动半屏 |
-| `K` / `PgUp` | 向上滚动半屏 |
-| `Ctrl-D` / `Ctrl-F` | 向下滚动（半屏 / 整屏） |
-| `Ctrl-U` / `Ctrl-B` | 向上滚动（半屏 / 整屏） |
-| `g` / `Home` | 跳到顶部 |
-| `G` / `End` | 跳到底部 |
-| `]h` | 下一个 hunk（跨文件回绕） |
-| `[h` | 上一个 hunk（跨文件回绕） |
-| `Space` | 下一个 hunk（`]h` 的快捷单键） |
-| `zc` | 折叠（收起）当前文件 |
-| `zo` | 展开当前文件 |
-| `Tab` / `l` / `→` | 下一个文件 |
-| `Shift+Tab` / `h` / `←` | 上一个文件 |
-| `1`–`9` | 跳到第 N 个文件 |
-| `b` | 切换文件侧边栏显示 |
-| 点击文件栏 | 选中该文件 |
-| 点击 diff 区 | 把视口定位到该行 |
+| `d` / `u` | 向下 / 向上滚动半屏 |
+| `Space` / `b` | 向下 / 向上滚动整屏 |
+| `Ctrl-D` / `Ctrl-U` | 半屏（同 d/u） |
+| `Ctrl-F` / `Ctrl-B` | 整屏 |
+| `g` / `G` | 跳到顶部 / 底部 |
+| `]` / `[` | 下一个 / 上一个 hunk（跨文件回绕） |
+| `.` / `,` | 下一个 / 上一个文件 |
+| `z` | 折叠 / 展开当前文件 |
+| `s` | 切换文件侧边栏显示 |
+| `e` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
+| `r` | 重新拉取 diff |
 | `H` | 切换语法高亮 |
-| `#` | 切换行号显示 |
-| `w` | 切换词级行内 diff |
+| `l` | 切换行号显示 |
+| `w` | 切换折行 |
+| `i` | 切换词级行内 diff |
 | `W` | 切换忽略空白（隐藏仅空白变化） |
-| `t` | 循环主题：light → auto → dark |
+| `t` | 循环主题：dark → light → auto |
+| `1` / `2` | 布局：unified / stacked |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
-| `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
 | `?` | 切换全屏快捷键帮助 |
-| `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
+| `q` / `Ctrl+C` | 退出 |
+| 点击文件栏 | 选中该文件 |
+| 点击 diff 区 | 把视口定位到该行 |
+
+`--select` 模式下决策键 `a`（接受）/ `r`（拒绝）/ `u`（未定）优先于其常规含义。
 
 ## 配置
 
@@ -177,7 +179,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `staged` | bool | `false` | 查看 staged 改动 |
 | `highlight` | bool | `true` | 语法高亮 |
 | `watch` | bool | `false` | 文件变化时实时重载 |
-| `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
+| `line_numbers` | bool | — | 显示 old/new 行号 gutter（`l` 运行时切换） |
 | `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）或 `"stack"`（每文件分旧/新两块） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |

@@ -219,7 +219,7 @@ pub struct App {
     /// Highlight changed words within a line (word-diff). ON by default.
     pub word_diff_on: bool,
 
-    /// Show the left file-rail sidebar (toggle with `b`).
+    /// Show the left file-rail sidebar (toggle with `s`).
     pub show_rail: bool,
     /// Last drawn rail area (None when the rail is hidden). Set by draw_main.
     pub rail_rect: Option<ratatui::layout::Rect>,
@@ -240,14 +240,16 @@ pub struct App {
     pub search: Search,
     /// File-rail path filter substring (empty = show all).
     pub path_filter: String,
-    /// Pending first key of a two-key sequence (`]` / `[`). Cleared on the next
-    /// key or after a short no-op. Used to spell `]h` / `[h` (next/prev hunk).
-    pub pending_prefix: Option<char>,
-    /// A pending "open in editor" request. Set when the user presses `o` on a
+    /// A pending "open in editor" request. Set when the user presses `e` on a
     /// code line; the run loop (which owns the terminal) consumes it, suspends
     /// the TUI, spawns `$EDITOR`, and resumes. Keeping it as a field (not an
     /// I/O side effect) keeps `App` pure and headless-testable.
     pub open_request: Option<OpenTarget>,
+    /// A pending manual reload request (`r`). The run loop consumes it by
+    /// re-fetching the diff through its reloader (when one exists) and calling
+    /// [`App::reload_review`]. A flag on `App` for the same purity reasons as
+    /// `open_request`.
+    pub reload_request: bool,
 
     /// `--focus`: where to scroll on startup. Set by the run loop before the
     /// first draw and consumed (cleared) by [`App::apply_focus`].
@@ -275,7 +277,7 @@ pub struct App {
 }
 
 /// A request to open a file in an external editor at a line, produced when the
-/// user presses `o` on a code row. The path is relative to the repo workdir.
+/// user presses `e` on a code row. The path is relative to the repo workdir.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenTarget {
     /// Repo-relative path of the file to open.
@@ -382,7 +384,10 @@ impl App {
         let status = if review.is_empty() {
             Toast::sticky("empty diff")
         } else {
-            Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count()))
+            Toast::sticky(format!(
+                "{} file(s) — j/k scroll · ]/[ hunk · ,/. file · / search · ? keys · q quit",
+                review.file_count()
+            ))
         };
         let theme = theme_mode.to_theme();
         Self {
@@ -410,8 +415,8 @@ impl App {
             mode: InputMode::Normal,
             search: Search::default(),
             path_filter: String::new(),
-            pending_prefix: None,
             open_request: None,
+            reload_request: false,
             focus_target: None,
             notes: Vec::new(),
             select_mode: false,
@@ -638,7 +643,7 @@ impl App {
     /// Handle a single mouse event. Pure: mutates state only, no I/O.
     ///
     /// Wheel scroll is handled (one row per notch; Shift widens it to a
-    /// half-page, mirroring `j`/`J`). Left-clicks on the file rail select the
+    /// half-page, mirroring `j`/`d`). Left-clicks on the file rail select the
     /// clicked file and scroll to its start; left-clicks on the stream position
     /// the viewport so the clicked row is on top. Other clicks/drags/moves are
     /// ignored. Keeping this in `App` means mouse behavior is exercisable
@@ -700,6 +705,10 @@ impl App {
         x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
     }
 
+    /// Normal-mode keymap. Flat, Vim-flavored single keys (no two-key
+    /// sequences): `d`/`u` half-page, `Space`/`b` full page, `]`/`[` hunk
+    /// jumps, `,`/`.` file jumps, one-letter view toggles. `Esc` never quits —
+    /// it only clears transient state; quitting is `q`/Ctrl+C.
     fn handle_normal_key(&mut self, key: KeyEvent) {
         let half = self.viewport_height.max(1) / 2;
         let full = self.viewport_height.max(1);
@@ -729,65 +738,44 @@ impl App {
             }
         }
 
-        // Two-key sequence handling for `]h` / `[h` (next/prev hunk)
-        // and `zc` / `zo` (fold/unfold current file).
-        // If a prefix is pending, consume it now.
-        if let Some(prefix) = self.pending_prefix.take() {
-            match (prefix, key.code) {
-                (']', KeyCode::Char('h')) => {
-                    self.jump_hunk(true);
-                    return;
-                }
-                ('[', KeyCode::Char('h')) => {
-                    self.jump_hunk(false);
-                    return;
-                }
-                ('z', KeyCode::Char('c')) => {
-                    self.fold_current();
-                    return;
-                }
-                ('z', KeyCode::Char('o')) => {
-                    self.unfold_current();
-                    return;
-                }
-                _ => {
-                    // Unrecognized second key: fall through to normal dispatch.
-                    // (A lone `]`/`[`/`z` that isn't followed by a valid second key is discarded.)
-                }
-            }
-        }
-
         match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                // If a search is active, Esc clears it; otherwise quit.
+            // quit. Esc deliberately does NOT quit: after closing prompts or
+            // clearing a search, a stray Esc must not throw away the review
+            // session.
+            KeyCode::Char('q') => {
+                self.should_quit = true;
+            }
+            KeyCode::Esc => {
+                // Clear transient state only; in a clean state this is a no-op.
                 if self.search.active {
                     self.search.clear();
                     self.set_success("search cleared");
-                } else {
-                    self.should_quit = true;
                 }
             }
-            // scroll down one
+            // scroll down one row
             KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_y = self.scroll_y.saturating_add(1).min(self.max_scroll());
-                self.sync_selected_file();
+                self.scroll_by(1);
             }
-            // scroll up one
+            // scroll up one row
             KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_y = self.scroll_y.saturating_sub(1);
-                self.sync_selected_file();
+                self.scroll_by(-1);
             }
-            // half-page down
-            KeyCode::Char('J') | KeyCode::PageDown => {
-                self.scroll_y = self.scroll_y.saturating_add(half).min(self.max_scroll());
-                self.sync_selected_file();
+            // half page down / up (vim's Ctrl-D/U without the modifier)
+            KeyCode::Char('d') => {
+                self.scroll_by(half as i64);
             }
-            // half-page up
-            KeyCode::Char('K') | KeyCode::PageUp => {
-                self.scroll_y = self.scroll_y.saturating_sub(half);
-                self.sync_selected_file();
+            KeyCode::Char('u') if !self.select_mode => {
+                self.scroll_by(-(half as i64));
             }
-            // top / bottom
+            // full page down / up (less-style Space/b; PgDn/PgUp map here)
+            KeyCode::Char(' ') | KeyCode::PageDown => {
+                self.scroll_by(full as i64);
+            }
+            KeyCode::Char('b') | KeyCode::PageUp => {
+                self.scroll_by(-(full as i64));
+            }
+            // top / bottom. A bare `g` is the whole gesture (pressing it
+            // twice as vim's `gg` is harmless — the second press is a no-op).
             KeyCode::Char('g') | KeyCode::Home => {
                 self.scroll_y = 0;
                 self.sync_selected_file();
@@ -796,8 +784,15 @@ impl App {
                 self.scroll_y = self.max_scroll();
                 self.sync_selected_file();
             }
-            // next / prev file
-            KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
+            // next / previous hunk (single keys, wrapping across files)
+            KeyCode::Char(']') => {
+                self.jump_hunk(true);
+            }
+            KeyCode::Char('[') => {
+                self.jump_hunk(false);
+            }
+            // next / previous file
+            KeyCode::Char('.') | KeyCode::Tab => {
                 if let Some((idx, row)) =
                     ViewportQuery::jump_file(&self.review, self.selected_file, true)
                 {
@@ -806,7 +801,7 @@ impl App {
                     self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
-            KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => {
+            KeyCode::Char(',') | KeyCode::BackTab => {
                 if let Some((idx, row)) =
                     ViewportQuery::jump_file(&self.review, self.selected_file, false)
                 {
@@ -815,50 +810,25 @@ impl App {
                     self.set_info(format!("← {}", self.review.display_path(idx)));
                 }
             }
-            // Number keys 1-9 jump directly to the Nth file (1-based). A
-            // muscle-memory shortcut for large multi-file diffs, where
-            // Tab-cycling to a far-down file is tedious. Falls through
-            // (no-op) when the index is out of range.
-            KeyCode::Char(c @ ('1'..='9')) => {
-                let n = (c as u8 - b'0') as usize;
-                if n <= self.review.file_count() {
-                    let idx = n - 1;
-                    self.selected_file = idx;
-                    self.scroll_y = ViewportQuery::file_start_row(&self.review, idx);
-                    self.set_info(format!("→ {}", self.review.display_path(idx)));
+            // toggle fold (collapse/expand) on the current file
+            KeyCode::Char('z') => {
+                if self.folded.contains(&self.selected_file) {
+                    self.unfold_current();
+                } else {
+                    self.fold_current();
                 }
             }
-            // hunk navigation prefixes: `]` / `[` await a following `h`
-            KeyCode::Char(']') => {
-                self.pending_prefix = Some(']');
-                self.set_info("]");
-            }
-            KeyCode::Char('[') => {
-                self.pending_prefix = Some('[');
-                self.set_info("[");
-            }
-            // fold/unfold prefixes: `z` awaits `c` (close) or `o` (open).
-            KeyCode::Char('z') => {
-                self.pending_prefix = Some('z');
-                self.set_info("z");
-            }
-            // space: jump to the next hunk (wraps across files). A fast
-            // single-key alternative to the `]h` two-key sequence.
-            KeyCode::Char(' ') => {
-                self.jump_hunk(true);
-            }
-            // toggle highlight
-            KeyCode::Char('H') => {
-                self.highlight_on = !self.highlight_on;
-                if !self.highlight_on {
-                    self.cache.invalidate();
-                    self.set_info("highlight off");
+            // toggle the file-rail sidebar
+            KeyCode::Char('s') => {
+                self.show_rail = !self.show_rail;
+                if self.show_rail {
+                    self.set_success("rail shown");
                 } else {
-                    self.set_success("highlight on");
+                    self.set_info("rail hidden");
                 }
             }
             // toggle line-number gutter
-            KeyCode::Char('#') => {
+            KeyCode::Char('l') => {
                 self.line_numbers_on = !self.line_numbers_on;
                 if self.line_numbers_on {
                     self.set_success("line numbers on");
@@ -866,8 +836,17 @@ impl App {
                     self.set_info("line numbers off");
                 }
             }
-            // toggle word-level inline diff
+            // toggle line wrapping
             KeyCode::Char('w') => {
+                self.wrap_on = !self.wrap_on;
+                if self.wrap_on {
+                    self.set_success("wrap on");
+                } else {
+                    self.set_info("wrap off");
+                }
+            }
+            // toggle word-level inline diff
+            KeyCode::Char('i') => {
                 self.word_diff_on = !self.word_diff_on;
                 if self.word_diff_on {
                     self.set_success("word diff on");
@@ -885,16 +864,17 @@ impl App {
                     self.set_info("ignore-whitespace off");
                 }
             }
-            // toggle the file-rail sidebar
-            KeyCode::Char('b') => {
-                self.show_rail = !self.show_rail;
-                if self.show_rail {
-                    self.set_success("rail shown");
+            // toggle syntax highlighting
+            KeyCode::Char('H') => {
+                self.highlight_on = !self.highlight_on;
+                if !self.highlight_on {
+                    self.cache.invalidate();
+                    self.set_info("highlight off");
                 } else {
-                    self.set_info("rail hidden");
+                    self.set_success("highlight on");
                 }
             }
-            // cycle theme: dark → light → auto → dark; reload syntect palette
+            // cycle theme: light → auto → dark; reload syntect palette
             KeyCode::Char('t') => {
                 self.theme_mode = self.theme_mode.cycle();
                 self.theme = self.theme_mode.to_theme();
@@ -905,6 +885,15 @@ impl App {
                 );
                 self.cache.invalidate();
                 self.set_info(format!("theme: {}", self.theme_mode.name()));
+            }
+            // layout: unified / stacked stream
+            KeyCode::Char('1') => {
+                self.layout_mode = LayoutMode::Unified;
+                self.set_info("layout: unified");
+            }
+            KeyCode::Char('2') => {
+                self.layout_mode = LayoutMode::Stack;
+                self.set_info("layout: stack");
             }
             // begin in-stream search
             KeyCode::Char('/') => {
@@ -919,7 +908,7 @@ impl App {
                 self.set_info("filter: ");
             }
             // open the focused line's file in $EDITOR
-            KeyCode::Char('o') => match self.compute_open_target() {
+            KeyCode::Char('e') => match self.compute_open_target() {
                 Some(t) => {
                     self.set_info(format!("opening {}:{}…", t.path, t.line));
                     self.open_request = Some(t);
@@ -935,13 +924,18 @@ impl App {
             KeyCode::Char('N') => {
                 self.advance_match(false);
             }
+            // manual reload: re-fetch the diff through the run loop's reloader
+            KeyCode::Char('r') if !self.select_mode => {
+                self.reload_request = true;
+            }
             // toggle the full-screen keybinding help overlay
             KeyCode::Char('?') => {
                 self.show_help = !self.show_help;
             }
             // --select mode: accept / reject / mark undecided on the current
             // hunk, then jump to the next. These keys are inert outside select
-            // mode (a/r/u fall through to the no-op catch-all).
+            // mode (a/r/u fall through to the no-op catch-all). In select mode
+            // they override the normal `r` (reload) and `u` (half-page up).
             KeyCode::Char('a') if self.select_mode => {
                 self.decide_current(Decision::Accept);
             }
@@ -1333,8 +1327,8 @@ impl App {
         self.sync_selected_file();
     }
 
-    /// Compute the file + line to open for the `o` (open in editor) action.    ///
-    /// The TUI is a top-anchored scroll view (no row cursor), so `o` targets
+    /// Compute the file + line to open for the `e` (open in editor) action.
+    /// The TUI is a top-anchored scroll view (no row cursor), so `e` targets
     /// the top visible stream row. If that row is a header (file or hunk),
     /// scan forward within the viewport to the first code line. For a code line
     /// we prefer the new-side line number (so edits land on the live file);
@@ -1563,9 +1557,24 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn quit_on_esc_when_no_search() {
+    fn esc_does_not_quit_and_only_clears_search() {
         let mut app = two_file_app();
+        // Esc in a clean state must not quit — a stray Esc after closing a
+        // prompt must never throw away the review session.
         app.handle_key(key(KeyCode::Esc));
+        assert!(!app.should_quit, "Esc must not quit");
+        // With an active search, Esc clears it (and still doesn't quit).
+        app.search.active = true;
+        app.search.matches = vec![0];
+        app.handle_key(key(KeyCode::Esc));
+        assert!(!app.search.active);
+        assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn q_quits() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('q')));
         assert!(app.should_quit);
     }
 
@@ -1628,11 +1637,11 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn right_left_navigate_files() {
+    fn dot_comma_navigate_files() {
         let mut app = two_file_app();
-        app.handle_key(key(KeyCode::Right));
+        app.handle_key(char_key('.'));
         assert_eq!(app.selected_file, 1);
-        app.handle_key(key(KeyCode::Left));
+        app.handle_key(char_key(','));
         assert_eq!(app.selected_file, 0);
     }
 
@@ -1651,18 +1660,21 @@ diff --git a/b.rs b/b.rs
         let mut app = two_file_app();
         // Stream: a.rs (rows 0-3), b.rs (rows 4-7). viewport_height=4, half=2.
         // max_scroll = 8 - 4 = 4.
-        // Two PageDowns from 0 → 4 (file 1, b.rs).
-        app.handle_key(key(KeyCode::Char('J')));
+        // Two half-page downs (d) from 0 → 4 (file 1, b.rs).
+        app.handle_key(key(KeyCode::Char('d')));
         assert_eq!(app.scroll_y, 2);
-        app.handle_key(key(KeyCode::Char('J')));
+        app.handle_key(key(KeyCode::Char('d')));
         assert_eq!(app.scroll_y, 4);
-        assert_eq!(app.selected_file, 1, "PageDown should sync to file 1");
-        // Two PageUps from 4 → 0 (file 0, a.rs).
-        app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.selected_file, 1, "half-page down should sync to file 1");
+        // Two half-page ups (u) from 4 → 0 (file 0, a.rs).
+        app.handle_key(key(KeyCode::Char('u')));
         assert_eq!(app.scroll_y, 2);
-        app.handle_key(key(KeyCode::Char('K')));
+        app.handle_key(key(KeyCode::Char('u')));
         assert_eq!(app.scroll_y, 0);
-        assert_eq!(app.selected_file, 0, "PageUp should sync back to file 0");
+        assert_eq!(
+            app.selected_file, 0,
+            "half-page up should sync back to file 0"
+        );
     }
 
     #[test]
@@ -1684,9 +1696,9 @@ diff --git a/b.rs b/b.rs
     fn toggle_line_numbers() {
         let mut app = two_file_app();
         assert!(app.line_numbers_on, "line numbers on by default");
-        app.handle_key(char_key('#'));
+        app.handle_key(char_key('l'));
         assert!(!app.line_numbers_on);
-        app.handle_key(char_key('#'));
+        app.handle_key(char_key('l'));
         assert!(app.line_numbers_on);
     }
 
@@ -1694,10 +1706,55 @@ diff --git a/b.rs b/b.rs
     fn toggle_word_diff() {
         let mut app = two_file_app();
         assert!(app.word_diff_on, "word diff on by default");
-        app.handle_key(char_key('w'));
+        app.handle_key(char_key('i'));
         assert!(!app.word_diff_on);
-        app.handle_key(char_key('w'));
+        app.handle_key(char_key('i'));
         assert!(app.word_diff_on);
+    }
+
+    #[test]
+    fn toggle_wrap() {
+        let mut app = two_file_app();
+        assert!(!app.wrap_on, "wrap off by default");
+        app.handle_key(char_key('w'));
+        assert!(app.wrap_on);
+        assert!(app.status.contains("wrap on"));
+        app.handle_key(char_key('w'));
+        assert!(!app.wrap_on);
+    }
+
+    #[test]
+    fn layout_keys_switch_mode() {
+        use crate::config::LayoutMode;
+        let mut app = two_file_app();
+        assert_eq!(app.layout_mode, LayoutMode::Unified);
+        app.handle_key(char_key('2'));
+        assert_eq!(app.layout_mode, LayoutMode::Stack);
+        app.handle_key(char_key('1'));
+        assert_eq!(app.layout_mode, LayoutMode::Unified);
+    }
+
+    #[test]
+    fn r_sets_reload_request() {
+        let mut app = two_file_app();
+        assert!(!app.reload_request);
+        app.handle_key(char_key('r'));
+        assert!(app.reload_request, "r should request a reload");
+        // In select mode r means reject instead; verify it does NOT reload.
+        let mut select_app = two_file_app();
+        select_app.select_mode = true;
+        select_app.handle_key(char_key('r'));
+        assert!(!select_app.reload_request);
+    }
+
+    #[test]
+    fn z_toggles_fold() {
+        let mut app = two_file_app();
+        assert!(app.folded.is_empty());
+        app.handle_key(char_key('z'));
+        assert!(app.folded.contains(&0), "z should fold the current file");
+        app.handle_key(char_key('z'));
+        assert!(app.folded.is_empty(), "second z should unfold");
     }
 
     #[test]
@@ -1719,13 +1776,13 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn b_toggles_show_rail() {
+    fn s_toggles_show_rail() {
         let mut app = two_file_app();
         assert!(app.show_rail, "rail shown by default");
-        app.handle_key(char_key('b'));
+        app.handle_key(char_key('s'));
         assert!(!app.show_rail);
         assert!(app.status.contains("rail hidden"));
-        app.handle_key(char_key('b'));
+        app.handle_key(char_key('s'));
         assert!(app.show_rail);
         assert!(app.status.contains("rail shown"));
     }
@@ -1953,7 +2010,7 @@ diff --git a/a.rs b/a.rs
         assert!(app.should_quit);
     }
 
-    // ---- hunk navigation (]h / [h) ----
+    // ---- hunk navigation (] / [) ----
 
     fn multi_hunk_app() -> App {
         let review = parse_unified_diff(
@@ -2006,75 +2063,52 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn prefix_h_jumps_to_next_hunk() {
+    fn bracket_jumps_to_next_hunk() {
         let mut app = multi_hunk_app();
-        let seq = |app: &mut App| {
-            app.handle_key(char_key(']'));
-            app.handle_key(char_key('h'));
-        };
         // start at row 0 → first hunk (1)
-        seq(&mut app);
+        app.handle_key(char_key(']'));
         assert_eq!(app.scroll_y, 1);
-        assert_eq!(app.pending_prefix, None);
         // → second hunk (5)
-        seq(&mut app);
+        app.handle_key(char_key(']'));
         assert_eq!(app.scroll_y, 5);
         // → third hunk (10), now in file b.rs
-        seq(&mut app);
+        app.handle_key(char_key(']'));
         assert_eq!(app.scroll_y, 10);
         assert_eq!(app.selected_file, 1, "rail should sync to file b.rs");
         // → fourth hunk (13)
-        seq(&mut app);
+        app.handle_key(char_key(']'));
         assert_eq!(app.scroll_y, 13);
         // wraps to the first hunk (1)
-        seq(&mut app);
+        app.handle_key(char_key(']'));
         assert_eq!(app.scroll_y, 1);
     }
 
     #[test]
-    fn bracket_h_jumps_to_previous_hunk() {
+    fn bracket_jumps_to_previous_hunk() {
         let mut app = multi_hunk_app();
         // move forward to the last hunk first (row 13): 4 jumps → 1, 5, 10, 13
         for _ in 0..4 {
             app.handle_key(char_key(']'));
-            app.handle_key(char_key('h'));
         }
         assert_eq!(app.scroll_y, 13);
-        // [h → previous hunk (10)
+        // [ → previous hunk (10)
         app.handle_key(char_key('['));
-        app.handle_key(char_key('h'));
         assert_eq!(app.scroll_y, 10);
-        // [h → previous hunk (5)
+        // [ → previous hunk (5)
         app.handle_key(char_key('['));
-        app.handle_key(char_key('h'));
         assert_eq!(app.scroll_y, 5);
-        // [h → previous hunk (1)
+        // [ → previous hunk (1)
         app.handle_key(char_key('['));
-        app.handle_key(char_key('h'));
         assert_eq!(app.scroll_y, 1);
-        // [h wraps to the last hunk (13)
+        // [ wraps to the last hunk (13)
         app.handle_key(char_key('['));
-        app.handle_key(char_key('h'));
         assert_eq!(app.scroll_y, 13);
-    }
-
-    #[test]
-    fn lone_prefix_is_discarded_on_unrelated_key() {
-        let mut app = multi_hunk_app();
-        let start = app.scroll_y;
-        app.handle_key(char_key(']')); // pending
-        assert_eq!(app.pending_prefix, Some(']'));
-        // press an unrelated key (e.g. j) → prefix discarded, j handled
-        app.handle_key(char_key('j'));
-        assert_eq!(app.pending_prefix, None);
-        assert_eq!(app.scroll_y, start + 1);
     }
 
     #[test]
     fn hunk_jump_status_set() {
         let mut app = multi_hunk_app();
         app.handle_key(char_key(']'));
-        app.handle_key(char_key('h'));
         assert!(app.status.contains("hunk"));
     }
 
@@ -2101,11 +2135,11 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     #[test]
-    fn o_on_top_code_line_requests_open() {
+    fn e_on_top_code_line_requests_open() {
         let mut app = openable_app();
         // scroll to the context line (row 2) so the top visible row is code
         app.scroll_y = 2;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         let target = app
             .open_request
             .expect("o on a code line should set an open request");
@@ -2115,41 +2149,41 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     #[test]
-    fn o_prefers_new_side_line_number() {
+    fn e_prefers_new_side_line_number() {
         let mut app = openable_app();
         // scroll to the +new line (row 4) so top visible is an add line
         app.scroll_y = 4;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         let target = app.open_request.expect("open request set");
         assert_eq!(target.line, 11, "add line should use new-side number");
     }
 
     #[test]
-    fn o_falls_back_to_old_side_on_delete_line() {
+    fn e_falls_back_to_old_side_on_delete_line() {
         let mut app = openable_app();
         // scroll to the -old line (row 3) so top visible is a delete line
         app.scroll_y = 3;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         let target = app.open_request.expect("open request set");
         assert_eq!(target.line, 11, "delete line falls back to old-side number");
     }
 
     #[test]
-    fn o_on_header_scans_forward_to_first_code_line() {
+    fn e_on_header_scans_forward_to_first_code_line() {
         let mut app = openable_app();
         // top of the file: scroll_y=0 is the file header. o should scan forward
         // to the first code line (ctx at row 2).
         app.scroll_y = 0;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         let target = app.open_request.expect("should scan to a code line");
         assert_eq!(target.line, 10);
     }
 
     #[test]
-    fn o_clears_request_each_press() {
+    fn e_clears_request_each_press() {
         let mut app = openable_app();
         app.scroll_y = 2;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         assert!(app.open_request.is_some());
         // simulate the run loop consuming it
         let _ = app.open_request.take();
@@ -2157,11 +2191,11 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     #[test]
-    fn o_with_no_code_visible_is_noop() {
+    fn e_with_no_code_visible_is_noop() {
         let mut app = openable_app();
         // viewport height 0 → no visible code row
         app.viewport_height = 0;
-        app.handle_key(char_key('o'));
+        app.handle_key(char_key('e'));
         assert!(app.open_request.is_none());
         assert!(app.status.contains("nothing"));
     }
@@ -2786,24 +2820,6 @@ diff --git a/c.rs b/c.rs
     }
 
     #[test]
-    fn number_key_jumps_to_nth_file() {
-        let mut app = three_file_app();
-        // Press `3` → should select the 3rd file (index 2) and scroll to its start.
-        app.handle_key(char_key('3'));
-        assert_eq!(app.selected_file, 2);
-        assert_eq!(app.current_path(), "c/c.rs");
-    }
-
-    #[test]
-    fn number_key_out_of_range_is_noop() {
-        let mut app = three_file_app();
-        let before = (app.selected_file, app.scroll_y);
-        // `9` is past the 3-file count: no-op, no crash.
-        app.handle_key(char_key('9'));
-        assert_eq!(app.selected_file, before.0);
-    }
-
-    #[test]
     fn ctrl_d_scrolls_half_page_down() {
         let mut app = three_file_app();
         app.viewport_height = 6; // half = 3
@@ -2881,24 +2897,22 @@ diff --git a/c.rs b/c.rs
         assert!(app.status.contains("no matches"), "got: {}", app.status);
     }
 
-    // ---- fold (zc / zo) ----
+    // ---- fold (z) ----
 
     #[test]
-    fn zc_folds_current_file() {
+    fn z_folds_current_file() {
         let mut app = multi_hunk_app();
         assert!(app.folded.is_empty());
         app.handle_key(char_key('z'));
-        app.handle_key(char_key('c'));
         assert!(app.folded.contains(&0), "file 0 should be folded");
         assert!(app.status.contains("folded"));
     }
 
     #[test]
-    fn zo_unfolds_current_file() {
+    fn z_unfolds_current_file() {
         let mut app = multi_hunk_app();
         app.folded.insert(0);
         app.handle_key(char_key('z'));
-        app.handle_key(char_key('o'));
         assert!(!app.folded.contains(&0), "file 0 should be unfolded");
         assert!(app.status.contains("unfolded"));
     }
@@ -2935,15 +2949,12 @@ diff --git a/c.rs b/c.rs
     }
 
     #[test]
-    fn zc_then_zo_restores_full_view() {
+    fn z_then_z_restores_full_view() {
         let mut app = multi_hunk_app();
         app.viewport_height = 20;
-        // fold file0
+        // fold file0, then unfold it again
         app.handle_key(char_key('z'));
-        app.handle_key(char_key('c'));
-        // unfold file0
         app.handle_key(char_key('z'));
-        app.handle_key(char_key('o'));
         let total = app.review.stream_len;
         let rows = ViewportQuery::rows(
             &app.review,
@@ -2957,24 +2968,11 @@ diff --git a/c.rs b/c.rs
     }
 
     #[test]
-    fn fold_then_unfold_toggle() {
-        let mut app = multi_hunk_app();
-        app.handle_key(char_key('z'));
-        app.handle_key(char_key('c'));
-        assert!(app.folded.contains(&0));
-        app.handle_key(char_key('z'));
-        app.handle_key(char_key('c'));
-        // zc on already-folded file is a no-op (status says already folded)
-        assert!(app.folded.contains(&0));
-        assert!(app.status.contains("already folded"));
-    }
-
-    #[test]
-    fn initial_status_mentions_fold_keys() {
+    fn initial_status_mentions_core_keys() {
         let app = two_file_app();
         assert!(
-            app.status.contains("zc/zo"),
-            "initial status should mention fold keys: {}",
+            app.status.contains("]/[ hunk") && app.status.contains("? keys"),
+            "initial status should mention the core keys: {}",
             app.status
         );
     }

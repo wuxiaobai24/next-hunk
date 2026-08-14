@@ -34,10 +34,10 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Benchmarks: parse + viewport materialization
 - [x] Syntax highlight (syntect, viewport-only + cached, default on)
 - [x] Search: in-stream `/` content search + file-rail `f` path filter
-- [x] Hunk navigation: `]h` / `[h` next/prev hunk (binary-searched hunk index)
+- [x] Hunk navigation: `]` / `[` next/prev hunk (binary-searched hunk index)
 - [x] Watch mode: `--watch` live-reload (notify, debounce; preserves scroll/selection)
 - [x] Pager mode: `next-hunk pager` as git's `core.pager`
-- [x] Open in editor: `o` jumps to the focused line in `$EDITOR`
+- [x] Open in editor: `e` jumps to the focused line in `$EDITOR`
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
@@ -45,7 +45,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
-- [x] File fold/unfold: `zc` (close) / `zo` (open)
+- [x] File fold/unfold: `z` toggles the current file
 - [x] Stack layout: `layout = "stack"` config (unified default)
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
@@ -66,7 +66,7 @@ core; reproduce with `cargo bench`):
 | `viewport_huge_h40` | materialize a 40-row window over the huge diff | **~300 µs** |
 | `viewport_single_h40` | resolve a file span + clip to viewport | **~190 ns** |
 
-The key idea: navigation (`]h`/`[`h`, file rail) resolves against a
+The key idea: navigation (`]`/`[`, file rail) resolves against a
 binary-searched index in **nanoseconds**, independent of total diff size, and
 the viewport materializes only what's on screen. Full numbers live in
 [CHANGELOG.md](./CHANGELOG.md).
@@ -166,37 +166,40 @@ All forms accept the full binary name too (`next-hunk diff …`).
 
 ### Keybindings
 
+Flat, Vim-flavored single keys — no two-key sequences. `Esc` never quits
+(it only clears state); quitting is `q` / `Ctrl+C`.
+
 | Key | Action |
 |-----|--------|
 | `j` / `↓` | scroll down one row |
 | `k` / `↑` | scroll up one row |
-| `J` / `PgDn` | scroll half a page |
-| `K` / `PgUp` | scroll half a page up |
-| `Ctrl-D` / `Ctrl-F` | scroll down (half / full page) |
-| `Ctrl-U` / `Ctrl-B` | scroll up (half / full page) |
-| `g` / `Home` | jump to top |
-| `G` / `End` | jump to bottom |
-| `]h` | next hunk (wraps across files) |
-| `[h` | previous hunk (wraps across files) |
-| `Space` | next hunk (quick `]h` alias) |
-| `zc` | fold (collapse) current file |
-| `zo` | unfold (expand) current file |
-| `Tab` / `l` / `→` | next file |
-| `Shift+Tab` / `h` / `←` | previous file |
-| `1`–`9` | jump to the Nth file |
-| `b` | toggle the file-rail sidebar |
-| click file rail | select that file |
-| click stream | position the viewport on that row |
+| `d` / `u` | scroll half a page down / up |
+| `Space` / `b` | scroll a full page down / up |
+| `Ctrl-D` / `Ctrl-U` | half page down / up |
+| `Ctrl-F` / `Ctrl-B` | full page down / up |
+| `g` / `G` | jump to top / bottom |
+| `]` / `[` | next / previous hunk (wraps across files) |
+| `.` / `,` | next / previous file |
+| `z` | fold / unfold the current file |
+| `s` | toggle the file-rail sidebar |
+| `e` | open the focused line in `$EDITOR` (at that line) |
+| `r` | reload the diff |
 | `H` | toggle syntax highlight |
-| `#` | toggle line-number gutter |
-| `w` | toggle word-level inline diff |
+| `l` | toggle line-number gutter |
+| `w` | toggle line wrap |
+| `i` | toggle word-level inline diff |
 | `W` | toggle ignore-whitespace (hide whitespace-only changes) |
-| `t` | cycle theme: light → auto → dark |
+| `t` | cycle theme: dark → light → auto |
+| `1` / `2` | layout: unified / stacked |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
-| `o` | open the focused line in `$EDITOR` (at that line) |
 | `?` | toggle the full-screen keybinding help |
-| `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
+| `q` / `Ctrl+C` | quit |
+| click file rail | select that file |
+| click stream | position the viewport on that row |
+
+In `--select` mode the decision keys `a` (accept) / `r` (reject) / `u`
+(undecided) take priority over their normal meanings.
 
 ## Configuration
 
@@ -214,7 +217,7 @@ Fields:
 | `staged` | bool | `false` | review staged changes |
 | `highlight` | bool | `true` | syntax highlighting |
 | `watch` | bool | `false` | live-reload on file changes |
-| `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
+| `line_numbers` | bool | — | show old/new line-number gutter (`l` toggles at runtime) |
 | `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved) or `"stack"` (old/new blocks per file) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
