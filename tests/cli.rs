@@ -359,3 +359,173 @@ fn pager_reads_stdin_and_renders() {
         "pager should render the patch (inspect fallback): {combined}"
     );
 }
+
+// ─── nh short binary & diff <target> disambiguation ─────────────────────────
+
+/// Skip when the `git` CLI is unavailable (repo setup convenience only; the
+/// product itself stays gix-only).
+fn require_git() -> Option<()> {
+    let ok = Command::new("git")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        Some(())
+    } else {
+        eprintln!("warning: git binary not found; skipping git CLI test");
+        None
+    }
+}
+
+/// A temp git repo with one commit of src/a.rs and a later modification, for
+/// exercising `diff <target>` from the real binary. Cleaned up on drop.
+struct TempRepo {
+    dir: PathBuf,
+}
+
+impl TempRepo {
+    fn new() -> TempRepo {
+        let dir = std::env::temp_dir().join(format!(
+            "nh-cli-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&dir)
+                .output()
+                .expect("run git");
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-q"]);
+        git(&["config", "user.email", "test@next-hunk"]);
+        git(&["config", "user.name", "Test"]);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src").join("a.rs"), "fn a() {}\n").unwrap();
+        std::fs::write(dir.join("other.txt"), "x\n").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "-q", "-m", "base"]);
+        // Two worktree modifications so pathspec filtering is observable.
+        std::fs::write(dir.join("src").join("a.rs"), "fn a() { changed }\n").unwrap();
+        std::fs::write(dir.join("other.txt"), "x changed\n").unwrap();
+        TempRepo { dir }
+    }
+}
+
+impl Drop for TempRepo {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn nh_binary_matches_next_hunk() {
+    // The short alias is the same program: same version, and it accepts the
+    // same subcommands (help header/usage should say `nh`).
+    let nh = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_nh")))
+        .arg("--version")
+        .output()
+        .expect("run nh");
+    assert!(nh.status.success(), "nh --version should succeed");
+    let full = Command::new(bin())
+        .arg("--version")
+        .output()
+        .expect("run next-hunk");
+    // The version *number* must match (the leading name naturally differs).
+    let version_of = |s: String| s.split_whitespace().nth(1).unwrap_or("").to_string();
+    assert_eq!(
+        version_of(String::from_utf8_lossy(&nh.stdout).into_owned()),
+        version_of(String::from_utf8_lossy(&full.stdout).into_owned()),
+        "nh and next-hunk should report the same version"
+    );
+
+    let help = Command::new(PathBuf::from(env!("CARGO_BIN_EXE_nh")))
+        .arg("--help")
+        .output()
+        .expect("run nh --help");
+    let help_text = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help_text.contains("Usage: nh"),
+        "nh usage should be branded nh: {help_text}"
+    );
+}
+
+#[test]
+fn diff_target_bad_rev_errors_git_style() {
+    let Some(_) = require_git() else { return };
+    let repo = TempRepo::new();
+    let out = Command::new(bin())
+        .args(["diff", "definitely-not-a-rev"])
+        .current_dir(&repo.dir)
+        .output()
+        .expect("run next-hunk diff");
+    assert!(!out.status.success(), "diff <bad-rev> should exit non-zero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown revision or path not in the working tree"),
+        "git-style error expected, got: {stderr}"
+    );
+}
+
+#[test]
+fn diff_target_rev_renders_and_path_falls_back() {
+    let Some(_) = require_git() else { return };
+    let repo = TempRepo::new();
+
+    // `diff HEAD` (piped → inspect fallback) shows both modified files.
+    let out = Command::new(bin())
+        .args(["diff", "HEAD"])
+        .current_dir(&repo.dir)
+        .output()
+        .expect("run next-hunk diff HEAD");
+    assert!(out.status.success(), "diff HEAD should succeed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("src/a.rs") && stdout.contains("other.txt"),
+        "diff HEAD should list both modified files: {stdout}"
+    );
+
+    // `diff HEAD -- src` — pathspec after the target filters to src/a.rs.
+    let out = Command::new(bin())
+        .args(["diff", "HEAD", "--", "src"])
+        .current_dir(&repo.dir)
+        .output()
+        .expect("run next-hunk diff HEAD -- src");
+    assert!(out.status.success(), "pathspec filtering should succeed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("src/a.rs") && !stdout.contains("other.txt"),
+        "pathspec should filter to src only: {stdout}"
+    );
+
+    // `diff src` — `src` is not a rev but exists on disk, so it falls back to
+    // a pathspec (note on stderr) and filters the worktree diff to src/a.rs.
+    let out = Command::new(bin())
+        .args(["diff", "src"])
+        .current_dir(&repo.dir)
+        .output()
+        .expect("run next-hunk diff src");
+    assert!(out.status.success(), "disk-path fallback should succeed");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stderr.contains("using it as a pathspec"),
+        "fallback should explain itself, stderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("src/a.rs") && !stdout.contains("other.txt"),
+        "fallback pathspec should filter to src only: {stdout}"
+    );
+}

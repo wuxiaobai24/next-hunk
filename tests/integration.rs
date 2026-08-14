@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
-use next_hunk::source::{find_repo, git_diff, git_file_diff, git_show, open_repo};
+use next_hunk::source::{
+    find_repo, git_diff, git_diff_target, git_file_diff, git_show, open_repo, rev_resolves,
+};
 
 /// Skip the test if `git` is unavailable.
 fn require_git() -> Option<()> {
@@ -399,4 +401,111 @@ fn filediff_with_relative_paths() {
     assert!(!text.trim().is_empty());
     let review = parse_unified_diff(&text).unwrap();
     assert_eq!(review.file_count(), 1);
+}
+
+// ─── diff <target> ───────────────────────────────────────────────────────────
+
+/// Repo state that exercises every tree-vs-worktree case: modified (staged +
+/// unstaged), added-since-target, deleted-from-disk.
+fn setup_target_repo() -> RepoGuard {
+    let repo = RepoGuard::new();
+    let root = repo.path();
+    write(&root.join("a.txt"), "line1\nline2\n");
+    write(&root.join("b.txt"), "to be deleted\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "base"]);
+
+    // staged modification of a.txt, staged addition of c.txt …
+    write(&root.join("a.txt"), "line1\nline2 staged\n");
+    write(&root.join("c.txt"), "added after base\n");
+    git_in(root, &["add", "."]);
+    // … and a further unstaged edit of a.txt plus a deletion of b.txt on disk.
+    write(&root.join("a.txt"), "line1\nline2 staged\nline3 unstaged\n");
+    fs::remove_file(root.join("b.txt")).unwrap();
+    repo
+}
+
+/// The file set of `nh diff HEAD` (tree vs worktree) matches `git diff HEAD`.
+#[test]
+fn diff_target_head_matches_git() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_target_repo();
+    let workdir = repo.workdir();
+
+    let text = git_diff_target(&workdir, "HEAD", &[], false).unwrap();
+    let review = parse_unified_diff(&text).unwrap();
+    let mut paths: Vec<String> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.clone())
+        .collect();
+    paths.sort();
+
+    let git_status = git_in(&workdir, &["diff", "HEAD", "--name-only"]);
+    let mut git_paths: Vec<String> = git_status.lines().map(str::to_string).collect();
+    git_paths.sort();
+
+    assert_eq!(
+        paths, git_paths,
+        "diff HEAD file set should match `git diff HEAD`"
+    );
+    assert_eq!(paths, vec!["a.txt", "b.txt", "c.txt"]);
+}
+
+/// A two-rev range goes through the tree-to-tree path (like `git diff A..B`).
+#[test]
+fn diff_target_range_matches_git() {
+    let Some(_) = require_git() else { return };
+    let repo = RepoGuard::new();
+    let root = repo.path();
+    write(&root.join("f.txt"), "v1\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "base"]);
+    write(&root.join("f.txt"), "v2\n");
+    git_in(root, &["add", "."]);
+    git_in(root, &["commit", "-q", "-m", "second"]);
+
+    let workdir = repo.workdir();
+    let text = git_diff_target(&workdir, "HEAD~1..HEAD", &[], false).unwrap();
+    let review = parse_unified_diff(&text).unwrap();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert_eq!(paths, vec!["f.txt"]);
+    assert_eq!(review.inserts, 1);
+    assert_eq!(review.deletes, 1);
+}
+
+/// `--staged` with a target diffs that tree against the index
+/// (like `git diff --cached <rev>`).
+#[test]
+fn diff_target_staged_ignores_worktree_only_changes() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_target_repo();
+    let workdir = repo.workdir();
+
+    let text = git_diff_target(&workdir, "HEAD", &[], true).unwrap();
+    let review = parse_unified_diff(&text).unwrap();
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    // b.txt is only deleted from disk (still in the index), so a staged diff
+    // against HEAD must not list it; the worktree-only line3 edit in a.txt is
+    // equally invisible.
+    assert_eq!(paths, vec!["a.txt", "c.txt"]);
+}
+
+/// The rev-probe used by the CLI to disambiguate target vs pathspec.
+#[test]
+fn rev_resolves_probe_variants() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_target_repo();
+    let workdir = repo.workdir();
+    assert!(rev_resolves(&workdir, "HEAD"));
+    assert!(!rev_resolves(&workdir, "definitely-not-a-rev"));
+    assert!(!rev_resolves(&workdir, "a.txt"));
 }

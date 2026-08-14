@@ -137,21 +137,50 @@ pub fn git_diff(
     }
 }
 
+/// Diff against a target revision or range, git-style:
+///
+/// * range `A..B` / `A...B` → tree-to-tree diff (like `git diff A..B`)
+/// * single rev             → that tree vs the worktree (like
+///   `git diff <rev>`); with `staged`, that tree vs the index (like
+///   `git diff --cached <rev>`)
+///
+/// `pathspecs` filters by path prefix (best-effort); empty means all.
+/// Untracked files are not included (matching `git diff <rev>`).
+pub fn git_diff_target(
+    repo_path: &Path,
+    target: &str,
+    pathspecs: &[String],
+    staged: bool,
+) -> Result<String> {
+    let repo = open_repo(repo_path)?;
+    if let Some((a, b, merge_base)) = parse_range(target) {
+        return diff_range(&repo, target, a, b, merge_base);
+    }
+    let tree = target_tree(&repo, target)?;
+    if staged {
+        diff_tree_index(&repo, tree, pathspecs)
+    } else {
+        diff_tree_worktree(&repo, tree, pathspecs)
+    }
+}
+
+/// Cheap "does this resolve as a revision/range" probe. Used by the CLI to
+/// disambiguate `diff <target>` between a rev and a pathspec-on-disk.
+pub fn rev_resolves(repo_path: &Path, spec: &str) -> bool {
+    let Ok(repo) = open_repo(repo_path) else {
+        return false;
+    };
+    if let Some((a, b, _)) = parse_range(spec) {
+        return peel_to_oid(&repo, a).is_ok() && peel_to_oid(&repo, b).is_ok();
+    }
+    peel_to_oid(&repo, spec).is_ok()
+}
+
 /// Diff a single revision (commit → parent) or a range `A..B` / `A...B`.
 pub fn git_show(repo_path: &Path, rev: &str) -> Result<String> {
     let repo = open_repo(repo_path)?;
     if let Some((a, b, merge_base)) = parse_range(rev) {
-        let old = if merge_base {
-            let left = peel_to_oid(&repo, a)?;
-            let right = peel_to_oid(&repo, b)?;
-            repo.merge_base(left, right)
-                .with_context(|| format!("no merge base for {rev}"))?
-                .detach()
-        } else {
-            peel_to_oid(&repo, a)?
-        };
-        let new = peel_to_oid(&repo, b)?;
-        return diff_tree_oids(&repo, Some(old), new);
+        return diff_range(&repo, rev, a, b, merge_base);
     }
 
     let id = peel_to_oid(&repo, rev)?;
@@ -173,16 +202,36 @@ pub fn git_show(repo_path: &Path, rev: &str) -> Result<String> {
     diff_tree_oids(&repo, old_tree, new_tree)
 }
 
+/// Tree-to-tree diff for `A..B` (or merge-base-to-B for `A...B`).
+fn diff_range(repo: &Repository, rev: &str, a: &str, b: &str, merge_base: bool) -> Result<String> {
+    let old = if merge_base {
+        let left = peel_to_oid(repo, a)?;
+        let right = peel_to_oid(repo, b)?;
+        repo.merge_base(left, right)
+            .with_context(|| format!("no merge base for {rev}"))?
+            .detach()
+    } else {
+        peel_to_oid(repo, a)?
+    };
+    let new = peel_to_oid(repo, b)?;
+    diff_tree_oids(repo, Some(old), new)
+}
+
 // ─── staged / worktree ───────────────────────────────────────────────────────
 
 fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
-    let index = repo
-        .index_or_load_from_head_or_empty()
-        .context("open index")?;
     let head_tree = repo
         .head_tree_id_or_empty()
         .context("resolve HEAD^{tree}")?
         .detach();
+    diff_tree_index(repo, head_tree, pathspecs)
+}
+
+/// Tree-vs-index diff — the engine behind `git diff --cached <tree>`.
+fn diff_tree_index(repo: &Repository, tree: ObjectId, pathspecs: &[String]) -> Result<String> {
+    let index = repo
+        .index_or_load_from_head_or_empty()
+        .context("open index")?;
 
     let mut out = String::new();
     let mut resource_cache = repo
@@ -191,7 +240,7 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
 
     // IndexPersistedOrInMemory → File → State via Deref.
     repo.tree_index_status(
-        &head_tree,
+        &tree,
         &index,
         None,
         gix::status::tree_index::TrackRenames::Disabled,
@@ -209,6 +258,242 @@ fn diff_staged(repo: &Repository, pathspecs: &[String]) -> Result<String> {
     .context("tree-index status (staged)")?;
 
     Ok(out)
+}
+
+/// Tree-vs-worktree diff — the engine behind `git diff <commit>`.
+///
+/// Considers every blob path in the tree plus every tracked path from the
+/// index (files added since the target commit are tracked too), comparing
+/// the tree blob against the file on disk. Paths unchanged on both sides are
+/// skipped; deleted-on-disk paths render as deletions.
+fn diff_tree_worktree(repo: &Repository, tree: ObjectId, pathspecs: &[String]) -> Result<String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("bare repository has no worktree to diff"))?
+        .to_owned();
+
+    let mut out = String::new();
+    let mut resource_cache = repo
+        .diff_resource_cache(
+            gix::diff::blob::pipeline::Mode::ToGit,
+            gix::diff::blob::pipeline::WorktreeRoots {
+                old_root: None,
+                new_root: Some(workdir.clone()),
+            },
+        )
+        .context("diff resource cache (target)")?;
+
+    // Old side: blob entries of the target tree, keyed by path.
+    let tree_side: BTreeMap<BString, (ObjectId, EntryKind)> = {
+        let mut m = BTreeMap::new();
+        collect_tree_blobs(repo, tree, BString::default(), &mut m)?;
+        m
+    };
+    // Tracked-on-the-new-side state from the index (id/kind/stat, stage 0).
+    let index_side: BTreeMap<BString, (ObjectId, EntryKind, gix::index::entry::Stat)> = {
+        let index = repo
+            .index_or_load_from_head_or_empty()
+            .context("open index")?;
+        let mut m = BTreeMap::new();
+        for entry in index.entries() {
+            if entry.stage() != gix::index::entry::Stage::Unconflicted {
+                continue; // skip unmerged (conflicted) entries
+            }
+            let kind = match entry.mode.to_tree_entry_mode() {
+                Some(mode) => mode.kind(),
+                None => continue,
+            };
+            if matches!(kind, EntryKind::Tree | EntryKind::Commit) {
+                continue; // directories and gitlinks (submodules)
+            }
+            m.insert(
+                entry.path(&index).to_owned(),
+                (ObjectId::from(entry.id.as_ref()), kind, entry.stat),
+            );
+        }
+        m
+    };
+    // Candidate paths: tree ∪ index (BTreeSet keeps deterministic order).
+    let paths: BTreeSet<&BString> = tree_side.keys().chain(index_side.keys()).collect();
+
+    let null = repo.object_hash().null();
+    for path in paths {
+        if !pathspec_match(path.as_bstr(), pathspecs) {
+            continue;
+        }
+        let display = path_display(path.as_bstr());
+        let disk_path = workdir.join(display.as_str());
+        let disk_meta = std::fs::symlink_metadata(&disk_path).ok();
+
+        // New side: when the index entry's stat matches the file on disk the
+        // content is the git-normalized index blob already — use it instead
+        // of re-hashing (and re-normalizing) the raw bytes from disk.
+        let new: Option<(ObjectId, EntryKind)> = match (&disk_meta, index_side.get(path)) {
+            (None, _) => None, // not on disk → deletion
+            (Some(meta), Some((idx_id, idx_kind, idx_stat))) if stat_matches(idx_stat, meta) => {
+                Some((*idx_id, *idx_kind))
+            }
+            (Some(meta), _) => Some(hash_disk(repo, &disk_path, meta)?),
+        };
+        let old = tree_side.get(path).copied();
+
+        match (old, new) {
+            (Some((old_id, old_kind)), Some((new_id, new_kind))) => {
+                if old_id == new_id {
+                    continue; // unchanged since the target
+                }
+                set_pair(
+                    &mut resource_cache,
+                    repo,
+                    old_id,
+                    old_kind,
+                    new_id,
+                    new_kind,
+                    path.as_bstr(),
+                    path.as_bstr(),
+                )?;
+                render_file_patch(
+                    &mut out,
+                    Some(&display),
+                    Some(&display),
+                    &mut resource_cache,
+                )?;
+            }
+            (Some((old_id, old_kind)), None) => {
+                set_pair(
+                    &mut resource_cache,
+                    repo,
+                    old_id,
+                    old_kind,
+                    null,
+                    old_kind,
+                    path.as_bstr(),
+                    path.as_bstr(),
+                )?;
+                render_file_patch(&mut out, Some(&display), None, &mut resource_cache)?;
+            }
+            (None, Some((new_id, new_kind))) => {
+                set_pair(
+                    &mut resource_cache,
+                    repo,
+                    null,
+                    new_kind,
+                    new_id,
+                    new_kind,
+                    path.as_bstr(),
+                    path.as_bstr(),
+                )?;
+                render_file_patch(&mut out, None, Some(&display), &mut resource_cache)?;
+            }
+            (None, None) => continue, // in neither place — nothing to show
+        }
+        resource_cache.clear_resource_cache_keep_allocation();
+    }
+
+    Ok(out)
+}
+
+/// Recursively collect the blob entries of `tree` into `out` (path →
+/// id/kind). Skips submodule (gitlink) entries; recurses into subtrees.
+fn collect_tree_blobs(
+    repo: &Repository,
+    tree: ObjectId,
+    prefix: BString,
+    out: &mut std::collections::BTreeMap<BString, (ObjectId, EntryKind)>,
+) -> Result<()> {
+    if tree.is_empty_tree() {
+        return Ok(());
+    }
+    let tree_obj = repo
+        .find_object(tree)
+        .context("load tree")?
+        .try_into_tree()
+        .with_context(|| format!("tree {tree} is not a tree"))?;
+    for entry in tree_obj.iter() {
+        let entry = entry.context("tree entry")?;
+        let mut path = prefix.clone();
+        path.extend_from_slice(entry.filename());
+        match entry.mode().kind() {
+            EntryKind::Tree => {
+                path.push(b'/');
+                collect_tree_blobs(repo, ObjectId::from(entry.oid()), path, out)?;
+            }
+            EntryKind::Blob | EntryKind::BlobExecutable | EntryKind::Link => {
+                out.insert(path, (ObjectId::from(entry.oid()), entry.mode().kind()));
+            }
+            // Submodules (gitlinks) and anything exotic: skip.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Resolve a rev (commit, annotated tag, or tree) to the tree it points at.
+fn target_tree(repo: &Repository, rev: &str) -> Result<ObjectId> {
+    let id = peel_to_oid(repo, rev)?;
+    let obj = repo.find_object(id).context("load revision object")?;
+    match obj.kind {
+        gix::objs::Kind::Tree => Ok(id),
+        _ => Ok(obj
+            .peel_to_tree()
+            .with_context(|| format!("revision `{rev}` does not point at a tree"))?
+            .id),
+    }
+}
+
+/// Whether the index entry's recorded stat still matches the file on disk
+/// (best-effort "unchanged since indexing" check, like git's racily-clean
+/// logic but simpler: size and mtime seconds).
+fn stat_matches(stat: &gix::index::entry::Stat, meta: &std::fs::Metadata) -> bool {
+    let mtime = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    u64::from(stat.size) == meta.len() && u64::from(stat.mtime.secs) == mtime
+}
+
+/// Hash the file on disk as a blob (symlinks hash their target path, matching
+/// git's blob encoding) and derive its entry kind from the metadata.
+fn hash_disk(
+    repo: &Repository,
+    disk_path: &Path,
+    meta: &std::fs::Metadata,
+) -> Result<(ObjectId, EntryKind)> {
+    let ft = meta.file_type();
+    let kind = if ft.is_symlink() {
+        EntryKind::Link
+    } else {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if meta.permissions().mode() & 0o111 != 0 {
+                EntryKind::BlobExecutable
+            } else {
+                EntryKind::Blob
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            EntryKind::Blob
+        }
+    };
+    // Symlink blobs store the link target bytes (no trailing newline).
+    let content = if ft.is_symlink() {
+        let target = std::fs::read_link(disk_path)
+            .with_context(|| format!("read symlink {}", disk_path.display()))?;
+        BString::from(target.as_os_str().as_encoded_bytes())
+    } else {
+        BString::from(
+            std::fs::read(disk_path).with_context(|| format!("read {}", disk_path.display()))?,
+        )
+    };
+    let id = gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &content)
+        .with_context(|| format!("hash {}", disk_path.display()))?;
+    Ok((id, kind))
 }
 
 fn diff_worktree(

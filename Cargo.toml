@@ -30,9 +30,15 @@ path = "src/lib.rs"
 name = "next-hunk"
 path = "src/main.rs"
 
+# Short alias binary: same program, typed as `nh`. A drop-in replacement for
+# `git diff` wants a short name (`nh diff main...feat -- src/`).
+[[bin]]
+name = "nh"
+path = "src/bin/nh.rs"
+
 [dependencies]
 anyhow = "1"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "string"] }
 crossterm = "0.28"
 gix = "0.85"
 ratatui = "0.29"

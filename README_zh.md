@@ -17,7 +17,7 @@
 
 ## 命名
 
-**next-hunk** —— 按文件与 hunk 导航 review 流。CLI：`next-hunk`。以后可加短别名（如 `nh`）。
+**next-hunk** —— 按文件与 hunk 导航 review 流。CLI：`next-hunk`，另带短别名二进制 `nh`（同一程序，名字更短）。
 
 ## 状态
 
@@ -27,6 +27,8 @@
 - [x] 视口查询（基于文件 span 的二分查找）
 - [x] 虚拟化多文件 TUI（ratatui）
 - [x] gix 驱动的 worktree / staged / show（+ patch stdin）
+- [x] `nh` 短别名二进制 —— 同一程序，敲起来更短
+- [x] `diff [target]`：`nh diff main`、`nh diff main...feat -- src/`（rev/range 对工作区，git 风格）
 - [x] 健壮的 unified 解析（重命名、二进制占位、无换行符、CRLF）
 - [x] 基准测试：解析 + 视口物化
 - [x] 语法高亮（syntect，仅视口 + 缓存，默认开启）
@@ -89,31 +91,42 @@ ldd target/x86_64-unknown-linux-musl/dist/next-hunk   # 输出 "statically linke
 `dist` profile（fat LTO + strip + `panic=abort`）产出 ~7 MB 二进制
 （xz 后 ~2.6 MB）。普通 `--release` 构建仍以运行速度为优先。
 
-### 设为 git 的 pager（推荐）
+### 替代 git diff
 
-安装后，让日常 `git diff` / `show` / `log` 直接打开 review TUI：
+两条路线，任选或都用：
 
 ```bash
-git config --global core.pager "next-hunk pager"
+# 路线 1：git 别名 —— `git d` 行为像 `git diff`，但打开 TUI
+git config --global alias.d '!nh diff'
+git d                 # = git diff
+git d -s              # = git diff --cached
+git d main...feat     # = git diff main...feat
+
+# 路线 2：把 next-hunk 设为 git 的 pager —— 日常 git 命令直接进 TUI
+git config --global core.pager "nh pager"
+git diff              # → 启动 review TUI
+git show HEAD         # → 启动 review TUI
 ```
+
+路线 1 不影响原生 `git diff`；路线 2 全面接管（pager 模式下输入由 git 控制，
+未跟踪文件不会出现）。
 
 ## 用法
 
 ```bash
-next-hunk                  # 工作区 diff
-next-hunk diff --staged
-next-hunk diff --watch     # 文件变化时实时重载
-next-hunk diff --include-untracked  # 包含未跟踪文件
-next-hunk filediff old.rs new.rs    # 对比磁盘上两个文件
-next-hunk show HEAD
-git diff | next-hunk patch -
-next-hunk inspect path/to.patch   # IR 摘要，不开 TUI（脚本用）
-
-# 把 next-hunk 设为 git 的 pager，日常 diff/show/log 直接进 TUI：
-git config core.pager "next-hunk pager"
-git diff        # → 启动 review TUI
-git show HEAD   # → 启动 review TUI
+nh                          # 工作区 diff
+nh diff -s                  # 已暂存变更
+nh diff main                # main 对工作区（同 `git diff main`）
+nh diff main...feat -- src/ # 范围 diff，按 pathspec 过滤
+nh diff --watch             # 文件变化时实时重载
+nh diff --include-untracked # 包含未跟踪文件
+nh show HEAD~3              # 某个提交（或范围）
+nh filediff old.rs new.rs   # 对比磁盘上两个文件
+git diff | nh pager         # review git 管道输入的内容
+nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 ```
+
+所有形式同样支持完整命令名（`next-hunk diff …`）。
 
 ### 快捷键
 
