@@ -6,7 +6,9 @@
 //! - [`highlight`] — syntax highlighting (syntect, feature-gated)
 //! - [`tui`] — interactive review UI
 //! - [`cli_parse`] — parsing for agent-bridge CLI specs (`--focus` / `--note`)
+//! - [`cli`] — subcommand parsing/handlers shared by the binaries
 
+pub mod cli;
 pub mod cli_parse;
 pub mod config;
 pub mod highlight;

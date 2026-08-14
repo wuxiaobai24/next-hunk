@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `nh` short alias binary
+- **`nh`** — same program as `next-hunk`, shorter to type (`nh`, `nh diff -s`).
+  Usage/error output brands itself after argv[0], so `nh --help` says `nh`.
+  The CLI implementation moved into the library (`next_hunk::cli`); both
+  binaries are thin shims. `scripts/install.sh` now also creates an `nh`
+  symlink next to the installed binary.
+- **Replace `git diff`** — documented two routes: a git alias
+  (`git config --global alias.d '!nh diff'` → `git d`, `git d -s`,
+  `git d main...feat`) or `core.pager "nh pager"`.
+
+### Added — `diff [target]` (git-diff parity)
+- **`nh diff main`** — that tree vs the worktree (like `git diff main`);
+  with `-s/--staged`, that tree vs the index (like `git diff --cached main`).
+- **`nh diff A..B` / `A...B`** — two-tree range diff (merge-base semantics
+  for `...`), same engine as `show` ranges.
+- **Pathspec disambiguation** — a first positional that doesn't resolve as a
+  rev but exists on disk falls back to a pathspec (with a stderr note);
+  otherwise a git-style `unknown revision or path not in the working tree`
+  error. Pathspecs after `--` (or trailing) still limit any diff form.
+- `--watch` reload re-runs the same target diff.
+
 ### Changed — feedback & discoverability
 - **Severity-colored status messages.** The single dim status string is now a
   typed toast: errors render red (bold), confirmations green, navigation/neutral

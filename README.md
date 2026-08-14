@@ -17,7 +17,8 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 
 ## Name
 
-**next-hunk** — navigate the review stream by file and hunk. CLI: `next-hunk`. Short alias later if we want (`nh`).
+**next-hunk** — navigate the review stream by file and hunk. CLI: `next-hunk`,
+with a short alias binary `nh` (same program, shorter name).
 
 ## Status
 
@@ -27,6 +28,8 @@ Binary size is **not** a product goal. We optimize latency and runtime memory on
 - [x] Viewport query with binary search on file spans
 - [x] Virtualized multi-file TUI (ratatui)
 - [x] gix-backed worktree / staged / show (+ patch stdin)
+- [x] `nh` short alias binary — same program, shorter to type
+- [x] `diff [target]`: `nh diff main`, `nh diff main...feat -- src/` (rev or range vs worktree, git-style)
 - [x] Robust unified parse (rename, binary placeholder, no-newline, CRLF)
 - [x] Benchmarks: parse + viewport materialization
 - [x] Syntax highlight (syntect, viewport-only + cached, default on)
@@ -124,31 +127,42 @@ ldd target/x86_64-unknown-linux-musl/dist/next-hunk   # "statically linked"
 The `dist` profile (fat LTO + strip + `panic=abort`) yields a ~7 MB binary
 (~2.6 MB xz). A normal `--release` build stays optimized for speed instead.
 
-### Set as git's pager (recommended)
+### Replace git diff
 
-Once installed, make everyday `git diff` / `show` / `log` open the review TUI:
+Two routes, pick either or both:
 
 ```bash
-git config --global core.pager "next-hunk pager"
+# Route 1: a git alias — `git d` behaves like `git diff` but opens the TUI
+git config --global alias.d '!nh diff'
+git d                 # = git diff
+git d -s              # = git diff --cached
+git d main...feat     # = git diff main...feat
+
+# Route 2: make next-hunk git's pager — everyday git commands open the TUI
+git config --global core.pager "nh pager"
+git diff              # → launches the review TUI
+git show HEAD         # → launches the review TUI
 ```
+
+Route 1 keeps plain `git diff` working as-is; route 2 takes over everywhere
+(note: in pager mode git controls the input, so untracked files don't appear).
 
 ## Usage
 
 ```bash
-next-hunk                  # working tree diff
-next-hunk diff --staged
-next-hunk diff --watch     # live-reload on file changes
-next-hunk diff --include-untracked  # include untracked files
-next-hunk filediff old.rs new.rs    # diff two arbitrary files
-next-hunk show HEAD
-git diff | next-hunk patch -
-next-hunk inspect path/to.patch   # IR summary, no TUI (scripting)
-
-# Use next-hunk as git's pager for everyday diff/show/log:
-git config core.pager "next-hunk pager"
-git diff        # → launches the review TUI
-git show HEAD   # → launches the review TUI
+nh                          # working tree diff
+nh diff -s                  # staged changes
+nh diff main                # main vs worktree (like `git diff main`)
+nh diff main...feat -- src/ # range diff, pathspec-limited
+nh diff --watch             # live-reload on file changes
+nh diff --include-untracked # include untracked files
+nh show HEAD~3              # a commit (or range)
+nh filediff old.rs new.rs   # diff two arbitrary files on disk
+git diff | nh pager         # review whatever git pipes in
+nh inspect path/to.patch    # IR summary, no TUI (scripting)
 ```
+
+All forms accept the full binary name too (`next-hunk diff …`).
 
 ### Keybindings
 

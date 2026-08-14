@@ -228,7 +228,10 @@ Install Rust from https://rustup.rs, then run: cargo install --git ${REPO_URL}"
     fi
     install -m 0755 "$srcbin" "${bin}/next-hunk"
 
-    ok "installed ${bin}/next-hunk"
+    # Short alias: same binary, shorter name.
+    ln -sf next-hunk "${bin}/nh"
+
+    ok "installed ${bin}/next-hunk (+ ${bin}/nh alias)"
     "${bin}/next-hunk" --version || true
 
     # PATH hint for ~/.local/bin.
@@ -250,9 +253,10 @@ Install Rust from https://rustup.rs, then run: cargo install --git ${REPO_URL}"
   fi
 
   printf '\n%s→ next-hunk installed.%s Quick start:\n' "${C_GREEN}${C_BOLD}" "${C_RESET}"
-  printf '   next-hunk                  %s# review the working-tree diff%s\n' "${C_DIM}" "${C_RESET}"
-  printf '   next-hunk diff --staged\n'
-  printf '   git diff | next-hunk patch -\n'
+  printf '   nh                         %s# review the working-tree diff%s\n' "${C_DIM}" "${C_RESET}"
+  printf '   nh diff -s                 %s# staged changes%s\n' "${C_DIM}" "${C_RESET}"
+  printf '   nh diff main...feat        %s# range diff%s\n' "${C_DIM}" "${C_RESET}"
+  printf '   git diff | nh pager\n'
 }
 
 main "$@"
