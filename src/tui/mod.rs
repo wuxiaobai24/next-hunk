@@ -954,7 +954,7 @@ diff --git a/a.rs b/a.rs
         app.handle_key(key(KeyCode::Char('?')));
         assert!(app.show_help);
 
-        let backend = TestBackend::new(80, 30);
+        let backend = TestBackend::new(80, 42);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| view::draw(&mut app, f)).unwrap();
         // Flatten the rendered cells into a string and look for tell-tale text.
@@ -970,6 +970,17 @@ diff --git a/a.rs b/a.rs
         assert!(
             text.contains("ignore-whitespace"),
             "overlay should list the W binding"
+        );
+        // The overlay height follows its content: the last section and the
+        // dismiss footer must actually be visible (regression: the height used
+        // to be a fixed 30 rows and clipped the tail).
+        assert!(
+            text.contains("Agent (--select)"),
+            "overlay tail section must be visible"
+        );
+        assert!(
+            text.contains("dismiss this help"),
+            "overlay footer must be visible"
         );
     }
 
