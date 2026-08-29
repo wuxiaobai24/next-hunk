@@ -41,6 +41,10 @@ impl LayoutMode {
 }
 
 /// Raw user-configurable options. Every field optional: `None` = "not set".
+/// Default `context_collapse` threshold: runs/gaps of ≥ this many unchanged
+/// lines collapse to a `··· N unchanged lines ···` marker row.
+pub const DEFAULT_CONTEXT_COLLAPSE: usize = 8;
+
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
     pub staged: Option<bool>,
@@ -56,6 +60,9 @@ pub struct Config {
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
+    /// Collapse unchanged context: runs/gaps of ≥ this many lines render as
+    /// one `··· N unchanged lines ···` marker row. `0` disables. Default 8.
+    pub context_collapse: Option<usize>,
 }
 
 impl Config {
@@ -85,6 +92,9 @@ impl Config {
         }
         if other.wrap.is_some() {
             self.wrap = other.wrap;
+        }
+        if other.context_collapse.is_some() {
+            self.context_collapse = other.context_collapse;
         }
         self
     }
@@ -128,6 +138,9 @@ pub struct ResolvedConfig {
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
+    /// Collapse unchanged context threshold (0 = off). See
+    /// [`DEFAULT_CONTEXT_COLLAPSE`].
+    pub context_collapse: usize,
 }
 
 impl Default for ResolvedConfig {
@@ -142,6 +155,7 @@ impl Default for ResolvedConfig {
             theme: None,
             layout: LayoutMode::Unified,
             wrap: false,
+            context_collapse: DEFAULT_CONTEXT_COLLAPSE,
         }
     }
 }
@@ -184,6 +198,7 @@ impl ResolvedConfig {
                 .map(LayoutMode::parse_str)
                 .unwrap_or(d.layout),
             wrap: cfg.wrap.unwrap_or(d.wrap),
+            context_collapse: cfg.context_collapse.unwrap_or(d.context_collapse),
         }
     }
 }

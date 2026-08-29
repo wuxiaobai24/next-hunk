@@ -66,6 +66,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code and are unchanged. The real Unreleased entries above are untouched.
 
 
+### Added — Context collapsing (`··· N unchanged lines ···`)
+- **Unchanged context folds to marker rows** — long runs of context lines
+  *within* a hunk and the unchanged gap *between* consecutive hunks
+  (implied by `@@` line numbers, so it works on bare patch input) render as
+  one dim `··· N unchanged lines ···` marker. Default on with threshold 8;
+  `context_collapse = N` configures (0 disables), `zx` toggles at runtime.
+- **Virtual-row scroll model** — `scroll_y` now indexes the collapsed
+  (virtual) stream, so every scroll position is exactly one drawn row:
+  scrolling never walks through invisible space, and `max_scroll` /
+  status-bar totals shrink when content is collapsed or files are folded.
+  Materialization stays viewport-only via a binary-searched segment table
+  (`ir::collapse`); navigation (`]h`/`[h`, file jumps, search, `--focus`)
+  funnels through one stream→virtual mapping, and a jump into a collapsed
+  run expands just that run so search hits are always visible.
+- **Fold interplay fixed** — folding a file now genuinely compacts the
+  stream (previously folded bodies still occupied scroll range and windows
+  "pulled through" later files' rows).
+
 ### Removed
 - **`mcp` cargo feature** — the flag was declared in `Cargo.toml` with a
   comment describing an MCP stdio server (`next-hunk mcp`), but no such

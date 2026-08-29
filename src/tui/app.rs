@@ -15,8 +15,9 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
 use crate::config::LayoutMode;
+use crate::config::DEFAULT_CONTEXT_COLLAPSE;
 use crate::highlight::{HighlightCache, HighlightJob, Highlighter};
-use crate::ir::{Review, Viewport, ViewportQuery};
+use crate::ir::{CollapseIndex, Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
 
 /// Format a [`FocusTarget`] for status messages (compact, human-readable).
@@ -268,6 +269,16 @@ pub struct App {
     pub decisions: std::collections::HashMap<HunkId, Decision>,
     /// Set of file indices whose bodies are folded (collapsed).
     pub folded: HashSet<usize>,
+    /// Virtual-row view of the review: folded files, collapsed context runs,
+    /// and implied inter-hunk gaps. `scroll_y` is a row in this index, so
+    /// every scroll position is exactly one drawn row.
+    pub collapse: CollapseIndex,
+    /// Whether context collapsing is active (`zx` toggles). When off the
+    /// index degrades to a pure 1:1 view (folds still apply).
+    pub collapse_on: bool,
+    /// Configured threshold (`context_collapse`); runs/gaps shorter than this
+    /// never collapse. 0 disables.
+    pub context_threshold: usize,
     /// Layout mode for the diff stream pane.
     pub layout_mode: LayoutMode,
     /// Agent comments (separate from --note annotations).
@@ -382,9 +393,10 @@ impl App {
         let status = if review.is_empty() {
             Toast::sticky("empty diff")
         } else {
-            Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · / search · f filter · H highlight · q quit", review.file_count()))
+            Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · zx context · / search · f filter · H highlight · q quit", review.file_count()))
         };
         let theme = theme_mode.to_theme();
+        let collapse = CollapseIndex::build(&review, DEFAULT_CONTEXT_COLLAPSE, &HashSet::new());
         Self {
             review: review.clone(),
             base_review: review,
@@ -420,6 +432,9 @@ impl App {
             decisions: std::collections::HashMap::new(),
             comments: Vec::new(),
             folded: HashSet::new(),
+            collapse,
+            collapse_on: true,
+            context_threshold: DEFAULT_CONTEXT_COLLAPSE,
             layout_mode: LayoutMode::Unified,
         }
     }
@@ -463,14 +478,68 @@ impl App {
 
     /// Maximum valid top-row so the last row remains visible.
     pub fn max_scroll(&self) -> usize {
-        self.review.stream_len.saturating_sub(self.viewport_height)
+        self.collapse
+            .virtual_len()
+            .saturating_sub(self.viewport_height)
     }
 
     /// Sync `selected_file` to whatever file owns the current top scroll row.
     fn sync_selected_file(&mut self) {
-        if let Some(idx) = ViewportQuery::file_at_row(&self.review, self.scroll_y) {
+        let stream_row = self.collapse.stream_at_virtual(self.scroll_y);
+        if let Some(idx) = ViewportQuery::file_at_row(&self.review, stream_row) {
             self.selected_file = idx;
         }
+    }
+
+    /// Jump so the given *stream* row lands at the viewport top, expanding a
+    /// collapsed context run that contains it. Every navigation that targets
+    /// a real row (`]h`/`[h`, file jumps, search matches, `--focus`, reload
+    /// remaps) funnels through here so virtual coordinates stay coherent.
+    /// The rail selection syncs from the *target* row, not the clamped top
+    /// row — when the viewport is taller than the stream the scroll clamps
+    /// to 0 and a position-based sync would clobber the selection.
+    fn jump_to_stream(&mut self, row: usize) {
+        self.collapse.expand_at_stream(row);
+        let v = self.collapse.virtual_of_stream(row);
+        self.scroll_y = v.min(self.max_scroll());
+        if let Some(idx) = ViewportQuery::file_at_row(&self.review, row) {
+            self.selected_file = idx;
+        }
+    }
+
+    /// Rebuild the virtual-row index after anything that changes which rows
+    /// exist (review swap, fold/unfold, ignore-ws re-derive, `zx`). Keeps
+    /// looking at the same stream row so the view does not jump.
+    fn rebuild_collapse(&mut self) {
+        let anchor = self.collapse.stream_at_virtual(self.scroll_y);
+        let threshold = if self.collapse_on {
+            self.context_threshold
+        } else {
+            0
+        };
+        self.collapse = CollapseIndex::build(&self.review, threshold, &self.folded);
+        let v = self.collapse.virtual_of_stream(anchor);
+        self.scroll_y = v.min(self.max_scroll());
+        self.sync_selected_file();
+    }
+
+    /// Toggle context collapsing (`zx`), keeping the viewed stream row.
+    fn toggle_collapse(&mut self) {
+        self.collapse_on = !self.collapse_on;
+        self.rebuild_collapse();
+        if self.collapse_on {
+            self.set_success("context collapse on");
+        } else {
+            self.set_info("context collapse off");
+        }
+    }
+
+    /// Apply a configured `context_collapse` threshold (from config.toml or
+    /// CLI). Called before the first draw; 0 disables markers entirely.
+    pub fn set_context_collapse(&mut self, threshold: usize) {
+        self.context_threshold = threshold;
+        self.collapse_on = threshold > 0;
+        self.rebuild_collapse();
     }
 
     /// Move the scroll position by `delta` rows, clamped to `[0, max_scroll()]`.
@@ -516,8 +585,7 @@ impl App {
         };
         match row {
             Some(row) => {
-                self.scroll_y = row.min(self.max_scroll());
-                self.sync_selected_file();
+                self.jump_to_stream(row);
                 self.set_info(format!("📍 focus: {}", focus_display(&target)));
             }
             None => {
@@ -533,9 +601,9 @@ impl App {
             start: self.scroll_y,
             height: self.viewport_height.max(1),
         };
-        ViewportQuery::rows(&self.review, viewport, &self.folded)
+        ViewportQuery::rows_virtual(&self.review, viewport, &self.collapse)
             .into_iter()
-            .find_map(|row| match row {
+            .find_map(|vr| match vr.row {
                 crate::ir::StreamRow::HunkHeader {
                     file_idx, hunk_idx, ..
                 } => Some(HunkId { file_idx, hunk_idx }),
@@ -750,6 +818,10 @@ impl App {
                     self.unfold_current();
                     return;
                 }
+                ('z', KeyCode::Char('x')) => {
+                    self.toggle_collapse();
+                    return;
+                }
                 _ => {
                     // Unrecognized second key: fall through to normal dispatch.
                     // (A lone `]`/`[`/`z` that isn't followed by a valid second key is discarded.)
@@ -802,7 +874,7 @@ impl App {
                     ViewportQuery::jump_file(&self.review, self.selected_file, true)
                 {
                     self.selected_file = idx;
-                    self.scroll_y = row;
+                    self.jump_to_stream(row);
                     self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
@@ -811,7 +883,7 @@ impl App {
                     ViewportQuery::jump_file(&self.review, self.selected_file, false)
                 {
                     self.selected_file = idx;
-                    self.scroll_y = row;
+                    self.jump_to_stream(row);
                     self.set_info(format!("← {}", self.review.display_path(idx)));
                 }
             }
@@ -824,7 +896,8 @@ impl App {
                 if n <= self.review.file_count() {
                     let idx = n - 1;
                     self.selected_file = idx;
-                    self.scroll_y = ViewportQuery::file_start_row(&self.review, idx);
+                    let row = ViewportQuery::file_start_row(&self.review, idx);
+                    self.jump_to_stream(row);
                     self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
@@ -1058,8 +1131,7 @@ impl App {
             self.set_error(format!("no matches for {:?}", self.search.query));
         } else {
             let row = self.search.matches[0];
-            self.scroll_y = row.min(self.max_scroll());
-            self.sync_selected_file();
+            self.jump_to_stream(row);
             self.set_info(format!(
                 "match {}/{}: {:?}",
                 self.search.current + 1,
@@ -1088,8 +1160,7 @@ impl App {
             self.search.current.checked_sub(1).unwrap_or(n - 1)
         };
         let row = self.search.matches[self.search.current];
-        self.scroll_y = row.min(self.max_scroll());
-        self.sync_selected_file();
+        self.jump_to_stream(row);
         self.set_info(format!(
             "match {}/{}: {:?}",
             self.search.current + 1,
@@ -1115,7 +1186,8 @@ impl App {
         if !selected_matches {
             if let Some(first) = self.visible_files().first().copied() {
                 self.selected_file = first;
-                self.scroll_y = ViewportQuery::file_start_row(&self.review, first);
+                let row = ViewportQuery::file_start_row(&self.review, first);
+                self.jump_to_stream(row);
             } else {
                 self.set_error(format!("no files match {:?}", self.path_filter));
                 return;
@@ -1240,9 +1312,9 @@ impl App {
             self.apply_focus();
         }
 
-        // Clamp scroll into the new bounds.
-        self.scroll_y = self.scroll_y.min(self.max_scroll());
-        self.sync_selected_file();
+        // Clamp scroll into the new bounds. The rebuilt virtual index
+        // re-anchors on the stream row we were looking at.
+        self.rebuild_collapse();
 
         // Re-run an active search against the new content.
         if self.search.active {
@@ -1275,18 +1347,19 @@ impl App {
         self.search.current = 0;
         self.search.active = true;
         if !self.search.matches.is_empty() {
-            self.scroll_y = self.search.matches[0].min(self.max_scroll());
-            self.sync_selected_file();
+            self.jump_to_stream(self.search.matches[0]);
         }
     }
 
     /// Jump to the next/previous hunk header, scrolling it to the top of the
     /// viewport and syncing the rail selection. Wraps across file boundaries.
     fn jump_hunk(&mut self, forward: bool) {
-        match ViewportQuery::jump_hunk(&self.review, self.scroll_y, forward) {
+        // `]h`/`[h` search from the current view position; translate the
+        // virtual top row to a stream row before asking the hunk index.
+        let from = self.collapse.stream_at_virtual(self.scroll_y);
+        match ViewportQuery::jump_hunk(&self.review, from, forward) {
             Some(row) => {
-                self.scroll_y = row.min(self.max_scroll());
-                self.sync_selected_file();
+                self.jump_to_stream(row);
                 let path = self.current_path().to_string();
                 let dir = if forward { "→" } else { "←" };
                 self.set_info(format!("{dir} hunk @ {path}:{}", row));
@@ -1301,9 +1374,9 @@ impl App {
     fn fold_current(&mut self) {
         if self.folded.insert(self.selected_file) {
             self.set_info(format!("▼ {} (folded)", self.current_path()));
-            // Clamp scroll in case the fold leaves the viewport past the end.
-            self.scroll_y = self.scroll_y.min(self.max_scroll());
-            self.sync_selected_file();
+            // Folded files drop their virtual rows; re-anchor the view on
+            // the stream row we were looking at.
+            self.rebuild_collapse();
         } else {
             self.set_error(format!("already folded: {}", self.current_path()));
         }
@@ -1313,6 +1386,7 @@ impl App {
     fn unfold_current(&mut self) {
         if self.folded.remove(&self.selected_file) {
             self.set_success(format!("▶ {} (unfolded)", self.current_path()));
+            self.rebuild_collapse();
         } else {
             self.set_error(format!("not folded: {}", self.current_path()));
         }
@@ -1329,8 +1403,7 @@ impl App {
             self.base_review.clone()
         };
         self.cache.invalidate();
-        self.scroll_y = self.scroll_y.min(self.max_scroll());
-        self.sync_selected_file();
+        self.rebuild_collapse();
     }
 
     /// Compute the file + line to open for the `o` (open in editor) action.    ///
@@ -1341,32 +1414,33 @@ impl App {
     /// deletes have no new-side, so they fall back to the old-side number.
     /// `None` when no code line is visible or the file has no on-disk path.
     fn compute_open_target(&self) -> Option<OpenTarget> {
-        // Search the visible window for the first code line with a line number.
-        let start = self.scroll_y;
-        let end = self
-            .review
-            .stream_len
-            .min(start + self.viewport_height.max(1));
-        for row in start..end {
-            // Header rows (file/hunk) have no line number — skip them and keep
-            // scanning for the first code line.
-            let Some((old_no, new_no)) = ViewportQuery::row_line_numbers(&self.review, row) else {
-                continue;
-            };
-            let (file_idx, _) = ViewportQuery::file_and_line(&self.review, row)?;
-            let line = new_no.or(old_no)?;
-            let file = self.review.files.get(file_idx)?;
-            let path = file
-                .new_path
-                .clone()
-                .filter(|p| p != "/dev/null")
-                .or_else(|| file.old_path.clone().filter(|p| p != "/dev/null"))?;
-            if path == "unknown" {
-                return None;
-            }
-            return Some(OpenTarget { path, line });
-        }
-        None
+        // Walk the visible virtual window for the first code line with a
+        // line number (markers and headers carry none).
+        let viewport = Viewport {
+            start: self.scroll_y,
+            height: self.viewport_height.max(1),
+        };
+        ViewportQuery::rows_virtual(&self.review, viewport, &self.collapse)
+            .into_iter()
+            .find_map(|vr| {
+                let crate::ir::StreamRow::Line { file_idx, .. } = vr.row else {
+                    return None;
+                };
+                let (old_no, new_no) = ViewportQuery::row_line_numbers(&self.review, vr.abs_row)?;
+                // Prefer the new-side line number (edits land on the live
+                // file); deletes fall back to the old-side number.
+                let line = new_no.or(old_no)?;
+                let file = self.review.files.get(file_idx)?;
+                let path = file
+                    .new_path
+                    .clone()
+                    .filter(|p| p != "/dev/null")
+                    .or_else(|| file.old_path.clone().filter(|p| p != "/dev/null"))?;
+                if path == "unknown" {
+                    return None;
+                }
+                Some(OpenTarget { path, line })
+            })
     }
 }
 
@@ -2901,6 +2975,115 @@ diff --git a/c.rs b/c.rs
         app.handle_key(char_key('o'));
         assert!(!app.folded.contains(&0), "file 0 should be unfolded");
         assert!(app.status.contains("unfolded"));
+    }
+
+    // ---- context collapse (zx) ----
+
+    /// One file, one hunk: -x, 12 context lines, +y. Stream rows:
+    /// 0=file header, 1=hunk header, 2=-x, 3..14=context, 15=+y.
+    fn long_context_app() -> App {
+        let body: String = (0..12).map(|i| format!(" pad{i}\n")).collect();
+        let review = parse_unified_diff(&format!(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,14 +1,14 @@
+-x
+{body}+y
+"
+        ))
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        app
+    }
+
+    #[test]
+    fn collapse_on_by_default_shrinks_virtual_stream() {
+        let app = long_context_app();
+        // 16 stream rows; the 12-line context run collapses to one marker.
+        assert!(app.collapse_on);
+        assert_eq!(app.collapse.virtual_len(), 5);
+    }
+
+    #[test]
+    fn zx_toggles_collapse_and_keeps_anchor() {
+        let mut app = long_context_app();
+        // Scroll onto the +y line (stream 15 → virtual 4).
+        app.handle_key(char_key('G'));
+        let seen_before = app.collapse.stream_at_virtual(app.scroll_y);
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('x'));
+        assert!(!app.collapse_on);
+        assert_eq!(app.collapse.virtual_len(), 16);
+        // Still looking at the same stream row.
+        assert_eq!(app.collapse.stream_at_virtual(app.scroll_y), seen_before);
+        app.handle_key(char_key('z'));
+        app.handle_key(char_key('x'));
+        assert!(app.collapse_on);
+        assert_eq!(app.collapse.virtual_len(), 5);
+    }
+
+    #[test]
+    fn search_jump_expands_the_collapsed_run_it_lands_in() {
+        let mut app = long_context_app();
+        // Search for a line inside the collapsed context run.
+        app.mode = crate::tui::app::InputMode::Search;
+        app.handle_key(char_key('d'));
+        app.handle_key(key(KeyCode::Enter));
+        assert!(app.search.active);
+        assert_eq!(app.search.matches.len(), 12);
+        // The jump expanded the run containing the first match (pad0, row 3):
+        // stream 3 now maps to virtual 3 (identity restored for that run).
+        assert_eq!(app.collapse.virtual_of_stream(3), 3);
+        // The viewport shows the match row at the top.
+        assert_eq!(app.scroll_y, 3);
+    }
+
+    #[test]
+    fn hunk_jump_lands_on_header_in_virtual_coords() {
+        // Two hunks 8 unchanged lines apart: the gap collapses to a marker,
+        // so hunk 2's header moves up one virtual row.
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,3 +1,3 @@
+ ctx
+-a
++b
+@@ -12,3 +12,3 @@
+ ctx2
+-c
++d
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 4;
+        // Two ]h presses: the first lands on hunk 1's header (virtual 1),
+        // the second on hunk 2's header — stream row 5, virtual 6 with the
+        // gap marker inserted before it.
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('h'));
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 6);
+        // The row above the header is the gap marker.
+        let rows = crate::ir::ViewportQuery::rows_virtual(
+            &app.review,
+            crate::ir::Viewport {
+                start: app.scroll_y - 1,
+                height: 2,
+            },
+            &app.collapse,
+        );
+        assert!(matches!(
+            rows[0].row,
+            crate::ir::StreamRow::Unchanged { count: 8, .. }
+        ));
     }
 
     #[test]

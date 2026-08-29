@@ -149,11 +149,11 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     // Collect owned row data so we can release the &app.review borrow before
     // mutating app.cache below for highlighting. Line numbers are resolved here
     // (they need the review) and carried on each OwnedRow.
-    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport, &app.folded)
-        .into_iter()
-        .enumerate()
-        .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))
-        .collect();
+    let owned_rows: Vec<OwnedRow> =
+        ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
+            .into_iter()
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
         Some(app.search.matches[app.search.current])
@@ -167,8 +167,8 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     // Build a lookup of agent notes keyed by the absolute stream row they
-    // attach to (line-level and hunk-level). Rendered as extra rows below the
-    // target via a viewport fan-out — does NOT touch `stream_len`, so scroll /
+    // attach to (line-level and hunk-level). Rendered as extra rows below
+    // the target via a viewport fan-out — does NOT touch `stream_len`, so scroll /
     // search / hunk-jump indices stay stable.
     let notes_by_row = build_notes_by_row(&app.review, &app.notes);
 
@@ -176,16 +176,21 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
     for r in owned_rows {
         let abs_row = owned_row_abs(&r);
+        let is_marker = matches!(r, OwnedRow::Unchanged { .. });
         lines.push(stream_row_to_line(app, r, current_match_row, &match_rows));
         // Fan out: append any note rows attached to this logical row.
-        if let Some(notes) = notes_by_row.get(&abs_row) {
-            for text in notes {
-                lines.push(Line::from(Span::styled(
-                    format!("  💬 {}", text),
-                    Style::default()
-                        .fg(app.theme.note)
-                        .add_modifier(Modifier::ITALIC),
-                )));
+        // Markers share an abs_row with the following real row; only the
+        // real row carries the note.
+        if !is_marker {
+            if let Some(notes) = notes_by_row.get(&abs_row) {
+                for text in notes {
+                    lines.push(Line::from(Span::styled(
+                        format!("  💬 {}", text),
+                        Style::default()
+                            .fg(app.theme.note)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
             }
         }
     }
@@ -213,11 +218,11 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
         height,
     };
 
-    let owned_rows: Vec<OwnedRow> = ViewportQuery::rows(&app.review, viewport, &app.folded)
-        .into_iter()
-        .enumerate()
-        .map(|(i, row)| OwnedRow::from_stream_row(&app.review, row, scroll_y + i))
-        .collect();
+    let owned_rows: Vec<OwnedRow> =
+        ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
+            .into_iter()
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
         Some(app.search.matches[app.search.current])
@@ -240,6 +245,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
             OwnedRow::FileHeader { .. } => continue, // handled below
             OwnedRow::HunkHeader { file_idx, .. } => *file_idx,
             OwnedRow::Line { file_idx, .. } => *file_idx,
+            OwnedRow::Unchanged { file_idx, .. } => *file_idx,
         };
         if file_rows.last().map(|(f, _)| *f) != Some(file_idx) {
             file_rows.push((file_idx, Vec::new()));
@@ -264,6 +270,16 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )));
         for r in rows.iter() {
+            if let OwnedRow::Unchanged { count, .. } = &r {
+                // Collapsed unchanged runs render once, in the old block
+                // (context is shared by both sides).
+                lines.push(Line::from(Span::styled(
+                    format!("  ··· {count} unchanged lines ···"),
+                    Style::default()
+                        .fg(app.theme.dim)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
             if let OwnedRow::Line {
                 kind,
                 text,
@@ -371,6 +387,7 @@ fn owned_row_abs(row: &OwnedRow) -> usize {
         OwnedRow::FileHeader { abs_row, .. } => *abs_row,
         OwnedRow::HunkHeader { abs_row, .. } => *abs_row,
         OwnedRow::Line { abs_row, .. } => *abs_row,
+        OwnedRow::Unchanged { abs_row, .. } => *abs_row,
     }
 }
 
@@ -434,6 +451,13 @@ enum OwnedRow {
         /// for word-level inline highlight. `None` for unpaired / non-+/- lines.
         counterpart: Option<String>,
     },
+    /// A collapsed run of unchanged lines (context run or implied inter-hunk
+    /// gap), rendered as a dim marker row.
+    Unchanged {
+        file_idx: usize,
+        count: usize,
+        abs_row: usize,
+    },
 }
 
 impl OwnedRow {
@@ -477,6 +501,11 @@ impl OwnedRow {
                     counterpart,
                 }
             }
+            StreamRow::Unchanged { file_idx, count } => OwnedRow::Unchanged {
+                file_idx,
+                count,
+                abs_row,
+            },
         }
     }
 }
@@ -500,6 +529,12 @@ fn stream_row_to_line(
             Style::default()
                 .fg(app.theme.file_header)
                 .add_modifier(Modifier::BOLD),
+        )),
+        OwnedRow::Unchanged { count, .. } => Line::from(Span::styled(
+            format!("  ··· {count} unchanged lines ···"),
+            Style::default()
+                .fg(app.theme.dim)
+                .add_modifier(Modifier::ITALIC),
         )),
         OwnedRow::HunkHeader {
             text,
@@ -749,10 +784,10 @@ fn highlight_current_match_line(
 }
 
 fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
-    let pos = if app.review.stream_len == 0 {
+    let pos = if app.collapse.virtual_len() == 0 {
         "0/0".to_string()
     } else {
-        format!("{}/{}", app.scroll_y + 1, app.review.stream_len)
+        format!("{}/{}", app.scroll_y + 1, app.collapse.virtual_len())
     };
     let hl = if app.highlight_on { " HL" } else { "" };
     // Per-file and total +/- tallies (green inserts, red deletes).
@@ -846,7 +881,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             if app.select_mode {
                 " a accept · r reject · u undecided · ]h/[h hunk · j/k scroll · / search · ? help · q quit ".to_string()
             } else {
-                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
+                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · zx ctx · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
             }
         }
     };
@@ -941,6 +976,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("W", "toggle ignore-whitespace"),
             ("t", "cycle theme (dark → light → auto)"),
             ("zc / zo", "fold / unfold current file"),
+            ("zx", "toggle context collapse (··· N unchanged lines ···)"),
         ],
         head,
         key,
