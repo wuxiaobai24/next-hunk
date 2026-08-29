@@ -66,6 +66,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code and are unchanged. The real Unreleased entries above are untouched.
 
 
+### Removed
+- **`mcp` cargo feature** — the flag was declared in `Cargo.toml` with a
+  comment describing an MCP stdio server (`next-hunk mcp`), but no such
+  subcommand or gated code ever existed (`feature = "mcp"` had zero uses in
+  `src/`). Removed so the build surface stops advertising a phantom feature.
+
 ## [0.4.0] - 2026-07-17
 
 Layout & reading experience, agent session CLI, and async syntax highlight.
