@@ -121,9 +121,9 @@
 
 按体验收益排序，验收口径改为「与 hunk 0.20 并排同屏对比」：
 
-- [ ] **上下文折叠**：连续 ≥N 行 context 折叠为 `··· N unchanged lines ···`
-  标记行（默认开，`context_collapse` 可配，运行时可切）；搜索/hunk 跳转/
-  focus 必须经折叠映射正确落点
+- [x] **上下文折叠**：连续 ≥N 行 context 折叠为 `··· N unchanged lines ···`
+  标记行（默认开，`context_collapse` 可配，运行时 `zx` 切换）；搜索/hunk 跳转/
+  focus 经折叠映射正确落点（跳入折叠段自动展开；`ir::collapse` 虚拟行模型）
 - [ ] **split 布局**：side-by-side（宽终端），基于 hunk 内 old/new 行配对；
   保持 viewport-only 物化（PERF 门禁不回退）
 - [ ] **`layout = "auto"`**：按流面板宽度选 split/stack/unified

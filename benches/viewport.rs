@@ -3,12 +3,15 @@
 //! Parses the huge fixture once, then measures the mean time to materialize
 //! one viewport of H rows at many random scroll positions. The Phase 1 gate
 //! is mean `< 0.5 ms` for height=40 over 1000 random starts.
+//! Mirrors the TUI path: one persistent `CollapseIndex`, `rows_virtual`
+//! per frame (the legacy `rows()` rebuilds an index per call and is only a
+//! test convenience).
 //! Run: `cargo bench --bench viewport`.
 
 use std::collections::HashSet;
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use next_hunk::ir::{parse_unified_diff, Viewport, ViewportQuery};
+use next_hunk::ir::{parse_unified_diff, CollapseIndex, Viewport, ViewportQuery};
 
 fn huge_review_text() -> String {
     match std::fs::read_to_string("fixtures/huge.patch") {
@@ -40,7 +43,8 @@ fn bench_viewport(c: &mut Criterion) {
         return;
     }
     let review = parse_unified_diff(&text).unwrap();
-    let stream_len = review.stream_len;
+    let index = CollapseIndex::build(&review, 8, &HashSet::new());
+    let stream_len = index.virtual_len();
     let height = 40usize;
 
     // Pre-generate 1000 deterministic random starts in [0, stream_len).
@@ -53,10 +57,10 @@ fn bench_viewport(c: &mut Criterion) {
         b.iter(|| {
             let mut acc = 0usize;
             for &start in black_box(&starts) {
-                let rows = ViewportQuery::rows(
+                let rows = ViewportQuery::rows_virtual(
                     black_box(&review),
                     Viewport { start, height },
-                    &HashSet::new(),
+                    &index,
                 );
                 acc += rows.len();
             }
@@ -68,11 +72,8 @@ fn bench_viewport(c: &mut Criterion) {
     c.bench_function("viewport_single_h40", |b| {
         let start = stream_len / 2;
         b.iter(|| {
-            let rows = ViewportQuery::rows(
-                black_box(&review),
-                Viewport { start, height },
-                &HashSet::new(),
-            );
+            let rows =
+                ViewportQuery::rows_virtual(black_box(&review), Viewport { start, height }, &index);
             black_box(rows.len());
         })
     });

@@ -112,6 +112,7 @@ pub fn run_review_tui(
     start_highlight: bool,
     start_line_numbers: bool,
     wrap_on: bool,
+    context_collapse: usize,
     theme: Option<String>,
     layout: crate::config::LayoutMode,
     workdir: Option<PathBuf>,
@@ -146,6 +147,7 @@ pub fn run_review_tui(
     app.line_numbers_on = start_line_numbers;
     app.wrap_on = wrap_on;
     app.layout_mode = layout;
+    app.set_context_collapse(context_collapse);
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
     app.focus_target = options.focus;
@@ -516,6 +518,7 @@ diff --git a/b.rs b/b.rs
             true,
             true,
             false,
+            crate::config::DEFAULT_CONTEXT_COLLAPSE,
             None,
             crate::config::LayoutMode::Unified,
             None,

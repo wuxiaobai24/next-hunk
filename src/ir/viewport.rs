@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use super::collapse::{CollapseIndex, Segment};
 use super::model::{DiffLineKind, Review};
 
 /// A single virtual row in the flattened multi-file stream.
@@ -21,6 +22,22 @@ pub enum StreamRow<'a> {
         kind: DiffLineKind,
         text: &'a str,
     },
+    /// A collapsed run of unchanged lines (within a hunk, or the implied gap
+    /// between hunks). Rendered as `··· N unchanged lines ···`.
+    Unchanged {
+        file_idx: usize,
+        count: usize,
+    },
+}
+
+/// A materialized virtual row paired with the stream row it draws from
+/// (markers carry the nearest following real row), so consumers keying on
+/// absolute stream rows — search-match highlighting, the `--note` fan-out,
+/// the editor-open scan — keep working in virtual coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VRow<'a> {
+    pub abs_row: usize,
+    pub row: StreamRow<'a>,
 }
 
 /// Visible window into the stream.
@@ -39,88 +56,135 @@ impl Viewport {
 pub struct ViewportQuery;
 
 impl ViewportQuery {
-    /// Materialize stream rows in `[start, start+height)` without scanning the
-    /// whole review when possible (binary search on file spans).
+    /// Materialize stream rows in `[start, start+height)` (test convenience).
     ///
-    /// `folded` is a set of file indices whose bodies (hunks + lines) are
-    /// collapsed — only the file header row is emitted.
+    /// Builds a fresh [`CollapseIndex`] on every call, so hot paths (the TUI,
+    /// benches) should hold a persistent index and call [`Self::rows_virtual`]
+    /// instead. `folded` is a set of file indices whose bodies are collapsed.
     pub fn rows<'a>(
         review: &'a Review,
         viewport: Viewport,
         folded: &HashSet<usize>,
     ) -> Vec<StreamRow<'a>> {
-        if review.stream_len == 0 || viewport.height == 0 {
+        Self::rows_virtual(review, viewport, &CollapseIndex::build(review, 0, folded))
+            .into_iter()
+            .map(|v| v.row)
+            .collect()
+    }
+
+    /// Materialize virtual rows for the window `[viewport.start,
+    /// viewport.start+height)` over a [`CollapseIndex`] — the TUI path.
+    ///
+    /// The index decides which rows exist (folded files, collapsed context
+    /// runs, implied inter-hunk gaps); the walk binary-searches the segment
+    /// table for the window start and touches only the segments the window
+    /// overlaps. Each returned [`VRow`] carries the stream row it draws from.
+    pub fn rows_virtual<'a>(
+        review: &'a Review,
+        viewport: Viewport,
+        index: &CollapseIndex,
+    ) -> Vec<VRow<'a>> {
+        let total_v = index.virtual_len();
+        if total_v == 0 || viewport.height == 0 {
             return Vec::new();
         }
-
-        let start = viewport.start.min(review.stream_len.saturating_sub(1));
-        let end = viewport.end().min(review.stream_len);
+        let start = viewport.start.min(total_v - 1);
+        let end = viewport.end().min(total_v);
         if start >= end {
             return Vec::new();
         }
 
-        let mut out = Vec::with_capacity(end - start);
-
-        // Find first file that may contribute rows.
-        let mut file_idx = review
-            .files
-            .partition_point(|f| f.stream_start + f.stream_len <= start)
-            .min(review.files.len().saturating_sub(1));
-
-        while file_idx < review.files.len() {
-            let file = &review.files[file_idx];
-            if file.stream_start >= end {
-                break;
-            }
-
-            let mut row = file.stream_start;
-
-            // File header
-            if row >= start && row < end {
-                out.push(StreamRow::FileHeader {
-                    file_idx,
-                    path: file.display_path.as_str(),
-                });
-            }
-            row += 1;
-
-            // When the file is folded, skip its body (hunk headers + lines).
-            if folded.contains(&file_idx) {
-                file_idx += 1;
-                continue;
-            }
-
-            for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
-                if row >= end {
-                    break;
-                }
-                if row >= start {
-                    out.push(StreamRow::HunkHeader {
-                        file_idx,
-                        hunk_idx,
-                        text: review.text(hunk.header.clone()),
-                    });
-                }
-                row += 1;
-
-                for line in &hunk.lines {
-                    if row >= end {
-                        break;
-                    }
-                    if row >= start {
-                        out.push(StreamRow::Line {
-                            file_idx,
-                            kind: line.kind,
-                            text: review.text(line.text.clone()),
+        let mut out: Vec<VRow<'a>> = Vec::with_capacity(end - start);
+        let mut si = index.segment_at_virtual(start);
+        let mut v = index.vstart_of(si);
+        while si < index.segment_count() && out.len() < end - start {
+            match *index.segment(si) {
+                Segment::FileHeader { file_idx, stream } => {
+                    if v >= start {
+                        out.push(VRow {
+                            abs_row: stream,
+                            row: StreamRow::FileHeader {
+                                file_idx,
+                                path: review.files[file_idx].display_path.as_str(),
+                            },
                         });
                     }
-                    row += 1;
+                    v += 1;
+                }
+                Segment::HunkHeader {
+                    file_idx,
+                    hunk_idx,
+                    stream,
+                } => {
+                    if v >= start {
+                        let hunk = &review.files[file_idx].hunks[hunk_idx];
+                        out.push(VRow {
+                            abs_row: stream,
+                            row: StreamRow::HunkHeader {
+                                file_idx,
+                                hunk_idx,
+                                text: review.text(hunk.header.clone()),
+                            },
+                        });
+                    }
+                    v += 1;
+                }
+                Segment::Gap {
+                    count,
+                    stream,
+                    file_idx,
+                } => {
+                    if v >= start {
+                        out.push(VRow {
+                            abs_row: stream,
+                            row: StreamRow::Unchanged { file_idx, count },
+                        });
+                    }
+                    v += 1;
+                }
+                Segment::Run {
+                    stream,
+                    count,
+                    file_idx,
+                    ..
+                } => {
+                    if v >= start {
+                        out.push(VRow {
+                            abs_row: stream,
+                            row: StreamRow::Unchanged { file_idx, count },
+                        });
+                    }
+                    v += 1;
+                }
+                Segment::Lines {
+                    stream,
+                    count,
+                    file_idx,
+                    hunk_idx,
+                    line_start,
+                } => {
+                    let hunk = &review.files[file_idx].hunks[hunk_idx];
+                    for k in 0..count {
+                        if v >= end {
+                            break;
+                        }
+                        if v >= start {
+                            let entry = &hunk.lines[line_start + k];
+                            out.push(VRow {
+                                abs_row: stream + k,
+                                row: StreamRow::Line {
+                                    file_idx,
+                                    kind: entry.kind,
+                                    text: review.text(entry.text.clone()),
+                                },
+                            });
+                        }
+                        v += 1;
+                    }
                 }
             }
-
-            file_idx += 1;
+            si += 1;
         }
-
         out
     }
 
@@ -806,8 +870,12 @@ diff --git a/a.rs b/a.rs
     #[test]
     fn rows_folded_file_at_viewport_boundary() {
         let review = two_file_review();
-        // Viewport starts at file1's header (row 4), file0 is folded.
-        // Even though file0 is folded, it's outside the viewport so only file1 appears.
+        // file0 folded: the virtual stream is file0's header + file1's four
+        // rows = 5 virtual rows total. A window starting at virtual row 4
+        // covers only the last row. (Pre-collapse, windows inside a folded
+        // file's body "pulled through" later files' rows; with fold-aware
+        // virtual rows every window position is exactly one drawn row, and
+        // the App's max_scroll clamp makes such windows unreachable anyway.)
         let mut folded = HashSet::new();
         folded.insert(0);
         let rows = ViewportQuery::rows(
@@ -818,7 +886,7 @@ diff --git a/a.rs b/a.rs
             },
             &folded,
         );
-        assert_eq!(rows.len(), 4);
-        assert!(matches!(rows[0], StreamRow::FileHeader { file_idx: 1, .. }));
+        assert_eq!(rows.len(), 1);
+        assert!(matches!(rows[0], StreamRow::Line { file_idx: 1, .. }));
     }
 }
