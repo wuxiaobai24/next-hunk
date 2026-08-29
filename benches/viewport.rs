@@ -43,7 +43,7 @@ fn bench_viewport(c: &mut Criterion) {
         return;
     }
     let review = parse_unified_diff(&text).unwrap();
-    let index = CollapseIndex::build(&review, 8, &HashSet::new());
+    let index = CollapseIndex::build(&review, 8, &HashSet::new(), false);
     let stream_len = index.virtual_len();
     let height = 40usize;
 

@@ -130,12 +130,216 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
-    // Narrow terminal: stack mode falls back to unified (no crash).
-    if app.layout_mode == crate::config::LayoutMode::Stack && area.width >= 40 {
-        draw_stream_stack(app, frame, area);
-    } else {
-        draw_stream_unified(app, frame, area);
+    // Keep the virtual index in sync with the layout this width resolves to
+    // (auto switches split/stack/unified across thresholds; the index must
+    // match what is drawn).
+    app.sync_effective_layout(area.width);
+    // Narrow terminal: stack/split fall back to unified (no crash).
+    match app.effective_layout() {
+        crate::config::LayoutMode::Stack if area.width >= 40 => draw_stream_stack(app, frame, area),
+        crate::config::LayoutMode::Split if area.width >= 80 => draw_stream_split(app, frame, area),
+        _ => draw_stream_unified(app, frame, area),
     }
+}
+
+/// Side-by-side split layout: one aligned row per (old, new) pair, two
+/// half-width columns separated by a dim divider. Works on the same
+/// virtual-row viewport as unified/stack — the index just counts pairs
+/// instead of lines, so scrolling, search, hunk jumps and folding all keep
+/// working unchanged. Full-width rows (file/hunk headers, collapse markers,
+/// notes) span both columns.
+fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
+    let height = area.height as usize;
+    let scroll_y = app.scroll_y;
+    let viewport = Viewport {
+        start: scroll_y,
+        height,
+    };
+
+    let owned_rows: Vec<OwnedRow> =
+        ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
+            .into_iter()
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .collect();
+
+    let current_match_row = if app.search.active && !app.search.matches.is_empty() {
+        Some(app.search.matches[app.search.current])
+    } else {
+        None
+    };
+    let match_rows: std::collections::HashSet<usize> = if app.search.active {
+        app.search.matches.iter().copied().collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+
+    // Column budget: [gutter|sign|text] │ [gutter|sign|text]
+    const GUTTER: usize = 6;
+    const DIVIDER: &str = " │ ";
+    let per_side = (area.width as usize).saturating_sub(2 * (GUTTER + 1) + 3) / 2;
+
+    let title = app.current_path().to_string();
+    let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
+    for r in owned_rows {
+        let abs_row = owned_row_abs(&r);
+        match r {
+            OwnedRow::Pair { old, new, .. } => {
+                let mut spans: Vec<Span> = Vec::with_capacity(8);
+                spans.extend(split_side_spans(
+                    app,
+                    old.as_ref(),
+                    per_side,
+                    current_match_row,
+                    &match_rows,
+                ));
+                spans.push(Span::styled(DIVIDER, Style::default().fg(app.theme.dim)));
+                spans.extend(split_side_spans(
+                    app,
+                    new.as_ref(),
+                    per_side,
+                    current_match_row,
+                    &match_rows,
+                ));
+                lines.push(Line::from(spans));
+            }
+            other => {
+                lines.push(stream_row_to_line(
+                    app,
+                    other,
+                    current_match_row,
+                    &match_rows,
+                ));
+            }
+        }
+        // Note fan-out spans both columns (keyed on the pair's stream row).
+        if let Some(notes) = notes_by_row.get(&abs_row) {
+            for text in notes {
+                lines.push(Line::from(Span::styled(
+                    format!("  💬 {}", text),
+                    Style::default()
+                        .fg(app.theme.note)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
+        }
+    }
+
+    let para = Paragraph::new(lines).block(
+        Block::default()
+            .borders(Borders::NONE)
+            .title(format!(" {} ", title)),
+    );
+    frame.render_widget(para, area);
+}
+
+/// Build the spans for one side of a split row: dim right-aligned line-number
+/// gutter, sign, then syntax-highlighted text truncated to the column width.
+/// Empty sides pad with blanks so the divider stays aligned.
+fn split_side_spans(
+    app: &mut App,
+    side: Option<&OwnedSide>,
+    width: usize,
+    current_match_row: Option<usize>,
+    match_rows: &std::collections::HashSet<usize>,
+) -> Vec<Span<'static>> {
+    use unicode_width::UnicodeWidthStr;
+    let Some(side) = side else {
+        return vec![Span::raw(" ".repeat(width + 6 + 1))];
+    };
+    let is_current = current_match_row == Some(side.abs_row);
+    let is_other_match = !is_current && match_rows.contains(&side.abs_row);
+
+    let gutter = match side.line_no {
+        Some(n) => format!("{n:>5} "),
+        None => " ".repeat(6),
+    };
+    let (sign, kind_style) = match side.kind {
+        DiffLineKind::Add => ('+', Style::default().fg(app.theme.add)),
+        DiffLineKind::Delete => ('-', Style::default().fg(app.theme.delete)),
+        DiffLineKind::Meta => ('\\', Style::default().fg(app.theme.dim)),
+        DiffLineKind::Context => (' ', Style::default()),
+    };
+
+    let mut spans = vec![
+        Span::styled(
+            gutter,
+            if is_current {
+                Style::default()
+                    .fg(app.theme.match_active_fg)
+                    .bg(app.theme.match_active_bg)
+            } else if is_other_match {
+                Style::default().bg(app.theme.match_inactive_bg)
+            } else {
+                Style::default().fg(app.theme.dim)
+            },
+        ),
+        Span::styled(sign.to_string(), kind_style),
+    ];
+
+    // Syntax-highlighted text runs (viewport-only, cached) truncated to the
+    // column width. A trailing "…" marks the cut on long lines.
+    let file_and_line = ViewportQuery::file_and_line(&app.review, side.abs_row);
+    let runs: Vec<(Style, String)> = if app.highlight_on {
+        match file_and_line {
+            Some((file_idx, li)) => {
+                let path = app.review.display_path(file_idx).to_owned();
+                if let Some(runs) = app.cache.try_get(file_idx, li) {
+                    runs
+                } else if let Some(tx) = app.hl_job_tx.as_ref() {
+                    let _ = tx.send(crate::highlight::HighlightJob {
+                        gen: app.cache.current_gen(),
+                        file_idx,
+                        line_in_file: li,
+                        path,
+                        text: side.text.clone(),
+                        highlighter: Arc::clone(&app.highlighter),
+                    });
+                    vec![(Style::default(), side.text.clone())]
+                } else {
+                    app.cache
+                        .get_or_highlight(file_idx, li, &path, &side.text, &app.highlighter)
+                }
+            }
+            None => vec![(Style::default(), side.text.clone())],
+        }
+    } else {
+        vec![(Style::default(), side.text.clone())]
+    };
+
+    let mut used = 0usize;
+    for (style, text) in runs {
+        if used >= width {
+            break;
+        }
+        let mut chunk = String::new();
+        for ch in text.chars() {
+            let w = ch.to_string().width();
+            if used + w > width {
+                break;
+            }
+            chunk.push(ch);
+            used += w;
+        }
+        if !chunk.is_empty() {
+            spans.push(Span::styled(chunk, style));
+        }
+    }
+    if used < side.text.width() && width > 0 {
+        // The line was cut: show an ellipsis in any remaining space (or as
+        // the last cell by trimming one char).
+        if used < width {
+            spans.push(Span::styled(
+                "…".to_string(),
+                Style::default().fg(app.theme.dim),
+            ));
+            used += 1;
+        }
+    }
+    if used < width {
+        spans.push(Span::raw(" ".repeat(width - used)));
+    }
+    spans
 }
 
 fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
@@ -246,6 +450,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
             OwnedRow::HunkHeader { file_idx, .. } => *file_idx,
             OwnedRow::Line { file_idx, .. } => *file_idx,
             OwnedRow::Unchanged { file_idx, .. } => *file_idx,
+            OwnedRow::Pair { file_idx, .. } => *file_idx,
         };
         if file_rows.last().map(|(f, _)| *f) != Some(file_idx) {
             file_rows.push((file_idx, Vec::new()));
@@ -388,6 +593,7 @@ fn owned_row_abs(row: &OwnedRow) -> usize {
         OwnedRow::HunkHeader { abs_row, .. } => *abs_row,
         OwnedRow::Line { abs_row, .. } => *abs_row,
         OwnedRow::Unchanged { abs_row, .. } => *abs_row,
+        OwnedRow::Pair { abs_row, .. } => *abs_row,
     }
 }
 
@@ -458,6 +664,22 @@ enum OwnedRow {
         count: usize,
         abs_row: usize,
     },
+    /// One side-by-side row (split layout): the old-side and/or new-side
+    /// code line, each with its resolved source line number.
+    Pair {
+        file_idx: usize,
+        old: Option<OwnedSide>,
+        new: Option<OwnedSide>,
+        abs_row: usize,
+    },
+}
+
+/// One side of a materialized split row.
+struct OwnedSide {
+    kind: DiffLineKind,
+    text: String,
+    line_no: Option<u32>,
+    abs_row: usize,
 }
 
 impl OwnedRow {
@@ -506,6 +728,26 @@ impl OwnedRow {
                 count,
                 abs_row,
             },
+            StreamRow::Pair { file_idx, old, new } => {
+                let side = |s: Option<crate::ir::PairSide<'_>>| {
+                    s.map(|p| {
+                        let (old_no, new_no) = ViewportQuery::row_line_numbers(review, p.abs_row)
+                            .unwrap_or((None, None));
+                        OwnedSide {
+                            kind: p.kind,
+                            text: p.text.to_string(),
+                            line_no: old_no.or(new_no),
+                            abs_row: p.abs_row,
+                        }
+                    })
+                };
+                OwnedRow::Pair {
+                    file_idx,
+                    old: side(old),
+                    new: side(new),
+                    abs_row,
+                }
+            }
         }
     }
 }
@@ -536,6 +778,15 @@ fn stream_row_to_line(
                 .fg(app.theme.dim)
                 .add_modifier(Modifier::ITALIC),
         )),
+        OwnedRow::Pair { new, old, .. } => {
+            // Unified/stack renderers never materialize Pair rows; if one
+            // slips through, render the new side (fallback: old side).
+            let s = new.as_ref().or(old.as_ref());
+            Line::from(Span::styled(
+                s.map(|x| x.text.clone()).unwrap_or_default(),
+                Style::default(),
+            ))
+        }
         OwnedRow::HunkHeader {
             text,
             file_idx,
@@ -977,6 +1228,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("t", "cycle theme (dark → light → auto)"),
             ("zc / zo", "fold / unfold current file"),
             ("zx", "toggle context collapse (··· N unchanged lines ···)"),
+            ("L", "cycle layout (unified → split → stack)"),
         ],
         head,
         key,

@@ -28,6 +28,24 @@ pub enum StreamRow<'a> {
         file_idx: usize,
         count: usize,
     },
+    /// One aligned side-by-side row (split layout): the old-side and/or
+    /// new-side code line shown in the two columns. Built from the hunk's
+    /// [`PairSlot`] alignment; `None` on a side pads it with blanks.
+    Pair {
+        file_idx: usize,
+        old: Option<PairSide<'a>>,
+        new: Option<PairSide<'a>>,
+    },
+}
+
+/// One side of a split-layout [`StreamRow::Pair`]. `abs_row` is the stream
+/// row of this side's line (drives line-number gutters, highlight-cache keys
+/// and search-match highlighting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PairSide<'a> {
+    pub kind: DiffLineKind,
+    pub text: &'a str,
+    pub abs_row: usize,
 }
 
 /// A materialized virtual row paired with the stream row it draws from
@@ -66,10 +84,14 @@ impl ViewportQuery {
         viewport: Viewport,
         folded: &HashSet<usize>,
     ) -> Vec<StreamRow<'a>> {
-        Self::rows_virtual(review, viewport, &CollapseIndex::build(review, 0, folded))
-            .into_iter()
-            .map(|v| v.row)
-            .collect()
+        Self::rows_virtual(
+            review,
+            viewport,
+            &CollapseIndex::build(review, 0, folded, false),
+        )
+        .into_iter()
+        .map(|v| v.row)
+        .collect()
     }
 
     /// Materialize virtual rows for the window `[viewport.start,
@@ -176,6 +198,48 @@ impl ViewportQuery {
                                     file_idx,
                                     kind: entry.kind,
                                     text: review.text(entry.text.clone()),
+                                },
+                            });
+                        }
+                        v += 1;
+                    }
+                }
+                Segment::Pairs {
+                    stream,
+                    count,
+                    file_idx,
+                    hunk_idx,
+                    ref pairs,
+                    ..
+                } => {
+                    let hunk = &review.files[file_idx].hunks[hunk_idx];
+                    let side = |li: Option<u32>| {
+                        li.map(|l| {
+                            let entry = &hunk.lines[l as usize];
+                            PairSide {
+                                kind: entry.kind,
+                                text: review.text(entry.text.clone()),
+                                abs_row: stream + l as usize,
+                            }
+                        })
+                    };
+                    for k in 0..count {
+                        if v >= end {
+                            break;
+                        }
+                        if v >= start {
+                            let slot = pairs[k];
+                            let abs = slot
+                                .old
+                                .or(slot.new)
+                                .map(|l| stream + l as usize)
+                                .unwrap_or(stream);
+                            out.push(VRow {
+                                abs_row: abs,
+                                row: StreamRow::Pair {
+                                    file_idx,
+                                    old: side(slot.old),
+                                    new: side(slot.new),
                                 },
                             });
                         }

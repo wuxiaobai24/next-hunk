@@ -49,6 +49,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Stack layout: `layout = "stack"` config (unified default)
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Context collapsing: inter-hunk gaps and long context runs fold to `··· N unchanged lines ···` markers (default on, `zx` toggles)
+- [x] Split layout: side-by-side aligned columns (`layout = "split"`); `layout = "auto"` picks split/stack/unified by terminal width
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
 
@@ -217,7 +218,7 @@ Fields:
 | `watch` | bool | `false` | live-reload on file changes |
 | `line_numbers` | bool | — | show old/new line-number gutter (`#` toggles at runtime) |
 | `include_untracked` | bool | `false` | include untracked files in worktree diff (`--include-untracked`) |
-| `layout` | string | `"unified"` | `"unified"` (default, interleaved) or `"stack"` (old/new blocks per file) |
+| `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side columns), or `"auto"` (pick split/stack/unified from the live stream width) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |

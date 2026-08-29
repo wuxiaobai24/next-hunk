@@ -22,19 +22,53 @@ pub enum LayoutMode {
     /// Stacked diff: old content (context + deletes) then new content
     /// (context + adds) per file, vertically.
     Stack,
+    /// Side-by-side split: old and new content in two aligned columns.
+    Split,
+    /// Responsive: pick split / stack / unified from the live stream-pane
+    /// width at draw time (≥ [`AUTO_SPLIT_MIN_WIDTH`] → split,
+    /// ≥ [`AUTO_STACK_MIN_WIDTH`] → stack, else unified).
+    Auto,
 }
+
+/// Width (columns) of the stream pane at which `layout = "auto"` upgrades
+/// from stack to side-by-side split.
+pub const AUTO_SPLIT_MIN_WIDTH: u16 = 120;
+/// Width (columns) of the stream pane at which `layout = "auto"` upgrades
+/// from unified to stack.
+pub const AUTO_STACK_MIN_WIDTH: u16 = 40;
 
 impl LayoutMode {
     pub fn as_str(&self) -> &'static str {
         match self {
             LayoutMode::Unified => "unified",
             LayoutMode::Stack => "stack",
+            LayoutMode::Split => "split",
+            LayoutMode::Auto => "auto",
+        }
+    }
+
+    /// Resolve `Auto` against a stream-pane width; concrete modes pass
+    /// through unchanged.
+    pub fn resolve(&self, stream_width: u16) -> LayoutMode {
+        match self {
+            LayoutMode::Auto => {
+                if stream_width >= AUTO_SPLIT_MIN_WIDTH {
+                    LayoutMode::Split
+                } else if stream_width >= AUTO_STACK_MIN_WIDTH {
+                    LayoutMode::Stack
+                } else {
+                    LayoutMode::Unified
+                }
+            }
+            concrete => *concrete,
         }
     }
 
     pub fn parse_str(s: &str) -> Self {
         match s.trim().to_lowercase().as_str() {
             "stack" => LayoutMode::Stack,
+            "split" => LayoutMode::Split,
+            "auto" => LayoutMode::Auto,
             _ => LayoutMode::Unified,
         }
     }

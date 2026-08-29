@@ -279,6 +279,12 @@ pub struct App {
     /// Configured threshold (`context_collapse`); runs/gaps shorter than this
     /// never collapse. 0 disables.
     pub context_threshold: usize,
+    /// Concrete layout the virtual index was last built for (auto resolves
+    /// per draw; a change rebuilds the index).
+    pub built_layout: LayoutMode,
+    /// Stream-pane width the split index was built for (column-independent,
+    /// kept to document the last rebuild).
+    pub built_split_width: u16,
     /// Layout mode for the diff stream pane.
     pub layout_mode: LayoutMode,
     /// Agent comments (separate from --note annotations).
@@ -396,7 +402,8 @@ impl App {
             Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · zx context · / search · f filter · H highlight · q quit", review.file_count()))
         };
         let theme = theme_mode.to_theme();
-        let collapse = CollapseIndex::build(&review, DEFAULT_CONTEXT_COLLAPSE, &HashSet::new());
+        let collapse =
+            CollapseIndex::build(&review, DEFAULT_CONTEXT_COLLAPSE, &HashSet::new(), false);
         Self {
             review: review.clone(),
             base_review: review,
@@ -435,6 +442,8 @@ impl App {
             collapse,
             collapse_on: true,
             context_threshold: DEFAULT_CONTEXT_COLLAPSE,
+            built_layout: LayoutMode::Unified,
+            built_split_width: 80,
             layout_mode: LayoutMode::Unified,
         }
     }
@@ -517,10 +526,42 @@ impl App {
         } else {
             0
         };
-        self.collapse = CollapseIndex::build(&self.review, threshold, &self.folded);
+        let split = self.effective_layout() == LayoutMode::Split;
+        self.collapse = CollapseIndex::build(&self.review, threshold, &self.folded, split);
         let v = self.collapse.virtual_of_stream(anchor);
         self.scroll_y = v.min(self.max_scroll());
         self.sync_selected_file();
+    }
+
+    /// The concrete layout for the current stream-pane width (`auto`
+    /// resolves at draw time; concrete modes pass through).
+    pub fn effective_layout(&self) -> LayoutMode {
+        let width = self.stream_rect.map(|r| r.width).unwrap_or(80);
+        let resolved = self.layout_mode.resolve(width);
+        // Narrow terminals cannot fit two columns (or a stack): downgrade to
+        // unified so the index and the renderer always agree.
+        match resolved {
+            LayoutMode::Split if width < 80 => LayoutMode::Unified,
+            LayoutMode::Stack if width < 40 => LayoutMode::Unified,
+            other => other,
+        }
+    }
+
+    /// Track the layout the index was built for; when a width change (or a
+    /// layout config change) moves `auto` across a threshold, rebuild the
+    /// virtual index so pair rows / line rows match what is drawn. Called
+    /// from the draw path with the live stream-pane width.
+    pub fn sync_effective_layout(&mut self, width: u16) {
+        let resolved = self.layout_mode.resolve(width);
+        let built_for = self.built_layout;
+        let width_changed = resolved == LayoutMode::Split
+            && built_for == LayoutMode::Split
+            && self.built_split_width != width;
+        if resolved != built_for || width_changed {
+            self.built_layout = resolved;
+            self.built_split_width = width;
+            self.rebuild_collapse();
+        }
     }
 
     /// Toggle context collapsing (`zx`), keeping the viewed stream row.
@@ -966,6 +1007,18 @@ impl App {
                 } else {
                     self.set_info("rail hidden");
                 }
+            }
+            // cycle layout: unified → split → stack → unified. Rebuilds the
+            // virtual index (pair rows vs line rows) and keeps the anchor.
+            KeyCode::Char('L') => {
+                self.layout_mode = match self.layout_mode {
+                    LayoutMode::Unified => LayoutMode::Split,
+                    LayoutMode::Split => LayoutMode::Stack,
+                    LayoutMode::Stack | LayoutMode::Auto => LayoutMode::Unified,
+                };
+                self.built_layout = self.effective_layout();
+                self.rebuild_collapse();
+                self.set_success(format!("layout: {}", self.layout_mode.as_str()));
             }
             // cycle theme: dark → light → auto → dark; reload syntect palette
             KeyCode::Char('t') => {
@@ -1423,8 +1476,10 @@ impl App {
         ViewportQuery::rows_virtual(&self.review, viewport, &self.collapse)
             .into_iter()
             .find_map(|vr| {
-                let crate::ir::StreamRow::Line { file_idx, .. } = vr.row else {
-                    return None;
+                let file_idx = match vr.row {
+                    crate::ir::StreamRow::Line { file_idx, .. } => file_idx,
+                    crate::ir::StreamRow::Pair { file_idx, .. } => file_idx,
+                    _ => return None,
                 };
                 let (old_no, new_no) = ViewportQuery::row_line_numbers(&self.review, vr.abs_row)?;
                 // Prefer the new-side line number (edits land on the live

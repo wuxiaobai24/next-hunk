@@ -199,6 +199,29 @@ cargo build --release
 ls -lh target/release/next-hunk
 ```
 
+
+### Rough comparison vs `hunk` (measured, 2026-08-29)
+
+`hunk` (https://github.com/modem-dev/hunk, v0.20.0, prebuilt binary) is the
+review-first diff viewer next-hunk benchmarks its experience against. Numbers
+below are measured on the same machine (AMD Ryzen 7 5700X, Linux), same
+7783-line real diff (`git diff v0.2.0 v0.4.0` of this repo), 200x50 terminal.
+
+| Dimension | next-hunk 0.5-dev | hunk 0.20.0 | Method |
+|-----------|-------------------|-------------|--------|
+| **Cold one-shot summary** | **~3 ms** (`nh inspect`, 3-run median) | n/a (no headless summary mode; non-TTY `hunk patch -` waits on a tty) | `/usr/bin/time`-style wall clock via `date +%s%N` |
+| **Runtime baseline** | native binary, no VM warmup | **~203 ms** for `hunk --version` alone (Node/OpenTUI runtime startup) | wall clock, 3 runs |
+| **Viewport materialization** | **~0.33 µs/window** (341 µs for 1000 random 40-row windows, `viewport_huge_h40`) | not published; renders via OpenTUI component tree | `cargo bench --bench viewport` |
+| **Scroll model** | virtual rows over a binary-searched segment table; scroll cost independent of diff size | OpenTUI retained tree | design claim + bench |
+| **Context collapsing** | inter-hunk gaps (implied by `@@` numbers, works on bare patches) + in-hunk runs, expand-on-jump | inter-hunk gaps | feature parity on the main path |
+| **Startup RSS** | not measured here | not measured | (fill in when a headless hunk path exists) |
+
+**Honest caveats**: hunk's interactive startup was not directly measurable
+headlessly (it requires a tty); the `--version` baseline is a lower bound on
+its process startup. hunk ships features next-hunk does not (inline
+annotations beside code, jj/Sapling detection, extension API); see
+`docs/PLAN.md` 0.9 for the tracked parity list.
+
 ---
 
 ## 6. Changelog of gates
