@@ -179,7 +179,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `watch` | bool | `false` | 文件变化时实时重载 |
 | `line_numbers` | bool | — | 显示 old/new 行号 gutter（`#` 运行时切换） |
 | `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
-| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）或 `"stack"`（每文件分旧/新两块） |
+| `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件分旧/新两块）、`"split"`（并排两列）、或 `"auto"`（按流面板宽度自动选 split/stack/unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `context_collapse` | int | `8` | 未变上下文折叠：≥ N 行的连续未变内容折叠为一行 `··· N unchanged lines ···` 标记（`0` 关闭；运行时 `zx` 切换） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`（`t` 循环切换）。调色板为 [Flexoki](https://flexoki.com)。 |

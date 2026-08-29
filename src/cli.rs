@@ -411,7 +411,10 @@ fn run() -> Result<()> {
                 cfg.context_collapse
                     .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
                 cfg.theme,
-                LayoutMode::Unified,
+                cfg.layout
+                    .as_deref()
+                    .map(crate::config::LayoutMode::parse_str)
+                    .unwrap_or_default(),
                 Some(repo),
                 ReviewOptions::default(),
                 None,
@@ -419,15 +422,21 @@ fn run() -> Result<()> {
         }
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
+            let cwd = std::env::current_dir()?;
+            let cfg = Config::load(&cwd);
             open_review_from_text(
                 &text,
                 None,
                 true,
                 true,
                 false,
-                crate::config::DEFAULT_CONTEXT_COLLAPSE,
-                None,
-                LayoutMode::Unified,
+                cfg.context_collapse
+                    .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
+                cfg.theme,
+                cfg.layout
+                    .as_deref()
+                    .map(crate::config::LayoutMode::parse_str)
+                    .unwrap_or_default(),
                 None,
                 ReviewOptions::default(),
                 None,
@@ -496,7 +505,10 @@ fn run() -> Result<()> {
                 cfg.context_collapse
                     .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
                 cfg.theme,
-                LayoutMode::Unified,
+                cfg.layout
+                    .as_deref()
+                    .map(crate::config::LayoutMode::parse_str)
+                    .unwrap_or_default(),
                 workdir,
                 ReviewOptions::default(),
                 None,

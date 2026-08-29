@@ -84,6 +84,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stream (previously folded bodies still occupied scroll range and windows
   "pulled through" later files' rows).
 
+### Added — Side-by-side split layout + `layout = "auto"`
+- **`layout = "split"`** — old/new content in two aligned half-width columns
+  with per-side line-number gutters, colored signs, and true-color syntax
+  highlighting on both sides; delete/add runs pair index-wise with blank
+  padding on the shorter side. Inter-hunk gap markers still apply; file /
+  hunk headers and `--note` rows span both columns.
+- **`layout = "auto"`** — responsive layout picked at draw time from the
+  live stream-pane width: ≥ 120 cols → split, ≥ 40 → stack, else unified.
+  Width changes rebuild the virtual index (pair rows vs line rows) and
+  re-anchor the scroll on the same stream row; the IR is untouched.
+- Both modes work in `diff` / `show` / `patch` / `pager` / `serve` (config
+  key; `patch` now honors config like the repo-backed commands).
+
 ### Removed
 - **`mcp` cargo feature** — the flag was declared in `Cargo.toml` with a
   comment describing an MCP stdio server (`next-hunk mcp`), but no such

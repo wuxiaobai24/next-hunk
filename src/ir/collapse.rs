@@ -66,6 +66,27 @@ pub(crate) enum Segment {
         hunk_idx: usize,
         line_start: usize,
     },
+    /// A hunk body in side-by-side split layout: one virtual row per aligned
+    /// (old-side, new-side) pair. `pairs[k]` holds the `hunk.lines` indices
+    /// shown on each side of virtual row `k` (`None` = blank padding);
+    /// `line_to_pair[i]` maps the hunk's line `i` to its pair index so
+    /// stream→virtual lookups stay O(1) after the segment is found.
+    Pairs {
+        stream: usize,
+        count: usize,
+        file_idx: usize,
+        hunk_idx: usize,
+        pairs: std::sync::Arc<Vec<PairSlot>>,
+        line_to_pair: std::sync::Arc<Vec<u32>>,
+    },
+}
+
+/// One aligned row of a side-by-side hunk body: indices into `hunk.lines`,
+/// `None` where a side is blank (padding against a longer opposite run).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PairSlot {
+    pub old: Option<u32>,
+    pub new: Option<u32>,
 }
 
 impl Segment {
@@ -77,7 +98,8 @@ impl Segment {
             | Segment::HunkHeader { stream, .. }
             | Segment::Gap { stream, .. }
             | Segment::Run { stream, .. }
-            | Segment::Lines { stream, .. } => *stream,
+            | Segment::Lines { stream, .. }
+            | Segment::Pairs { stream, .. } => *stream,
         }
     }
 
@@ -88,9 +110,70 @@ impl Segment {
             | Segment::HunkHeader { .. }
             | Segment::Gap { .. }
             | Segment::Run { .. } => 1,
-            Segment::Lines { count, .. } => *count,
+            Segment::Lines { count, .. } | Segment::Pairs { count, .. } => *count,
         }
     }
+}
+
+/// Align a hunk body into side-by-side (old, new) pairs.
+///
+/// Context and meta lines pair 1:1. A delete run followed by an add run (git
+/// always orders them this way within a change block) pairs index-wise, the
+/// shorter side padded with blanks. A lone add run (no deletes) pads the old
+/// side entirely. Returns the pairs plus a `line → pair index` map for
+/// O(1) stream→virtual lookups.
+fn build_pairs(hunk: &super::model::Hunk) -> (Vec<PairSlot>, Vec<u32>) {
+    use super::model::DiffLineKind::*;
+    let n = hunk.lines.len();
+    let mut pairs: Vec<PairSlot> = Vec::with_capacity(n);
+    let mut line_to_pair: Vec<u32> = vec![0; n];
+    let mut i = 0usize;
+    while i < n {
+        match hunk.lines[i].kind {
+            Context | Meta => {
+                line_to_pair[i] = pairs.len() as u32;
+                pairs.push(PairSlot {
+                    old: Some(i as u32),
+                    new: Some(i as u32),
+                });
+                i += 1;
+            }
+            Delete => {
+                let d_start = i;
+                while i < n && hunk.lines[i].kind == Delete {
+                    i += 1;
+                }
+                let a_start = i;
+                while i < n && hunk.lines[i].kind == Add {
+                    i += 1;
+                }
+                let d_len = a_start - d_start;
+                let a_len = i - a_start;
+                for k in 0..d_len.max(a_len) {
+                    let p = pairs.len() as u32;
+                    if d_start + k < a_start {
+                        line_to_pair[d_start + k] = p;
+                    }
+                    if k < a_len {
+                        line_to_pair[a_start + k] = p;
+                    }
+                    pairs.push(PairSlot {
+                        old: (d_start + k < a_start).then_some((d_start + k) as u32),
+                        new: (k < a_len).then_some((a_start + k) as u32),
+                    });
+                }
+            }
+            Add => {
+                line_to_pair[i] = pairs.len() as u32;
+                pairs.push(PairSlot {
+                    old: None,
+                    new: Some(i as u32),
+                });
+                i += 1;
+            }
+        }
+    }
+    (pairs, line_to_pair)
 }
 
 /// Push a 1:1 lines segment if it is non-empty.
@@ -137,8 +220,12 @@ impl CollapseIndex {
     /// `threshold` is the minimum number of consecutive context lines (within
     /// a hunk) or implied unchanged lines (between hunks) before a marker row
     /// replaces them; `0` disables markers. `folded` file indices contribute
-    /// only their header row.
-    pub fn build(review: &Review, threshold: usize, folded: &HashSet<usize>) -> Self {
+    /// only their header row. `split` builds hunk bodies as side-by-side
+    /// [`Segment::Pairs`] (one virtual row per aligned old/new pair) instead
+    /// of 1:1 lines; inter-hunk gap markers still apply, while within-hunk
+    /// context-run collapsing does not (standard diffs keep ≤ 2·context
+    /// context lines per hunk anyway).
+    pub fn build(review: &Review, threshold: usize, folded: &HashSet<usize>, split: bool) -> Self {
         let mut segs: Vec<Segment> = Vec::new();
         for (file_idx, file) in review.files.iter().enumerate() {
             segs.push(Segment::FileHeader {
@@ -179,6 +266,22 @@ impl CollapseIndex {
                     stream,
                 });
                 stream += 1;
+
+                if split {
+                    let (pairs, line_to_pair) = build_pairs(hunk);
+                    if !pairs.is_empty() {
+                        segs.push(Segment::Pairs {
+                            stream,
+                            count: pairs.len(),
+                            file_idx,
+                            hunk_idx,
+                            pairs: std::sync::Arc::new(pairs),
+                            line_to_pair: std::sync::Arc::new(line_to_pair),
+                        });
+                    }
+                    stream += hunk.lines.len();
+                    continue;
+                }
 
                 // Walk the body, splitting out collapsible context runs.
                 // `line_start`/`pending` describe the block of visible lines
@@ -335,6 +438,18 @@ impl CollapseIndex {
                     .min(count.saturating_sub(1));
                 stream + off
             }
+            Segment::Pairs { stream, pairs, .. } => {
+                let off = v
+                    .saturating_sub(self.vstarts[i])
+                    .min(pairs.len().saturating_sub(1));
+                let slot = pairs[off];
+                let line = slot
+                    .old
+                    .or(slot.new)
+                    .map(|l| l as usize)
+                    .unwrap_or_default();
+                stream + line
+            }
             seg => seg.stream_key(),
         }
     }
@@ -348,6 +463,15 @@ impl CollapseIndex {
             Segment::Lines { stream, count, .. } => {
                 let off = row.saturating_sub(*stream).min(count.saturating_sub(1));
                 self.vstarts[i] + off
+            }
+            Segment::Pairs {
+                stream,
+                line_to_pair,
+                ..
+            } => {
+                let line = row.saturating_sub(*stream);
+                let pair = line_to_pair.get(line).copied().unwrap_or(0) as usize;
+                self.vstarts[i] + pair
             }
             _ => self.vstarts[i],
         }
@@ -443,7 +567,7 @@ diff --git a/a.rs b/a.rs
     #[test]
     fn identity_when_disabled() {
         let review = gapped_review();
-        let idx = CollapseIndex::build(&review, 0, &Set::new());
+        let idx = CollapseIndex::build(&review, 0, &Set::new(), false);
         assert_eq!(idx.virtual_len(), review.stream_len);
         for row in 0..review.stream_len {
             assert_eq!(idx.virtual_of_stream(row), row, "row {row}");
@@ -455,7 +579,7 @@ diff --git a/a.rs b/a.rs
     fn gap_collapses_to_marker() {
         let review = gapped_review();
         // hunk1 covers old lines 1-3 (end=4); hunk2 starts at old 12 → gap 8.
-        let idx = CollapseIndex::build(&review, 8, &Set::new());
+        let idx = CollapseIndex::build(&review, 8, &Set::new(), false);
         // The gap never occupied stream rows; the marker only adds one.
         assert_eq!(idx.virtual_len(), review.stream_len + 1);
         // virtual: 0 hdr, 1 hunk1 hdr, 2 ctx, 3 -a, 4 +b, 5 marker,
@@ -468,14 +592,14 @@ diff --git a/a.rs b/a.rs
     #[test]
     fn small_gap_below_threshold_is_invisible() {
         let review = gapped_review();
-        let idx = CollapseIndex::build(&review, 9, &Set::new());
+        let idx = CollapseIndex::build(&review, 9, &Set::new(), false);
         assert_eq!(idx.virtual_len(), review.stream_len);
     }
 
     #[test]
     fn context_run_collapses_and_expands() {
         let review = long_context_review();
-        let idx = CollapseIndex::build(&review, 8, &Set::new());
+        let idx = CollapseIndex::build(&review, 8, &Set::new(), false);
         // 16 stream rows; the 12-line run collapses to 1 → 16 - 12 + 1 = 5.
         assert_eq!(idx.virtual_len(), 5);
         // virtual: 0 hdr, 1 hunk hdr, 2 -x, 3 marker, 4 +y.
@@ -513,7 +637,7 @@ diff --git a/a.rs b/a.rs
         .unwrap();
         // rows: 0 hdr, 1 hunk hdr, 2 -x, 3..11 run A (9), 12 +mid,
         //       13..21 run B (9), 22 +y
-        let mut idx = CollapseIndex::build(&review, 8, &Set::new());
+        let mut idx = CollapseIndex::build(&review, 8, &Set::new(), false);
         assert_eq!(idx.expand_at_stream(15), 9); // inside run B
                                                  // Run A stays collapsed: 23 - (9 - 1) = 15 virtual rows.
         assert_eq!(idx.virtual_len(), review.stream_len - 8);
@@ -527,9 +651,52 @@ diff --git a/a.rs b/a.rs
         let review = gapped_review();
         let mut folded = Set::new();
         folded.insert(0);
-        let idx = CollapseIndex::build(&review, 0, &folded);
+        let idx = CollapseIndex::build(&review, 0, &folded, false);
         assert_eq!(idx.virtual_len(), 1);
         assert_eq!(idx.stream_at_virtual(0), 0);
+    }
+
+    #[test]
+    fn split_pairs_align_delete_add_runs() {
+        // Hunk: ctx, -a, -b, +B, +C, +D, ctx, +lonely
+        // pairs: (ctx,ctx), (-a,+B), (-b,+C), (blank,+D), (ctx,ctx), (blank,+lonely)
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,7 +1,8 @@
+ ctx
+-a
+-b
++B
++C
++D
+ ctx2
++lonely
+",
+        )
+        .unwrap();
+        let idx = CollapseIndex::build(&review, 0, &Set::new(), true);
+        assert_eq!(idx.virtual_len(), 8);
+        // line 1 (ctx) → pair 0 (virtual 2); line 2 (-a) → pair 1 (virtual 3);
+        // line 6 (+D) → pair 3 (virtual 5); line 8 (+lonely) → pair 5 (virtual 7).
+        assert_eq!(idx.virtual_of_stream(2), 2);
+        assert_eq!(idx.virtual_of_stream(3), 3);
+        assert_eq!(idx.virtual_of_stream(7), 5);
+        assert_eq!(idx.virtual_of_stream(9), 7);
+    }
+
+    #[test]
+    fn split_gap_markers_still_apply() {
+        // Two hunks 8 lines apart; the gap marker shows in split mode too.
+        let review = gapped_review();
+        let idx = CollapseIndex::build(&review, 8, &Set::new(), true);
+        // rows 2..5 are 3 lines → 2 pairs (ctx pairs with ctx, -a with +b)
+        // virtual: 0 hdr, 1 hh, 2 (ctx,ctx), 3 (-a,+b), 4 marker,
+        //          5 hh, 6 (ctx2,ctx2), 7 (-c,+d)
+        assert_eq!(idx.virtual_len(), 8);
+        assert_eq!(idx.virtual_of_stream(5), 5); // hunk2 header after marker
+        assert_eq!(idx.virtual_of_stream(6), 6);
     }
 
     #[test]
@@ -550,7 +717,7 @@ new file mode 100644
 ",
         )
         .unwrap();
-        let idx = CollapseIndex::build(&review, 5, &Set::new());
+        let idx = CollapseIndex::build(&review, 5, &Set::new(), false);
         // gap = 8 - (1+2) = 5 ≥ threshold → one marker inserted.
         assert!(idx.virtual_len() > review.stream_len);
         assert!(idx

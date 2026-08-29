@@ -124,9 +124,10 @@
 - [x] **上下文折叠**：连续 ≥N 行 context 折叠为 `··· N unchanged lines ···`
   标记行（默认开，`context_collapse` 可配，运行时 `zx` 切换）；搜索/hunk 跳转/
   focus 经折叠映射正确落点（跳入折叠段自动展开；`ir::collapse` 虚拟行模型）
-- [ ] **split 布局**：side-by-side（宽终端），基于 hunk 内 old/new 行配对；
-  保持 viewport-only 物化（PERF 门禁不回退）
-- [ ] **`layout = "auto"`**：按流面板宽度选 split/stack/unified
+- [x] **split 布局**：side-by-side（宽终端），基于 hunk 内 old/new 行配对
+  （`Segment::Pairs` 虚拟行 = 配对行）；保持 viewport-only 物化（bench 无回退）
+- [x] **`layout = "auto"`**：按流面板宽度选 split/stack/unified（≥120/≥40 阈值，
+  宽度变化自动重建索引并保锚点）
 - [ ] **行内 agent 注释**：`--note` / serve comment 渲染到对应代码行右侧，
   而非独立注释行
 - [ ] 布局/折叠状态进 watch/reload 保序路径（与 decisions/folds 同批）

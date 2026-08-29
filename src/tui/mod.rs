@@ -585,6 +585,60 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
+    fn split_layout_renders_aligned_columns() {
+        let mut app = sample_app();
+        app.layout_mode = crate::config::LayoutMode::Split;
+        app.viewport_height = 20;
+
+        let backend = TestBackend::new(120, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let rendered: String = buf
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // The old and new sides of the first file's change must appear on
+        // the same screen, in order, separated by the divider column.
+        let old_pos = rendered.find("old").expect("old side visible");
+        let new_pos = rendered.find("new").expect("new side visible");
+        assert!(old_pos < new_pos, "old column precedes new column");
+        assert!(rendered.contains('│'), "divider drawn");
+    }
+
+    #[test]
+    fn auto_layout_resolves_by_width() {
+        let mut app = sample_app();
+        app.layout_mode = crate::config::LayoutMode::Auto;
+        // Wide stream pane → split.
+        app.stream_rect = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 40,
+        });
+        assert_eq!(app.effective_layout(), crate::config::LayoutMode::Split);
+        // Medium → stack.
+        app.stream_rect = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 40,
+        });
+        assert_eq!(app.effective_layout(), crate::config::LayoutMode::Stack);
+        // Narrow → unified.
+        app.stream_rect = Some(ratatui::layout::Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 40,
+        });
+        assert_eq!(app.effective_layout(), crate::config::LayoutMode::Unified);
+    }
+
+    #[test]
     fn tab_then_draw_shows_second_file_selected() {
         let mut app = sample_app();
         app.handle_key(key(KeyCode::Tab));
