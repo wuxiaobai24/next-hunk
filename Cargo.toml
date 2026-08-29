@@ -59,7 +59,7 @@ toml = "0.8"
 notify = { version = "6", optional = true }
 
 [features]
-default = ["highlight", "watch", "serve", "mcp"]
+default = ["highlight", "watch", "serve"]
 # Syntax highlighting via syntect. When disabled, the TUI renders plain text
 # (highlight toggle is inert).
 highlight = ["dep:syntect"]
@@ -69,14 +69,9 @@ highlight = ["dep:syntect"]
 watch = ["dep:notify"]
 # Optional server mode (`next-hunk serve` + `push`/`decision`) for live
 # agent→human streaming into a persistent TUI. Uses std Unix sockets (no new
-# crate). Subcommands exist on all OSes; non-Unix builds error with a message
-# that points at docs/PLATFORMS.md (Windows live serve deferred to 0.9).
+# crate); the module is Unix-only (`cfg(unix)`), so the feature compiles
+# everywhere but live serve only runs on Unix.
 serve = []
-# Lightweight MCP stdio server (`next-hunk mcp`) mapping serve session commands
-# to MCP tools. Zero extra crates (JSON-RPC over stdio via serde_json). Tools
-# still need `serve` + Unix at runtime (same matrix as CLI). Omit with
-# `--no-default-features --features serve` (or without `mcp`) for lean builds.
-mcp = []
 
 [dev-dependencies]
 criterion = { version = "0.5", default-features = false }
