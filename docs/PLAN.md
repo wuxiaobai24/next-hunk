@@ -4,7 +4,7 @@
 > 对标：[modem-dev/hunk](https://github.com/modem-dev/hunk)（体验与 agent 主路径，不是 monorepo 克隆）。  
 > 差异化保留：紧凑 IR + 视口物化性能、`--select` 审批闸门、纯 Rust 静态分发。
 
-当前版本：**0.3.0**。本文件是产品路线源；实现细节见 `ARCHITECTURE.md` / `PERF.md`。
+当前版本：**0.4.0**。本文件是产品路线源；实现细节见 `ARCHITECTURE.md` / `PERF.md`。
 
 ---
 
@@ -97,7 +97,43 @@
 **工程：**
 
 - [x] huge fixture 打开/滚动仍过内部 gate
-- [x] CHANGELOG 用户可见项齐全
+- [x] CHANGELOG 用户可见项齐全（0.4.0 的失实条目已于 Unreleased 修正）
+
+---
+
+## 2026-08 重评：对 hunk 0.20 实测（接手基线）
+
+同一份 7783 行真实 diff，200×50 终端，next-hunk 0.4.0 release vs hunk 0.20.0
+并排实测。结论：**引擎达标，阅读体验不成比例地落后**。上表 0.8 DoD
+对照的是自设清单而非 hunk 实物，验收口径过松。
+
+实测事实：
+
+- 引擎：`inspect` 3 ms 冷启动（hunk 为 Node 运行时，`--version` 即 ~200 ms）；
+  294 测试、clippy/fmt 三 OS CI 全绿 —— 这部分是资产，保留。
+- 体验：hunk 默认 **side-by-side split + 上下文折叠**（`··· N unchanged
+  lines ···`）+ 行内 agent 注释；next-hunk 默认 unified 全量平铺，无 split
+  布局（只有 unified/stack），无上下文折叠，`--note` 只渲染为独立注释行。
+- 信任：0.4.0 CHANGELOG 大段失实（已在 Unreleased 修正）；`mcp` feature
+  为空壳（另行删除）。
+
+### 0.9 — 成熟度（review-first 体验补课）
+
+按体验收益排序，验收口径改为「与 hunk 0.20 并排同屏对比」：
+
+- [ ] **上下文折叠**：连续 ≥N 行 context 折叠为 `··· N unchanged lines ···`
+  标记行（默认开，`context_collapse` 可配，运行时可切）；搜索/hunk 跳转/
+  focus 必须经折叠映射正确落点
+- [ ] **split 布局**：side-by-side（宽终端），基于 hunk 内 old/new 行配对；
+  保持 viewport-only 物化（PERF 门禁不回退）
+- [ ] **`layout = "auto"`**：按流面板宽度选 split/stack/unified
+- [ ] **行内 agent 注释**：`--note` / serve comment 渲染到对应代码行右侧，
+  而非独立注释行
+- [ ] 布局/折叠状态进 watch/reload 保序路径（与 decisions/folds 同批）
+- [ ] CI 增加 bench 门禁（或从 ARCHITECTURE 撤回「regressions fail CI」承诺）
+
+**继续不做：** 复刻 OpenTUI/React 栈、完整 broker/MCP 运维面、像素级 UI 抄袭、
+以二进制体积为 KPI。
 
 ---
 
