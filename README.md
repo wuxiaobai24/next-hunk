@@ -43,6 +43,8 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
 - [x] Sessions: every review TUI (`diff`/`show`/`serve`) is agent-addressable — `list` / `get` / `review` / `navigate` / `push` / `reload` / `decision` work on a live session
 - [x] `line_numbers` config (no silent no-op)
+- [x] `tab_width` config + `--tab-width` (render-time tab expansion; keeps split columns aligned)
+- [x] `sidebar` config (hunk-style `true`/`false`/`"auto"`) and `agent_notes` toggle
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
@@ -229,6 +231,9 @@ Fields:
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
+| `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
+| `sidebar` | bool/string | `true` | show the file rail at startup; accepts hunk-style `"auto"` (treated as `true` — the rail already adapts to the terminal width). `b` toggles at runtime |
+| `agent_notes` | bool | `true` | render 💬 notes (inline annotations, note rows, rail badges); `false` = plain diff view — `}`/`{` and `c` report "notes hidden" instead |
 
 Example `~/.config/next-hunk/config.toml`:
 
@@ -237,7 +242,11 @@ highlight = true
 watch = true
 ```
 
-CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`.
+CLI overrides: `--staged`, `--watch`, `--no-highlight`, `--include-untracked`, `--tab-width <N>`.
+
+Every interactive mode (`diff`, `show`, `patch`, `pager`, `filediff`, `serve`) honors
+the same config layers — `show` and `pager` no longer ignore `highlight`,
+`wrap`, or `line_numbers`.
 
 ## Agent integration
 

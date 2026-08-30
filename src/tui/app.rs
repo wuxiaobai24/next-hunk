@@ -231,6 +231,11 @@ pub struct App {
 
     /// Show the left file-rail sidebar (toggle with `b`).
     pub show_rail: bool,
+    /// Render 💬 notes (agent + human): inline annotations, fallback rows,
+    /// rail badges, `}`/`{` jumps. `agent_notes = false` in config disables.
+    pub show_notes: bool,
+    /// Tab-stop width (columns) for render-time tab expansion (1–16).
+    pub tab_width: usize,
     /// Last drawn rail area (None when the rail is hidden). Set by draw_main.
     pub rail_rect: Option<ratatui::layout::Rect>,
     /// Last drawn stream area. Set by draw_main.
@@ -503,6 +508,8 @@ impl App {
             wrap_on: false,
             word_diff_on: true,
             show_rail: true,
+            show_notes: true,
+            tab_width: crate::config::DEFAULT_TAB_WIDTH as usize,
             rail_rect: None,
             stream_rect: None,
             show_help: false,
@@ -1699,6 +1706,10 @@ impl App {
     /// advancing even when the viewport clamps at the end of the stream.
     /// Public for the serve session bridge (`navigate --next-note`).
     pub fn jump_note(&mut self, next: bool) {
+        if !self.show_notes {
+            self.set_info("notes hidden (agent_notes = false)");
+            return;
+        }
         let rows = self.annotated_rows();
         if rows.is_empty() {
             self.set_info("no notes in this diff");
@@ -1799,6 +1810,10 @@ impl App {
 
     /// Start composing a note anchored to the cursor row (`c`).
     fn begin_note(&mut self) {
+        if !self.show_notes {
+            self.set_info("notes hidden (agent_notes = false)");
+            return;
+        }
         match self.note_target_at_cursor() {
             Some(target) => {
                 self.note_pending = Some(target);

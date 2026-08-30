@@ -120,13 +120,7 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 pub fn run_review_tui(
     review: Review,
     reloader: Option<Reloader>,
-    start_highlight: bool,
-    start_line_numbers: bool,
-    wrap_on: bool,
-    context_collapse: usize,
-    theme: Option<String>,
-    layout: crate::config::LayoutMode,
-    cursor_line: bool,
+    settings: crate::config::ViewSettings,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
@@ -148,7 +142,11 @@ pub fn run_review_tui(
     // "gruvbox-dark", …) or legacy modes ("dark"/"light"/"auto") into a
     // (palette, mode) pair; unknown values fall back to the default inside
     // `parse_theme`.
-    let (palette, theme_mode) = theme.as_deref().map(theme::parse_theme).unwrap_or_default();
+    let (palette, theme_mode) = settings
+        .theme
+        .as_deref()
+        .map(theme::parse_theme)
+        .unwrap_or_default();
     let highlighter = std::sync::Arc::new(
         crate::highlight::Highlighter::load(palette.syntect_theme_name(theme_mode))
             .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop()),
@@ -156,12 +154,15 @@ pub fn run_review_tui(
     let mut app = App::with_theme(review, highlighter, theme_mode);
     app.palette = palette;
     app.theme = palette.theme(theme_mode);
-    app.highlight_on = start_highlight;
-    app.line_numbers_on = start_line_numbers;
-    app.wrap_on = wrap_on;
-    app.layout_mode = layout;
-    app.cursor_on = cursor_line;
-    app.set_context_collapse(context_collapse);
+    app.highlight_on = settings.highlight;
+    app.line_numbers_on = settings.line_numbers;
+    app.wrap_on = settings.wrap;
+    app.layout_mode = settings.layout;
+    app.cursor_on = settings.cursor_line;
+    app.tab_width = settings.tab_width as usize;
+    app.show_rail = settings.sidebar;
+    app.show_notes = settings.agent_notes;
+    app.set_context_collapse(settings.context_collapse);
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
     app.focus_target = options.focus;
@@ -767,13 +768,7 @@ diff --git a/b.rs b/b.rs
         assert!(run_review_tui(
             empty,
             None,
-            true,
-            true,
-            false,
-            crate::config::DEFAULT_CONTEXT_COLLAPSE,
-            None,
-            crate::config::LayoutMode::Unified,
-            true,
+            crate::config::ViewSettings::default(),
             None,
             ReviewOptions::default(),
             None

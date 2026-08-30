@@ -78,6 +78,12 @@ impl LayoutMode {
 /// Default `context_collapse` threshold: runs/gaps of ≥ this many unchanged
 /// lines collapse to a `··· N unchanged lines ···` marker row.
 pub const DEFAULT_CONTEXT_COLLAPSE: usize = 8;
+/// Render width of one tab stop (in columns) when expanding tabs in diff
+/// lines. Terminal-native tab stops (usually 8) break column alignment in
+/// the split layout, so tabs are expanded at render time instead.
+pub const DEFAULT_TAB_WIDTH: u32 = 4;
+/// Upper bound for `tab_width` (mirrors hunk's 1–16 range; 0 is invalid).
+pub const MAX_TAB_WIDTH: u32 = 16;
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
@@ -99,6 +105,16 @@ pub struct Config {
     pub context_collapse: Option<usize>,
     /// Show the review cursor row ("row", default) or hide it ("off").
     pub cursor_line: Option<String>,
+    /// Tab-stop width (columns) for rendering tabs in diff lines, 1–16.
+    /// Default 4. (`--tab-width` overrides.)
+    pub tab_width: Option<u32>,
+    /// Show the file rail (left sidebar) at startup. Accepts `true`/`false`
+    /// or hunk-style `"auto"` (treated as `true`; the rail already adapts its
+    /// width to the terminal). `b` toggles at runtime.
+    pub sidebar: Option<toml::Value>,
+    /// Render agent/human notes (💬 rows, inline annotations, rail badges).
+    /// `false` = plain diff, no notes. Default `true`.
+    pub agent_notes: Option<bool>,
 }
 
 impl Config {
@@ -134,6 +150,15 @@ impl Config {
         }
         if other.cursor_line.is_some() {
             self.cursor_line = other.cursor_line;
+        }
+        if other.tab_width.is_some() {
+            self.tab_width = other.tab_width;
+        }
+        if other.sidebar.is_some() {
+            self.sidebar = other.sidebar;
+        }
+        if other.agent_notes.is_some() {
+            self.agent_notes = other.agent_notes;
         }
         self
     }
@@ -183,6 +208,12 @@ pub struct ResolvedConfig {
     /// Show the review cursor row (`c` composes a note on it). ON by default;
     /// `cursor_line = "off"` hides the highlight (navigation still works).
     pub cursor_line: bool,
+    /// Tab-stop width (columns) for render-time tab expansion, 1–16.
+    pub tab_width: u32,
+    /// Show the file rail (left sidebar) at startup. `b` toggles at runtime.
+    pub sidebar: bool,
+    /// Render 💬 notes (agent + human). `false` = plain diff view.
+    pub agent_notes: bool,
 }
 
 impl Default for ResolvedConfig {
@@ -199,6 +230,83 @@ impl Default for ResolvedConfig {
             wrap: false,
             context_collapse: DEFAULT_CONTEXT_COLLAPSE,
             cursor_line: true,
+            tab_width: DEFAULT_TAB_WIDTH,
+            sidebar: true,
+            agent_notes: true,
+        }
+    }
+}
+
+/// Interpret a `sidebar` config value. hunk accepts `true`/`false`/`"auto"`;
+/// we take booleans plus that string (as `true` — our rail is width-adaptive,
+/// so "auto" needs no special case). Anything else is `None` (invalid).
+fn coerce_sidebar(v: &toml::Value) -> Option<bool> {
+    match v {
+        toml::Value::Boolean(b) => Some(*b),
+        toml::Value::String(s) => match s.trim().to_lowercase().as_str() {
+            "auto" | "true" | "left" => Some(true),
+            "false" | "off" | "none" => Some(false),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Clamp a configured tab width into the valid 1–16 range (0 and garbage
+/// fall back to the default rather than panicking or silently no-op'ing).
+pub fn clamp_tab_width(w: Option<u32>) -> u32 {
+    match w {
+        Some(n) if (1..=MAX_TAB_WIDTH).contains(&n) => n,
+        _ => DEFAULT_TAB_WIDTH,
+    }
+}
+
+/// Everything the renderer needs at startup, in one struct — the positional
+/// boolean ladder this replaces did not scale.
+#[derive(Debug, Clone)]
+pub struct ViewSettings {
+    pub highlight: bool,
+    pub line_numbers: bool,
+    pub wrap: bool,
+    pub context_collapse: usize,
+    pub theme: Option<String>,
+    pub layout: LayoutMode,
+    pub cursor_line: bool,
+    pub tab_width: u32,
+    pub sidebar: bool,
+    pub agent_notes: bool,
+}
+
+impl Default for ViewSettings {
+    fn default() -> Self {
+        Self {
+            highlight: true,
+            line_numbers: true,
+            wrap: false,
+            context_collapse: DEFAULT_CONTEXT_COLLAPSE,
+            theme: None,
+            layout: LayoutMode::Unified,
+            cursor_line: true,
+            tab_width: DEFAULT_TAB_WIDTH,
+            sidebar: true,
+            agent_notes: true,
+        }
+    }
+}
+
+impl From<&ResolvedConfig> for ViewSettings {
+    fn from(r: &ResolvedConfig) -> Self {
+        Self {
+            highlight: r.highlight,
+            line_numbers: r.line_numbers,
+            wrap: r.wrap,
+            context_collapse: r.context_collapse,
+            theme: r.theme.clone(),
+            layout: r.layout,
+            cursor_line: r.cursor_line,
+            tab_width: r.tab_width,
+            sidebar: r.sidebar,
+            agent_notes: r.agent_notes,
         }
     }
 }
@@ -207,7 +315,9 @@ impl Default for ResolvedConfig {
 ///
 /// Most options are "default unless overridden", so a simple `Option<bool>`
 /// (CLI sets `Some(false)` for `--no-flag`, `Some(true)` for `--flag`) composes
-/// cleanly with the config layer.
+/// cleanly with the config layer. `Default` = "no CLI override" — call sites
+/// that only set one flag spread over it.
+#[derive(Default)]
 pub struct CliFlags {
     /// `--staged` / no flag.
     pub staged: Option<bool>,
@@ -217,6 +327,8 @@ pub struct CliFlags {
     pub highlight: Option<bool>,
     /// `--include-untracked` → `Some(true)`; absent → `None`.
     pub include_untracked: Option<bool>,
+    /// `--tab-width <N>`; absent → `None`.
+    pub tab_width: Option<u32>,
 }
 
 impl ResolvedConfig {
@@ -247,6 +359,13 @@ impl ResolvedConfig {
                 .as_deref()
                 .map(|v| v != "off" && v != "false")
                 .unwrap_or(d.cursor_line),
+            tab_width: clamp_tab_width(cli.tab_width.or(cfg.tab_width)),
+            sidebar: cfg
+                .sidebar
+                .as_ref()
+                .and_then(coerce_sidebar)
+                .unwrap_or(d.sidebar),
+            agent_notes: cfg.agent_notes.unwrap_or(d.agent_notes),
         }
     }
 }
@@ -345,6 +464,16 @@ mod tests {
         }
     }
 
+    fn test_flags() -> CliFlags {
+        CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+            tab_width: None,
+        }
+    }
+
     #[test]
     fn merge_higher_layer_wins() {
         let lower = Config {
@@ -384,9 +513,7 @@ mod tests {
         };
         let cli = CliFlags {
             staged: Some(false), // CLI overrides
-            watch: None,
-            highlight: None,
-            include_untracked: None,
+            ..test_flags()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged); // CLI wins
@@ -397,12 +524,7 @@ mod tests {
     #[test]
     fn resolve_defaults_when_nothing_set() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.staged);
         assert!(r.highlight); // default on
@@ -417,10 +539,8 @@ mod tests {
             ..Default::default()
         };
         let cli = CliFlags {
-            staged: None,
-            watch: None,
             highlight: Some(false), // --no-highlight
-            include_untracked: None,
+            ..test_flags()
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.highlight);
@@ -432,24 +552,14 @@ mod tests {
             line_numbers: Some(false),
             ..Default::default()
         };
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
     }
 
     #[test]
     fn resolve_cursor_line_defaults_to_on_and_off_disables() {
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&Config::default(), &cli);
         assert!(r.cursor_line, "cursor row highlight defaults on");
 
@@ -471,12 +581,7 @@ mod tests {
     #[test]
     fn resolve_line_numbers_defaults_to_true() {
         let cfg = Config::default(); // line_numbers = None
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.line_numbers); // default on
     }
@@ -487,12 +592,7 @@ mod tests {
             theme: Some("light".into()),
             ..Default::default()
         };
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.theme.as_deref(), Some("light"));
     }
@@ -500,12 +600,7 @@ mod tests {
     #[test]
     fn resolve_theme_none_when_unset() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.theme.is_none());
     }
@@ -606,12 +701,7 @@ theme = \"dark\"
     #[test]
     fn layout_mode_defaults_to_unified() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Unified);
     }
@@ -621,12 +711,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("layout = \"stack\"\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.layout.as_deref(), Some("stack"));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert_eq!(r.layout, LayoutMode::Stack);
     }
@@ -648,12 +733,7 @@ theme = \"dark\"
     #[test]
     fn wrap_defaults_to_false() {
         let cfg = Config::default();
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap, "wrap should default to false");
     }
@@ -663,12 +743,7 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("wrap = true\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.wrap, Some(true));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(r.wrap);
     }
@@ -678,13 +753,88 @@ theme = \"dark\"
         let (dir, _path) = write_tmp_config("wrap = false\n");
         let cfg = Config::load_project(&dir.0);
         assert_eq!(cfg.wrap, Some(false));
-        let cli = CliFlags {
-            staged: None,
-            watch: None,
-            highlight: None,
-            include_untracked: None,
-        };
+        let cli = test_flags();
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.wrap);
+    }
+
+    #[test]
+    fn tab_width_defaults_and_clamps() {
+        let r = ResolvedConfig::resolve(&Config::default(), &test_flags());
+        assert_eq!(r.tab_width, DEFAULT_TAB_WIDTH);
+
+        // in-range values pass through from config and CLI (CLI wins)
+        let (dir, _path) = write_tmp_config("tab_width = 2\n");
+        let cfg = Config::load_project(&dir.0);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        assert_eq!(r.tab_width, 2);
+        let r = ResolvedConfig::resolve(
+            &cfg,
+            &CliFlags {
+                tab_width: Some(8),
+                ..test_flags()
+            },
+        );
+        assert_eq!(r.tab_width, 8);
+
+        // out-of-range falls back to the default, never panics / no-ops
+        for bad in [0, 17, 999] {
+            let (dir, _path) = write_tmp_config(&format!("tab_width = {bad}\n"));
+            let cfg = Config::load_project(&dir.0);
+            let r = ResolvedConfig::resolve(&cfg, &test_flags());
+            assert_eq!(r.tab_width, DEFAULT_TAB_WIDTH, "tab_width = {bad}");
+        }
+    }
+
+    #[test]
+    fn sidebar_accepts_bool_and_hunk_strings() {
+        for (toml_val, expect) in [("true", true), ("false", false), ("\"auto\"", true)] {
+            let (dir, _path) = write_tmp_config(&format!("sidebar = {toml_val}\n"));
+            let cfg = Config::load_project(&dir.0);
+            let r = ResolvedConfig::resolve(&cfg, &test_flags());
+            assert_eq!(r.sidebar, expect, "sidebar = {toml_val}");
+        }
+        // default: shown
+        let r = ResolvedConfig::resolve(&Config::default(), &test_flags());
+        assert!(r.sidebar);
+        // invalid type/string falls back to the default (not a crash)
+        let (dir, _path) = write_tmp_config("sidebar = \" sideways\"\n");
+        let cfg = Config::load_project(&dir.0);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        assert!(r.sidebar);
+    }
+
+    #[test]
+    fn agent_notes_default_true_and_configurable() {
+        let r = ResolvedConfig::resolve(&Config::default(), &test_flags());
+        assert!(r.agent_notes);
+        let (dir, _path) = write_tmp_config("agent_notes = false\n");
+        let cfg = Config::load_project(&dir.0);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        assert!(!r.agent_notes);
+    }
+
+    #[test]
+    fn view_settings_from_resolved_round_trip() {
+        let r = ResolvedConfig::resolve(
+            &Config {
+                layout: Some("split".into()),
+                wrap: Some(true),
+                tab_width: Some(2),
+                sidebar: Some(toml::Value::Boolean(false)),
+                agent_notes: Some(false),
+                ..Default::default()
+            },
+            &test_flags(),
+        );
+        let v = ViewSettings::from(&r);
+        assert_eq!(v.layout, LayoutMode::Split);
+        assert!(v.wrap);
+        assert_eq!(v.tab_width, 2);
+        assert!(!v.sidebar);
+        assert!(!v.agent_notes);
+        assert!(v.highlight);
+        assert!(v.line_numbers);
+        assert!(v.cursor_line);
     }
 }

@@ -148,6 +148,29 @@
 
 ---
 
+## 0.10 — 对 hunk 0.20 主路径 80% 对齐（2026-08-30 起）
+
+验收口径：hunk 主路径功能 ~29 项，当前全量 15 项 + 半量 2 项（≈55%）。
+补齐下列缺口后 ≥80%；有意不追的 4 项（extensions API、STML 富文本、
+自定义主题文件、gh PR 扩展）均为 hunk 自身标 experimental 的边缘面。
+
+- [x] **配置面补齐**：`tab_width`（渲染期 tab 展开，split 列对齐修正 +
+  attention mark 列重映射）、`sidebar`（含 hunk 式 `"auto"`）、
+  `agent_notes` 开关；`show`/`patch`/`pager`/`filediff` 统一走分层配置
+  （`ViewSettings` 替换 9 个位置布尔参数）
+- [ ] **`[keybindings]` 按键重映射**：命令名 → 键位，默认 = 现有键位；
+  未知命令/冲突告警（hunk 日常头号功能）
+- [ ] **jj / Sapling revset**：`.jj`/`.sl` 探测，`diff`/`show` 直通
+  `jj diff --git` / `sl diff`
+- [ ] **CLI 细节**：`skill path`、`--agent-context`、difftool 兼容调用、
+  `update --check`
+- [ ] **UI 打磨**：文件头 A/M/D/R 徽章 + 增删比例条、文件栏/注释卡片/
+  帮助页分组（对标 hunk 并超越）
+- [ ] **性能证据**：同机同 diff 实测启动/RSS/滚动 vs hunk 0.20，写入
+  PERF.md（引擎已领先，补可复现数字）
+
+---
+
 ## 工作量粗估（单人全职，范围克制）
 
 | 段 | 约 |

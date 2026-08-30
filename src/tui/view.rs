@@ -78,7 +78,11 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
 fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
     use unicode_width::UnicodeWidthStr;
     let visible = app.visible_files();
-    let note_counts = app.note_counts_by_file();
+    let note_counts = if app.show_notes {
+        app.note_counts_by_file()
+    } else {
+        std::collections::HashMap::new()
+    };
     // Inner width available for a rail row, minus the left border and the
     // " N " index prefix. Used to pad the path so the +/- tail right-aligns.
     let rail_inner_w = area.width.saturating_sub(1) as usize;
@@ -171,7 +175,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
     let owned_rows: Vec<OwnedRow> =
         ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
             .into_iter()
-            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row, app.tab_width))
             .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
@@ -184,7 +188,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
     } else {
         std::collections::HashSet::new()
     };
-    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+    let notes_by_row = build_notes_by_row(app);
 
     // Column budget: [gutter|sign|text] │ [gutter|sign|text]
     const GUTTER: usize = 6;
@@ -330,7 +334,7 @@ fn split_side_spans(
     // Agent attention marks paint the new-side column (Add/Context rows).
     let runs = match (&file_and_line, side.kind, side.line_no) {
         (Some((file_idx, _)), DiffLineKind::Add | DiffLineKind::Context, Some(n)) => {
-            apply_highlight_marks(app, runs, *file_idx, Some(n))
+            apply_highlight_marks(app, runs, *file_idx, Some(n), side.raw.as_deref())
         }
         _ => runs,
     };
@@ -384,7 +388,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     let owned_rows: Vec<OwnedRow> =
         ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
             .into_iter()
-            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row, app.tab_width))
             .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
@@ -403,7 +407,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     // inline annotation on the target row when there's room (wrap off), and
     // fall back to a dedicated row below — neither touches `stream_len`, so
     // scroll / search / hunk-jump indices stay stable.
-    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+    let notes_by_row = build_notes_by_row(app);
 
     let title = app.current_path().to_string();
     let cursor_row = if app.cursor_on {
@@ -464,7 +468,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
     let owned_rows: Vec<OwnedRow> =
         ViewportQuery::rows_virtual(&app.review, viewport, &app.collapse)
             .into_iter()
-            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row))
+            .map(|vr| OwnedRow::from_stream_row(&app.review, vr.row, vr.abs_row, app.tab_width))
             .collect();
 
     let current_match_row = if app.search.active && !app.search.matches.is_empty() {
@@ -478,7 +482,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
         std::collections::HashSet::new()
     };
 
-    let notes_by_row = build_notes_by_row(&app.review, &app.notes);
+    let notes_by_row = build_notes_by_row(app);
 
     let cursor_row = if app.cursor_on {
         Some(app.cursor_stream_row())
@@ -532,6 +536,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
             if let OwnedRow::Line {
                 kind,
                 text,
+                raw,
                 file_idx,
                 abs_row,
                 old_no,
@@ -547,6 +552,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     OwnedRow::Line {
                         kind: *kind,
                         text: text.clone(),
+                        raw: raw.clone(),
                         file_idx: *file_idx,
                         abs_row: *abs_row,
                         old_no: *old_no,
@@ -579,6 +585,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
             if let OwnedRow::Line {
                 kind,
                 text,
+                raw,
                 file_idx,
                 abs_row,
                 old_no,
@@ -594,6 +601,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     OwnedRow::Line {
                         kind: *kind,
                         text: text.clone(),
+                        raw: raw.clone(),
                         file_idx: *file_idx,
                         abs_row: *abs_row,
                         old_no: *old_no,
@@ -640,17 +648,67 @@ fn owned_row_abs(row: &OwnedRow) -> usize {
 /// texts by that row. Banner notes are excluded here (they're shown in the
 /// status bar, not the stream). Returns an empty map when there are no
 /// line/hunk notes, so the fan-out is a no-op.
-fn build_notes_by_row(
-    review: &Review,
-    notes: &[crate::tui::app::Note],
-) -> std::collections::HashMap<usize, Vec<String>> {
+fn build_notes_by_row(app: &App) -> std::collections::HashMap<usize, Vec<String>> {
     let mut out: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
-    for note in notes {
-        if let Some(row) = crate::tui::app::note_stream_row(review, &note.target) {
+    if !app.show_notes {
+        return out;
+    }
+    for note in &app.notes {
+        if let Some(row) = crate::tui::app::note_stream_row(&app.review, &note.target) {
             out.entry(row).or_default().push(note.text.clone());
         }
     }
     out
+}
+
+/// Expand tabs to `tab_width`-column stops. Returns the input unchanged
+/// (borrowed semantics: same `String`) when the text has no tab. Terminal
+/// tab stops are 8-wide and terminal-dependent, which silently breaks the
+/// split layout's column alignment — so tabs are expanded here, at render
+/// time, under the configured width.
+fn expand_tabs(text: &str, tab_width: usize) -> String {
+    if !text.contains('\t') || tab_width == 0 {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + 8);
+    let mut col = 0usize;
+    for ch in text.chars() {
+        if ch == '\t' {
+            let next = (col / tab_width + 1) * tab_width;
+            out.push_str(&" ".repeat(next - col));
+            col = next;
+        } else {
+            out.push(ch);
+            col += 1;
+        }
+    }
+    out
+}
+
+/// Map a char range (1-based, half-open, as used by `highlight add` and
+/// consumed by [`overlay_runs_with_range`]) from the raw diff text onto the
+/// tab-expanded rendered text. `raw` is the un-expanded line. The returned
+/// pair stays 1-based half-open.
+fn map_raw_range(raw: &str, tab_width: usize, start: usize, end: usize) -> (usize, usize) {
+    if !raw.contains('\t') || tab_width == 0 {
+        return (start, end);
+    }
+    // raw_starts[i] = expanded column of raw char i; the trailing entry is
+    // the end column (raw length in expanded columns).
+    let mut raw_starts: Vec<usize> = Vec::with_capacity(raw.chars().count() + 1);
+    let mut col = 0usize;
+    for ch in raw.chars() {
+        raw_starts.push(col);
+        if ch == '\t' {
+            col = (col / tab_width + 1) * tab_width;
+        } else {
+            col += 1;
+        }
+    }
+    raw_starts.push(col);
+    let s = start.saturating_sub(1).min(raw_starts.len() - 1);
+    let e = end.saturating_sub(1).min(raw_starts.len() - 1);
+    (raw_starts[s] + 1, raw_starts[e] + 1)
 }
 
 /// Apply the review-cursor row background to a rendered line. Callers pass
@@ -753,6 +811,9 @@ enum OwnedRow {
     Line {
         kind: DiffLineKind,
         text: String,
+        /// The un-expanded line text when tab expansion changed it (used to
+        /// remap attention-mark ranges from raw columns). `None` otherwise.
+        raw: Option<String>,
         file_idx: usize,
         abs_row: usize,
         /// Old-side source line number (deletes/context), if any.
@@ -784,12 +845,14 @@ enum OwnedRow {
 struct OwnedSide {
     kind: DiffLineKind,
     text: String,
+    /// Un-expanded text when tab expansion changed it (see [`OwnedRow::Line`]).
+    raw: Option<String>,
     line_no: Option<u32>,
     abs_row: usize,
 }
 
 impl OwnedRow {
-    fn from_stream_row(review: &Review, row: StreamRow, abs_row: usize) -> Self {
+    fn from_stream_row(review: &Review, row: StreamRow, abs_row: usize, tab_width: usize) -> Self {
         match row {
             StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader {
                 path: path.to_string(),
@@ -819,14 +882,21 @@ impl OwnedRow {
                 // word-level inline highlight. Same hunk-walk cost as line
                 // numbers; None for context/meta/headers/unpaired lines.
                 let counterpart = crate::ir::worddiff::counterpart_text(review, abs_row);
+                // Tab expansion: the rendered text replaces tabs with
+                // `tab_width`-column stops; the raw text is kept alongside so
+                // attention-mark ranges (raw columns) can be remapped.
+                let expanded = expand_tabs(text, tab_width);
+                let raw = (expanded != text).then(|| text.to_string());
+                let counterpart = counterpart.map(|c| expand_tabs(&c, tab_width));
                 OwnedRow::Line {
                     kind,
-                    text: text.to_string(),
+                    text: expanded,
                     file_idx,
                     abs_row,
                     old_no,
                     new_no,
                     counterpart,
+                    raw,
                 }
             }
             StreamRow::Unchanged { file_idx, count } => OwnedRow::Unchanged {
@@ -839,9 +909,12 @@ impl OwnedRow {
                     s.map(|p| {
                         let (old_no, new_no) = ViewportQuery::row_line_numbers(review, p.abs_row)
                             .unwrap_or((None, None));
+                        let expanded = expand_tabs(p.text, tab_width);
+                        let raw = (expanded != p.text).then(|| p.text.to_string());
                         OwnedSide {
                             kind: p.kind,
-                            text: p.text.to_string(),
+                            text: expanded,
+                            raw,
                             line_no: old_no.or(new_no),
                             abs_row: p.abs_row,
                         }
@@ -929,6 +1002,7 @@ fn stream_row_to_line(
         OwnedRow::Line {
             kind,
             text,
+            raw,
             file_idx,
             abs_row,
             old_no,
@@ -995,7 +1069,7 @@ fn stream_row_to_line(
             // Agent attention marks (`highlight add`) paint their char range
             // on top of whatever styling the line already carries.
             let runs = if matches!(kind, DiffLineKind::Add | DiffLineKind::Context) {
-                apply_highlight_marks(app, runs, file_idx, new_no)
+                apply_highlight_marks(app, runs, file_idx, new_no, raw.as_deref())
             } else {
                 runs
             };
@@ -1609,6 +1683,7 @@ fn apply_highlight_marks(
     runs: Vec<(Style, String)>,
     file_idx: usize,
     new_no: Option<u32>,
+    raw: Option<&str>,
 ) -> Vec<(Style, String)> {
     let Some(line) = new_no else {
         return runs;
@@ -1620,12 +1695,13 @@ fn apply_highlight_marks(
     let mut runs = runs;
     for mark in &app.highlights {
         if mark.file == path && mark.line == line {
-            runs = overlay_runs_with_range(
-                runs,
-                mark.start,
-                mark.end,
-                tone_overlay(&app.theme, &mark.tone),
-            );
+            // Mark ranges are raw-diff columns; when tab expansion shifted
+            // the rendered text, translate them onto expanded columns first.
+            let (start, end) = match raw {
+                Some(raw) => map_raw_range(raw, app.tab_width, mark.start, mark.end),
+                None => (mark.start, mark.end),
+            };
+            runs = overlay_runs_with_range(runs, start, end, tone_overlay(&app.theme, &mark.tone));
         }
     }
     runs
@@ -1783,6 +1859,203 @@ mod tests {
         let twice = overlay_runs_with_range(once, 5, 6, Style::default().bg(Color::Red));
         assert_eq!(runs_to_mask(&twice, Color::Yellow), "##....");
         assert_eq!(runs_to_mask(&twice, Color::Red), "....#.");
+    }
+
+    // ---- config parity: tab_width / sidebar / agent_notes ----
+
+    #[test]
+    fn tabs_expand_to_configured_width() {
+        let patch = "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-\tlet x = 1;
++\tlet y = 2;
+";
+        let review = parse_unified_diff(patch).unwrap();
+
+        // default tab_width = 4 → one leading tab becomes 4 spaces
+        let mut app = App::with_highlighter(review.clone(), highlighter());
+        app.viewport_height = 20;
+        let backend = ratatui::backend::TestBackend::new(60, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("+    let y = 2;"),
+            "tab renders as 4 spaces under default tab_width: {rendered:?}"
+        );
+
+        // tab_width = 2 → 2 spaces
+        let mut app = App::with_highlighter(review, highlighter());
+        app.tab_width = 2;
+        app.viewport_height = 20;
+        let backend = ratatui::backend::TestBackend::new(60, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("+  let y = 2;"),
+            "tab renders as 2 spaces under tab_width = 2: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn split_layout_keeps_tabbed_columns_aligned() {
+        // Both sides tab-indented: expansion must apply symmetrically so the
+        // split divider stays put (the reason tab_width exists).
+        let patch = "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-\talpha = 1;
++\tbeta = 2;
+";
+        let review = parse_unified_diff(patch).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.layout_mode = crate::config::LayoutMode::Split;
+        let backend = ratatui::backend::TestBackend::new(140, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("+    beta = 2;") && rendered.contains("-    alpha = 1;"),
+            "both split sides expand tabs to the same stop: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn attention_mark_range_follows_tab_expansion() {
+        // A mark on the raw tab (char 1..2) paints the full 4-column expanded
+        // tab on screen — ranges are raw-diff columns, rendering is expanded.
+        let patch = "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++\tnew
+";
+        let review = parse_unified_diff(patch).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.highlights.push(crate::tui::app::HighlightMark {
+            id: "hl0".into(),
+            file: "a.rs".into(),
+            line: 1,
+            start: 1,
+            end: 2,
+            tone: "danger".into(),
+        });
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let danger = app.theme.delete;
+        // Row 3 is the +new line; the 4 expanded tab cells carry the tone.
+        let marked = buf
+            .content()
+            .iter()
+            .skip(3 * buf.area.width as usize)
+            .filter(|c| c.bg == danger)
+            .count();
+        assert_eq!(marked, 4, "raw 1-char tab mark paints all 4 expanded cells");
+    }
+
+    #[test]
+    fn agent_notes_false_hides_note_rendering() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.notes.push(crate::tui::app::Note {
+            target: crate::tui::app::NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "look here".into(),
+        });
+        app.show_notes = false;
+        let backend = ratatui::backend::TestBackend::new(60, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(!rendered.contains('💬'), "notes hidden: no 💬 anywhere");
+        assert!(!rendered.contains("look here"));
+
+        // toggle back on → the note row renders again
+        app.show_notes = true;
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(rendered.contains('💬') && rendered.contains("look here"));
+    }
+
+    #[test]
+    fn sidebar_false_starts_without_the_rail() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.show_rail = false;
+        let backend = ratatui::backend::TestBackend::new(60, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        assert!(app.rail_rect.is_none(), "rail hidden when sidebar = false");
+        // and the stream spans the full width (file header present)
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(rendered.contains("a.rs"));
     }
 
     #[test]
