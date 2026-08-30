@@ -462,6 +462,24 @@ impl ViewportQuery {
         None
     }
 
+    /// Reverse of [`Self::hunk_start_row`]: which file and 1-based hunk
+    /// ordinal does the hunk header at `row` belong to? Used to label hunk
+    /// jumps (`]h` → "path hunk N") with the human-facing ordinal instead of
+    /// the internal stream row. Returns `None` when `row` is not a hunk
+    /// header row.
+    pub fn locate_hunk(review: &Review, row: usize) -> Option<(usize, usize)> {
+        for (file_idx, file) in review.files.iter().enumerate() {
+            let mut cur = file.stream_start + 1; // skip file header
+            for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+                if cur == row {
+                    return Some((file_idx, hunk_idx + 1));
+                }
+                cur += 1 + hunk.lines.len();
+            }
+        }
+        None
+    }
+
     /// Absolute stream row of the code line whose *new-side* source line number
     /// equals `line`, within `file_idx`. Used by `--focus path:line` to scroll
     /// to a specific source line. Walks the file's hunks accumulating the
@@ -736,6 +754,20 @@ diff --git a/c.rs b/c.rs
         let review = Review::default();
         assert!(ViewportQuery::jump_hunk(&review, 0, true).is_none());
         assert!(ViewportQuery::jump_hunk(&review, 0, false).is_none());
+    }
+
+    #[test]
+    fn locate_hunk_resolves_file_and_ordinal() {
+        let review = multi_hunk_review();
+        // starts = [1, 5, 10, 13]: rows 1,5 belong to file 0; 10,13 to file 1.
+        assert_eq!(ViewportQuery::locate_hunk(&review, 1), Some((0, 1)));
+        assert_eq!(ViewportQuery::locate_hunk(&review, 5), Some((0, 2)));
+        assert_eq!(ViewportQuery::locate_hunk(&review, 10), Some((1, 1)));
+        assert_eq!(ViewportQuery::locate_hunk(&review, 13), Some((1, 2)));
+        // non-header rows and out-of-range rows resolve to nothing
+        assert_eq!(ViewportQuery::locate_hunk(&review, 0), None);
+        assert_eq!(ViewportQuery::locate_hunk(&review, 3), None);
+        assert_eq!(ViewportQuery::locate_hunk(&review, 999), None);
     }
 
     // ---- row_line_numbers ----

@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — `]h`/`[h`/`Space` stuck on one-screen diffs
+- **Repeated hunk jumps now always advance.** `]h`/`[h`/`Space` anchored
+  their search on the viewport-top row; when the whole stream fits on one
+  screen (`max_scroll() == 0`) `jump_to_stream` can't move the viewport, so
+  the anchor never advanced and every press re-found the first hunk. The
+  jump now anchors on the last jumped hunk while it is still in view
+  (mirroring the existing `}`/`{` note-jump anchor) and resets on reload.
+  Everyday one-screen diffs — the common case — were all affected.
+- **Hunk-jump status shows the hunk ordinal** (`→ hunk @ src/a.rs:h2`)
+  instead of the internal stream row, which read like a line number.
+
 ### Added — CI perf gate
 - **`perf-gate` workflow job** — generates the deterministic huge fixture
   (1.1 MB / 38k lines) with `scripts/gen_fixtures.sh` and runs the

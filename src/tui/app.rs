@@ -307,6 +307,11 @@ pub struct App {
     /// Anchors repeated jumps so `}` keeps advancing near the clamped end of
     /// the stream instead of re-finding the same row.
     pub last_note_jump: Option<usize>,
+    /// Stream row of the last `]h`/`[h` hunk jump, while it is still in view.
+    /// Same purpose as [`App::last_note_jump`]: when the whole stream fits on
+    /// one screen the viewport top never moves, so a viewport-top anchor alone
+    /// would pin `]h` to the first hunk forever.
+    pub last_hunk_jump: Option<usize>,
     /// Draft text while composing a note (`c` … Enter). Kept on `App` like
     /// `search.query` so the prompt line can render it live.
     pub note_draft: String,
@@ -490,6 +495,7 @@ impl App {
             comments: Vec::new(),
             applied_comments: std::collections::HashSet::new(),
             last_note_jump: None,
+            last_hunk_jump: None,
             note_draft: String::new(),
             note_pending: None,
             user_note_seq: 0,
@@ -1519,6 +1525,11 @@ impl App {
         // re-anchors on the stream row we were looking at.
         self.rebuild_collapse();
 
+        // Jump anchors reference stream rows, which change meaning across a
+        // review swap — drop them so `]h`/`}` search from the viewport again.
+        self.last_hunk_jump = None;
+        self.last_note_jump = None;
+
         // Re-run an active search against the new content.
         if self.search.active {
             let query = self.search.query.clone();
@@ -1559,13 +1570,36 @@ impl App {
     fn jump_hunk(&mut self, forward: bool) {
         // `]h`/`[h` search from the current view position; translate the
         // virtual top row to a stream row before asking the hunk index.
-        let from = self.collapse.stream_at_virtual(self.scroll_y);
-        match ViewportQuery::jump_hunk(&self.review, from, forward) {
+        // When the whole stream fits on one screen `jump_to_stream` clamps
+        // `scroll_y` to 0, so the viewport-top anchor never moves and repeated
+        // `]h` would re-find the first hunk forever — anchor on the last jump
+        // instead while it is still in view (mirroring `jump_note`).
+        let scroll_anchor = self.collapse.stream_at_virtual(self.scroll_y);
+        let anchor = match self.last_hunk_jump {
+            Some(r)
+                if {
+                    let v = self.collapse.virtual_of_stream(r);
+                    v >= self.scroll_y && v < self.scroll_y + self.viewport_height
+                } =>
+            {
+                r
+            }
+            _ => scroll_anchor,
+        };
+        match ViewportQuery::jump_hunk(&self.review, anchor, forward) {
             Some(row) => {
+                self.last_hunk_jump = Some(row);
                 self.jump_to_stream(row);
-                let path = self.current_path().to_string();
+                // Label with the human-facing hunk ordinal, not the internal
+                // stream row (a bare number reads like a line number).
+                let label = match ViewportQuery::locate_hunk(&self.review, row) {
+                    Some((file_idx, ordinal)) => {
+                        format!("{}:h{}", self.review.display_path(file_idx), ordinal)
+                    }
+                    None => row.to_string(),
+                };
                 let dir = if forward { "→" } else { "←" };
-                self.set_info(format!("{dir} hunk @ {path}:{}", row));
+                self.set_info(format!("{dir} hunk @ {label}"));
             }
             None => {
                 self.set_error("no hunks to jump to");
@@ -2575,6 +2609,76 @@ diff --git a/b.rs b/b.rs
         app.handle_key(char_key(']'));
         app.handle_key(char_key('h'));
         assert!(app.status.contains("hunk"));
+    }
+
+    #[test]
+    fn hunk_jump_advances_when_stream_fits_one_screen() {
+        // Regression: with a viewport taller than the whole stream,
+        // `max_scroll()` is 0 and `jump_to_stream` cannot move `scroll_y`,
+        // so the old viewport-top anchor never advanced — `]h` pinned to the
+        // first hunk forever. Repeated `]h` must still walk the hunks (and
+        // the cursor must land on each hunk header row).
+        let mut app = multi_hunk_app();
+        // taller than the 16-row stream → everything fits on screen
+        app.viewport_height = 40;
+        assert_eq!(app.max_scroll(), 0, "fixture must fit one screen");
+        let seq = |app: &mut App| {
+            app.handle_key(char_key(']'));
+            app.handle_key(char_key('h'));
+            app.cursor_v
+        };
+        assert_eq!(seq(&mut app), 1, "first ]h → a.rs hunk 1");
+        assert_eq!(seq(&mut app), 5, "second ]h → a.rs hunk 2");
+        assert_eq!(seq(&mut app), 10, "third ]h → b.rs hunk 1");
+        assert_eq!(seq(&mut app), 13, "fourth ]h → b.rs hunk 2");
+        assert_eq!(seq(&mut app), 1, "fifth ]h wraps to a.rs hunk 1");
+    }
+
+    #[test]
+    fn hunk_jump_backward_advances_when_stream_fits_one_screen() {
+        let mut app = multi_hunk_app();
+        app.viewport_height = 40;
+        let seq = |app: &mut App| {
+            app.handle_key(char_key('['));
+            app.handle_key(char_key('h'));
+            app.cursor_v
+        };
+        // from the top: wraps to the last hunk, then walks backwards
+        assert_eq!(seq(&mut app), 13);
+        assert_eq!(seq(&mut app), 10);
+        assert_eq!(seq(&mut app), 5);
+        assert_eq!(seq(&mut app), 1);
+    }
+
+    #[test]
+    fn space_jumps_next_hunk_one_screen() {
+        // `Space` shares jump_hunk; same one-screen regression coverage.
+        let mut app = multi_hunk_app();
+        app.viewport_height = 40;
+        app.handle_key(char_key(' '));
+        assert_eq!(app.cursor_v, 1);
+        app.handle_key(char_key(' '));
+        assert_eq!(app.cursor_v, 5);
+    }
+
+    #[test]
+    fn hunk_jump_anchor_resets_after_manual_scroll() {
+        // If the human scrolls away, the stale anchor must not hijack the
+        // next `]h` — it falls back to searching from the viewport top.
+        let mut app = multi_hunk_app();
+        app.viewport_height = 1; // forces scrolling, max_scroll > 0
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.scroll_y, 1);
+        // jump far away (bottom), then back to top: viewport no longer shows row 1
+        app.handle_key(char_key('G'));
+        app.handle_key(char_key('g'));
+        app.handle_key(char_key(']'));
+        app.handle_key(char_key('h'));
+        assert_eq!(
+            app.scroll_y, 1,
+            "]h from the top finds the first hunk again"
+        );
     }
 
     // ---- open in editor (o) ----
