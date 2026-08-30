@@ -6,6 +6,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — review cursor + `c` note composition
+- **A visible review cursor** — `j`/`k` (and arrows, `J`/`K`, Ctrl-D/U/F/B,
+  PgUp/PgDn, `g`/`G`) now move a highlighted cursor row; the viewport
+  follows only when the cursor would leave it, so the view stays stable
+  around what you're reading. Hunk/file/search/note jumps land the cursor
+  on their target; mouse clicks in the stream place the cursor instead of
+  re-anchoring the viewport; pure viewport scrolls (wheel) clamp the
+  cursor back into view at the nearest edge. The highlight can be hidden
+  with `cursor_line = "off"` (default `"row"`); navigation works either
+  way. The active search match keeps precedence over the cursor highlight.
+- **`c` composes a note at the cursor row** — a single-line composer in
+  the prompt row (same editing shortcuts as `/` search: Ctrl-U, Ctrl-W,
+  Backspace; Enter saves, Esc discards). The note anchors to the cursor's
+  code line (new-side number; a delete anchors to the replacing add
+  line), renders like any agent note (inline/fallback), and is mirrored
+  into the session comments as `user:N` — so `comment list` shows human
+  notes in serve sessions and `comment rm user:N` removes both the
+  comment entry and the rendered note row.
+- **`o` opens the cursor line** in `$EDITOR` (was: the top visible row) —
+  scanning forward within the file when the cursor sits on a header.
+
 ### Added — inline agent notes (`--note` / serve comments)
 - **Notes render attached to their code, not as orphan rows.** When the
   terminal has room, a row's notes appear as a right-aligned inline

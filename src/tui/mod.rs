@@ -115,6 +115,7 @@ pub fn run_review_tui(
     context_collapse: usize,
     theme: Option<String>,
     layout: crate::config::LayoutMode,
+    cursor_line: bool,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
@@ -147,6 +148,7 @@ pub fn run_review_tui(
     app.line_numbers_on = start_line_numbers;
     app.wrap_on = wrap_on;
     app.layout_mode = layout;
+    app.cursor_on = cursor_line;
     app.set_context_collapse(context_collapse);
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
@@ -421,6 +423,13 @@ fn apply_server_command(
             let before = app.comments.len();
             app.comments.retain(|c| c.id != id);
             if app.comments.len() < before {
+                // A human note (`user:N`) also renders as a Note — remove the
+                // paired note so the row disappears from the stream too.
+                if let Some(note) = app.user_notes.remove(&id) {
+                    if let Some(pos) = app.notes.iter().position(|n| *n == note) {
+                        app.notes.remove(pos);
+                    }
+                }
                 ServerReply::Ok
             } else {
                 ServerReply::Error(format!("comment {id} not found"))
@@ -526,6 +535,7 @@ diff --git a/b.rs b/b.rs
             crate::config::DEFAULT_CONTEXT_COLLAPSE,
             None,
             crate::config::LayoutMode::Unified,
+            true,
             None,
             ReviewOptions::default(),
             None
@@ -1285,6 +1295,84 @@ diff --git a/a.rs b/a.rs
             "jump without notes should say so: {}",
             app.status.message
         );
+    }
+
+    #[test]
+    fn cursor_row_gets_highlight_background() {
+        let mut app = select_sample_app();
+        // +new is stream row 3 (0 file header, 1 hunk header, 2 -old, 3 +new).
+        app.set_cursor(3);
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        // rail_w = min(32, 60/4).max(12) = 15, so the stream starts at x=15.
+        // The pane title occupies the first row, so stream row 3 (+new)
+        // draws at y=4; x=16 is past its gutter columns.
+        let cell = &buf[(16u16, 4u16)];
+        assert_eq!(
+            cell.style().bg,
+            Some(app.theme.cursor_bg),
+            "cursor row should carry the cursor background"
+        );
+        // And a non-cursor code row does not.
+        let other = &buf[(16u16, 3u16)];
+        assert_ne!(other.style().bg, Some(app.theme.cursor_bg));
+    }
+
+    #[test]
+    fn cursor_line_off_renders_no_highlight() {
+        let mut app = select_sample_app();
+        app.set_cursor(3);
+        app.cursor_on = false;
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let cell = &buf[(16u16, 4u16)];
+        assert_ne!(cell.style().bg, Some(app.theme.cursor_bg));
+    }
+
+    #[test]
+    fn note_prompt_renders_in_help_line() {
+        let mut app = select_sample_app();
+        app.set_cursor(3);
+        app.handle_key(key(KeyCode::Char('c')));
+        for ch in "hi".chars() {
+            app.handle_key(key(KeyCode::Char(ch)));
+        }
+        let rendered = rendered_buffer(&mut app, 60, 10);
+        assert!(
+            rendered.contains("note: hi"),
+            "note composer should echo the draft in the prompt line: {rendered}"
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_rm_user_note_also_removes_the_note_row() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        app.set_cursor(3); // +new row
+        app.handle_key(key(KeyCode::Char('c')));
+        for ch in "stale".chars() {
+            app.handle_key(key(KeyCode::Char(ch)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(app.comments[0].id, "user:1");
+        apply_server_command(
+            &mut app,
+            ServerCommand::CommentRm {
+                id: "user:1".into(),
+            },
+            None,
+        );
+        assert!(
+            app.comments.iter().all(|c| c.id != "user:1"),
+            "comment removed"
+        );
+        assert!(app.notes.is_empty(), "paired note row removed too");
     }
 
     #[test]

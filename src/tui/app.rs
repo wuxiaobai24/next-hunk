@@ -60,6 +60,8 @@ pub enum InputMode {
     Search,
     /// Editing a file-rail path filter.
     Filter,
+    /// Composing a note anchored to the cursor row (`c`).
+    Note,
 }
 
 /// In-stream content search state.
@@ -192,6 +194,13 @@ pub struct App {
     pub ignore_ws: bool,
     /// Top virtual row of the stream viewport.
     pub scroll_y: usize,
+    /// The review cursor: a virtual row the human moves with `j`/`k` (and
+    /// clicks). `c` composes a note on it, `o` opens it in `$EDITOR`. The
+    /// viewport follows it (and it clamps into the viewport on pure scrolls).
+    pub cursor_v: usize,
+    /// Whether the cursor row gets its background highlight
+    /// (`cursor_line` config; navigation works either way).
+    pub cursor_on: bool,
     /// Currently focused file index (rail selection).
     pub selected_file: usize,
     /// Visible height of the stream pane (set from the drawn area).
@@ -296,6 +305,18 @@ pub struct App {
     /// Anchors repeated jumps so `}` keeps advancing near the clamped end of
     /// the stream instead of re-finding the same row.
     pub last_note_jump: Option<usize>,
+    /// Draft text while composing a note (`c` … Enter). Kept on `App` like
+    /// `search.query` so the prompt line can render it live.
+    pub note_draft: String,
+    /// Where the composed note will attach — resolved from the cursor row
+    /// when `c` was pressed; `None` outside note-composition mode.
+    pub note_pending: Option<NoteTarget>,
+    /// Counter for human note ids (`user:1`, `user:2`, …) so serve sessions
+    /// can list/remove them alongside agent comments.
+    pub user_note_seq: usize,
+    /// Human notes by their `user:N` id — the bridge back from
+    /// `comment rm user:N` to the rendered `Note`.
+    pub user_notes: std::collections::HashMap<String, Note>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -433,6 +454,8 @@ impl App {
             base_review: review,
             ignore_ws: false,
             scroll_y: 0,
+            cursor_v: 0,
+            cursor_on: true,
             selected_file: 0,
             viewport_height: 24,
             should_quit: false,
@@ -464,6 +487,10 @@ impl App {
             comments: Vec::new(),
             applied_comments: std::collections::HashSet::new(),
             last_note_jump: None,
+            note_draft: String::new(),
+            note_pending: None,
+            user_note_seq: 0,
+            user_notes: std::collections::HashMap::new(),
             folded: HashSet::new(),
             collapse,
             collapse_on: true,
@@ -532,11 +559,13 @@ impl App {
     /// remaps) funnels through here so virtual coordinates stay coherent.
     /// The rail selection syncs from the *target* row, not the clamped top
     /// row — when the viewport is taller than the stream the scroll clamps
-    /// to 0 and a position-based sync would clobber the selection.
+    /// to 0 and a position-based sync would clobber the selection. The
+    /// cursor lands on the target row: a jump means "go there".
     fn jump_to_stream(&mut self, row: usize) {
         self.collapse.expand_at_stream(row);
         let v = self.collapse.virtual_of_stream(row);
         self.scroll_y = v.min(self.max_scroll());
+        self.cursor_v = v.min(self.collapse.virtual_len().saturating_sub(1));
         if let Some(idx) = ViewportQuery::file_at_row(&self.review, row) {
             self.selected_file = idx;
         }
@@ -544,9 +573,14 @@ impl App {
 
     /// Rebuild the virtual-row index after anything that changes which rows
     /// exist (review swap, fold/unfold, ignore-ws re-derive, `zx`). Keeps
-    /// looking at the same stream row so the view does not jump.
+    /// looking at the same stream row so the view does not jump; the cursor
+    /// is re-anchored the same way.
     fn rebuild_collapse(&mut self) {
         let anchor = self.collapse.stream_at_virtual(self.scroll_y);
+        let cursor_anchor = self.collapse.stream_at_virtual(
+            self.cursor_v
+                .min(self.collapse.virtual_len().saturating_sub(1)),
+        );
         let threshold = if self.collapse_on {
             self.context_threshold
         } else {
@@ -556,6 +590,11 @@ impl App {
         self.collapse = CollapseIndex::build(&self.review, threshold, &self.folded, split);
         let v = self.collapse.virtual_of_stream(anchor);
         self.scroll_y = v.min(self.max_scroll());
+        self.cursor_v = self
+            .collapse
+            .virtual_of_stream(cursor_anchor)
+            .min(self.collapse.virtual_len().saturating_sub(1));
+        self.clamp_cursor_to_view();
         self.sync_selected_file();
     }
 
@@ -611,7 +650,9 @@ impl App {
 
     /// Move the scroll position by `delta` rows, clamped to `[0, max_scroll()]`.
     /// Positive scrolls down, negative up. Used by both keys and mouse wheel so
-    /// they share one clamp/sync path.
+    /// they share one clamp/sync path. A pure scroll does not move the cursor;
+    /// the cursor clamps back into the new viewport (sticking to the edge it
+    /// left through).
     fn scroll_by(&mut self, delta: i64) {
         let next = if delta >= 0 {
             self.scroll_y
@@ -621,7 +662,63 @@ impl App {
             self.scroll_y.saturating_sub((-delta) as usize)
         };
         self.scroll_y = next;
+        self.clamp_cursor_to_view();
         self.sync_selected_file();
+    }
+
+    // ── review cursor ────────────────────────────────────────────────────────
+
+    /// The stream row under the review cursor.
+    pub fn cursor_stream_row(&self) -> usize {
+        self.collapse.stream_at_virtual(
+            self.cursor_v
+                .min(self.collapse.virtual_len().saturating_sub(1)),
+        )
+    }
+
+    /// Keep the cursor inside the viewport after a viewport-only scroll
+    /// (mouse wheel, PgUp-style keys routed to `scroll_by`).
+    fn clamp_cursor_to_view(&mut self) {
+        let last_v = self.collapse.virtual_len().saturating_sub(1);
+        if self.cursor_v < self.scroll_y {
+            self.cursor_v = self.scroll_y.min(last_v);
+        }
+        let bottom = self
+            .scroll_y
+            .saturating_add(self.viewport_height.max(1) - 1)
+            .min(last_v);
+        if self.cursor_v > bottom {
+            self.cursor_v = bottom;
+        }
+    }
+
+    /// Move the cursor by `delta` virtual rows; the viewport follows only
+    /// when the cursor would leave it (so the view stays stable around the
+    /// cursor, like a scrolloff of 0).
+    fn move_cursor(&mut self, delta: i64) {
+        let last_v = self.collapse.virtual_len().saturating_sub(1);
+        let next = if delta >= 0 {
+            self.cursor_v.saturating_add(delta as usize).min(last_v)
+        } else {
+            self.cursor_v.saturating_sub((-delta) as usize)
+        };
+        self.set_cursor(next);
+    }
+
+    /// Place the cursor on a virtual row, scrolling the viewport minimally
+    /// so the row stays visible, and syncing the rail selection to it.
+    pub fn set_cursor(&mut self, v: usize) {
+        self.cursor_v = v;
+        if self.cursor_v < self.scroll_y {
+            self.scroll_y = self.cursor_v;
+        } else if self.cursor_v >= self.scroll_y + self.viewport_height.max(1) {
+            self.scroll_y = self.cursor_v + 1 - self.viewport_height.max(1);
+        }
+        self.scroll_y = self.scroll_y.min(self.max_scroll());
+        let stream_row = self.cursor_stream_row();
+        if let Some(idx) = ViewportQuery::file_at_row(&self.review, stream_row) {
+            self.selected_file = idx;
+        }
     }
 
     /// Consume `focus_target`: resolve it to an absolute stream row and move the
@@ -764,6 +861,10 @@ impl App {
                 self.handle_filter_input(key);
                 return;
             }
+            InputMode::Note => {
+                self.handle_note_input(key);
+                return;
+            }
             InputMode::Normal => {}
         }
 
@@ -773,11 +874,11 @@ impl App {
     /// Handle a single mouse event. Pure: mutates state only, no I/O.
     ///
     /// Wheel scroll is handled (one row per notch; Shift widens it to a
-    /// half-page, mirroring `j`/`J`). Left-clicks on the file rail select the
-    /// clicked file and scroll to its start; left-clicks on the stream position
-    /// the viewport so the clicked row is on top. Other clicks/drags/moves are
-    /// ignored. Keeping this in `App` means mouse behavior is exercisable
-    /// headlessly, the same as keys.
+    /// half-page, mirroring the scroll keys). Left-clicks on the file rail
+    /// select the clicked file and scroll to its start; left-clicks on the
+    /// stream put the review cursor on the clicked row. Other
+    /// clicks/drags/moves are ignored. Keeping this in `App` means mouse
+    /// behavior is exercisable headlessly, the same as keys.
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
         let half = (self.viewport_height.max(1) / 2) as i64;
         match ev.kind {
@@ -814,13 +915,16 @@ impl App {
                         }
                     }
                 }
-                // Click in the stream → position the viewport so the clicked row is on top.
+                // Click in the stream → put the review cursor on the clicked
+                // row (the viewport stays put; only the cursor moves).
                 if let Some(r) = self.stream_rect {
                     if Self::point_in_rect(ev.column, ev.row, r) {
                         let off = (ev.row.saturating_sub(r.y)) as usize;
-                        let target = self.scroll_y.saturating_add(off).min(self.max_scroll());
-                        self.scroll_y = target;
-                        self.sync_selected_file();
+                        let target = self
+                            .scroll_y
+                            .saturating_add(off)
+                            .min(self.collapse.virtual_len().saturating_sub(1));
+                        self.set_cursor(target);
                     }
                 }
             }
@@ -845,19 +949,19 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('d') => {
-                    self.scroll_by(half as i64);
+                    self.move_cursor(half as i64);
                     return;
                 }
                 KeyCode::Char('u') => {
-                    self.scroll_by(-(half as i64));
+                    self.move_cursor(-(half as i64));
                     return;
                 }
                 KeyCode::Char('f') => {
-                    self.scroll_by(full as i64);
+                    self.move_cursor(full as i64);
                     return;
                 }
                 KeyCode::Char('b') => {
-                    self.scroll_by(-(full as i64));
+                    self.move_cursor(-(full as i64));
                     return;
                 }
                 _ => {}
@@ -906,34 +1010,32 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            // scroll down one
+            // cursor down one (viewport follows only at the edges)
             KeyCode::Char('j') | KeyCode::Down => {
-                self.scroll_y = self.scroll_y.saturating_add(1).min(self.max_scroll());
-                self.sync_selected_file();
+                self.move_cursor(1);
             }
-            // scroll up one
+            // cursor up one
             KeyCode::Char('k') | KeyCode::Up => {
-                self.scroll_y = self.scroll_y.saturating_sub(1);
-                self.sync_selected_file();
+                self.move_cursor(-1);
             }
             // half-page down
             KeyCode::Char('J') | KeyCode::PageDown => {
-                self.scroll_y = self.scroll_y.saturating_add(half).min(self.max_scroll());
-                self.sync_selected_file();
+                self.move_cursor(half as i64);
             }
             // half-page up
             KeyCode::Char('K') | KeyCode::PageUp => {
-                self.scroll_y = self.scroll_y.saturating_sub(half);
-                self.sync_selected_file();
+                self.move_cursor(-(half as i64));
             }
             // top / bottom
             KeyCode::Char('g') | KeyCode::Home => {
+                self.set_cursor(0);
                 self.scroll_y = 0;
                 self.sync_selected_file();
             }
             KeyCode::Char('G') | KeyCode::End => {
+                let last_v = self.collapse.virtual_len().saturating_sub(1);
                 self.scroll_y = self.max_scroll();
-                self.sync_selected_file();
+                self.set_cursor(last_v);
             }
             // next / prev file
             KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
@@ -1077,6 +1179,8 @@ impl App {
                 self.path_filter.clear();
                 self.set_info("filter: ");
             }
+            // compose a note anchored to the cursor row
+            KeyCode::Char('c') => self.begin_note(),
             // open the focused line's file in $EDITOR
             KeyCode::Char('o') => match self.compute_open_target() {
                 Some(t) => {
@@ -1527,6 +1631,145 @@ impl App {
         }
     }
 
+    // ── note composition (`c` at the cursor) ─────────────────────────────────
+
+    /// Iterate code lines from `from_row` to the end of its file as
+    /// `(old_no, new_no)` pairs. Headers, markers, and other files stop or
+    /// are skipped. Single keypress-sized walks (`c`, `o`), never per-frame.
+    fn code_lines_from(&self, from_row: usize) -> Vec<(Option<u32>, Option<u32>)> {
+        let Some(file_idx) = ViewportQuery::file_at_row(&self.review, from_row) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for row in from_row..self.review.stream_len {
+            if ViewportQuery::file_at_row(&self.review, row) != Some(file_idx) {
+                break; // crossed into the next file
+            }
+            if let Some(nums) = ViewportQuery::row_line_numbers(&self.review, row) {
+                if nums != (None, None) {
+                    out.push(nums); // Meta lines carry no numbers
+                }
+            }
+        }
+        out
+    }
+
+    /// Where a note composed at the cursor (`c`) attaches: the cursor's code
+    /// line if it has a new-side number; otherwise the next line that does
+    /// (a delete anchors to the add block that replaces it); a file with no
+    /// numbered lines at all falls back to its first hunk, else a banner.
+    fn note_target_at_cursor(&self) -> Option<NoteTarget> {
+        let cursor_row = self.cursor_stream_row();
+        let file_idx = ViewportQuery::file_at_row(&self.review, cursor_row)?;
+        let path = self.review.display_path(file_idx).to_string();
+        if let Some((_, Some(new_no))) = self
+            .code_lines_from(cursor_row)
+            .into_iter()
+            .find(|(_, new_no)| new_no.is_some())
+        {
+            return Some(NoteTarget::Line { path, line: new_no });
+        }
+        let has_hunks = self
+            .review
+            .files
+            .get(file_idx)
+            .map(|f| !f.hunks.is_empty())
+            .unwrap_or(false);
+        if has_hunks {
+            Some(NoteTarget::Hunk { path, hunk: 1 })
+        } else {
+            Some(NoteTarget::Banner)
+        }
+    }
+
+    /// Start composing a note anchored to the cursor row (`c`).
+    fn begin_note(&mut self) {
+        match self.note_target_at_cursor() {
+            Some(target) => {
+                self.note_pending = Some(target);
+                self.note_draft.clear();
+                self.mode = InputMode::Note;
+                self.set_info("note: ");
+            }
+            None => self.set_error("nothing to annotate here"),
+        }
+    }
+
+    /// Handle keys while composing a note. Mirrors the search/filter editors
+    /// (Ctrl-U / Ctrl-W line shortcuts, Backspace, live echo in the status
+    /// line); Enter saves, Esc discards.
+    fn handle_note_input(&mut self, key: KeyEvent) {
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('u') => {
+                    self.note_draft.clear();
+                    self.set_info("note: ");
+                    return;
+                }
+                KeyCode::Char('w') => {
+                    drop_last_word(&mut self.note_draft);
+                    self.set_info(format!("note: {}", self.note_draft));
+                    return;
+                }
+                _ => {}
+            }
+        }
+        match key.code {
+            KeyCode::Enter => {
+                self.save_note();
+                self.mode = InputMode::Normal;
+            }
+            KeyCode::Esc => {
+                self.mode = InputMode::Normal;
+                self.note_draft.clear();
+                self.note_pending = None;
+                self.set_info("note cancelled");
+            }
+            KeyCode::Backspace => {
+                self.note_draft.pop();
+                self.set_info(format!("note: {}", self.note_draft));
+            }
+            KeyCode::Char(c) => {
+                self.note_draft.push(c);
+                self.set_info(format!("note: {}", self.note_draft));
+            }
+            _ => {}
+        }
+    }
+
+    /// Save the composed note: it renders like any `--note` and is mirrored
+    /// into the session comments (id `user:N`) so `comment list` / `comment
+    /// rm` see it in serve mode.
+    fn save_note(&mut self) {
+        let Some(target) = self.note_pending.take() else {
+            return;
+        };
+        let text = self.note_draft.trim().to_string();
+        self.note_draft.clear();
+        if text.is_empty() {
+            self.set_info("empty note discarded");
+            return;
+        }
+        self.user_note_seq += 1;
+        let id = format!("user:{}", self.user_note_seq);
+        let (file, line, hunk) = match &target {
+            NoteTarget::Line { path, line } => (path.clone(), Some(*line), None),
+            NoteTarget::Hunk { path, hunk } => (path.clone(), None, Some(*hunk)),
+            NoteTarget::Banner => (String::new(), None, None),
+        };
+        self.comments.push(CommentEntry {
+            id: id.clone(),
+            file,
+            text: text.clone(),
+            line,
+            hunk,
+        });
+        let note = Note { target, text };
+        self.user_notes.insert(id, note.clone());
+        self.notes.push(note);
+        self.set_success("💬 note added");
+    }
+
     /// Fold (collapse) the currently selected file so only its header is visible.
     fn fold_current(&mut self) {
         if self.folded.insert(self.selected_file) {
@@ -1563,43 +1806,31 @@ impl App {
         self.rebuild_collapse();
     }
 
-    /// Compute the file + line to open for the `o` (open in editor) action.    ///
-    /// The TUI is a top-anchored scroll view (no row cursor), so `o` targets
-    /// the top visible stream row. If that row is a header (file or hunk),
-    /// scan forward within the viewport to the first code line. For a code line
-    /// we prefer the new-side line number (so edits land on the live file);
-    /// deletes have no new-side, so they fall back to the old-side number.
-    /// `None` when no code line is visible or the file has no on-disk path.
+    /// Compute the file + line to open for the `o` (open in editor) action.
+    ///
+    /// `o` targets the cursor row. If that row is a header (file or hunk) or
+    /// a delete without a new side, scan forward within the file to the first
+    /// code line. For a code line we prefer the new-side line number (so
+    /// edits land on the live file); deletes have no new-side, so they fall
+    /// back to the old-side number. `None` when no code line follows or the
+    /// file has no on-disk path.
     fn compute_open_target(&self) -> Option<OpenTarget> {
-        // Walk the visible virtual window for the first code line with a
-        // line number (markers and headers carry none).
-        let viewport = Viewport {
-            start: self.scroll_y,
-            height: self.viewport_height.max(1),
-        };
-        ViewportQuery::rows_virtual(&self.review, viewport, &self.collapse)
+        let cursor_row = self.cursor_stream_row();
+        let file_idx = ViewportQuery::file_at_row(&self.review, cursor_row)?;
+        let line = self
+            .code_lines_from(cursor_row)
             .into_iter()
-            .find_map(|vr| {
-                let file_idx = match vr.row {
-                    crate::ir::StreamRow::Line { file_idx, .. } => file_idx,
-                    crate::ir::StreamRow::Pair { file_idx, .. } => file_idx,
-                    _ => return None,
-                };
-                let (old_no, new_no) = ViewportQuery::row_line_numbers(&self.review, vr.abs_row)?;
-                // Prefer the new-side line number (edits land on the live
-                // file); deletes fall back to the old-side number.
-                let line = new_no.or(old_no)?;
-                let file = self.review.files.get(file_idx)?;
-                let path = file
-                    .new_path
-                    .clone()
-                    .filter(|p| p != "/dev/null")
-                    .or_else(|| file.old_path.clone().filter(|p| p != "/dev/null"))?;
-                if path == "unknown" {
-                    return None;
-                }
-                Some(OpenTarget { path, line })
-            })
+            .find_map(|(old_no, new_no)| new_no.or(old_no))?;
+        let file = self.review.files.get(file_idx)?;
+        let path = file
+            .new_path
+            .clone()
+            .filter(|p| p != "/dev/null")
+            .or_else(|| file.old_path.clone().filter(|p| p != "/dev/null"))?;
+        if path == "unknown" {
+            return None;
+        }
+        Some(OpenTarget { path, line })
     }
 }
 
@@ -1805,11 +2036,15 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn scroll_down_then_up() {
         let mut app = two_file_app();
-        let start = app.scroll_y;
+        // The cursor moves; the viewport only follows at the edges.
         app.handle_key(key(KeyCode::Char('j')));
-        assert_eq!(app.scroll_y, start + 1);
+        assert_eq!(app.cursor_v, 1);
+        assert_eq!(
+            app.scroll_y, 0,
+            "viewport should not move while the cursor is in view"
+        );
         app.handle_key(key(KeyCode::Char('k')));
-        assert_eq!(app.scroll_y, start);
+        assert_eq!(app.cursor_v, 0);
     }
 
     #[test]
@@ -1853,11 +2088,10 @@ diff --git a/b.rs b/b.rs
     #[test]
     fn arrow_keys_scroll() {
         let mut app = two_file_app();
-        let start = app.scroll_y;
         app.handle_key(key(KeyCode::Down));
-        assert_eq!(app.scroll_y, start + 1);
+        assert_eq!(app.cursor_v, 1);
         app.handle_key(key(KeyCode::Up));
-        assert_eq!(app.scroll_y, start);
+        assert_eq!(app.cursor_v, 0);
     }
 
     #[test]
@@ -1883,17 +2117,22 @@ diff --git a/b.rs b/b.rs
     fn page_up_down_syncs_selected_file() {
         let mut app = two_file_app();
         // Stream: a.rs (rows 0-3), b.rs (rows 4-7). viewport_height=4, half=2.
-        // max_scroll = 8 - 4 = 4.
-        // Two PageDowns from 0 → 4 (file 1, b.rs).
+        // max_scroll = 8 - 4 = 4. Cursor moves in half-page steps; the view
+        // follows only when the cursor would leave it.
         app.handle_key(key(KeyCode::Char('J')));
-        assert_eq!(app.scroll_y, 2);
+        assert_eq!(app.cursor_v, 2);
+        assert_eq!(app.scroll_y, 0);
         app.handle_key(key(KeyCode::Char('J')));
-        assert_eq!(app.scroll_y, 4);
-        assert_eq!(app.selected_file, 1, "PageDown should sync to file 1");
-        // Two PageUps from 4 → 0 (file 0, a.rs).
+        assert_eq!(app.cursor_v, 4);
+        assert_eq!(
+            app.scroll_y, 1,
+            "view should follow once the cursor hits the bottom edge"
+        );
+        assert_eq!(app.selected_file, 1, "cursor on b.rs should sync the rail");
         app.handle_key(key(KeyCode::Char('K')));
-        assert_eq!(app.scroll_y, 2);
+        assert_eq!(app.cursor_v, 2);
         app.handle_key(key(KeyCode::Char('K')));
+        assert_eq!(app.cursor_v, 0);
         assert_eq!(app.scroll_y, 0);
         assert_eq!(app.selected_file, 0, "PageUp should sync back to file 0");
     }
@@ -2336,8 +2575,8 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn o_on_top_code_line_requests_open() {
         let mut app = openable_app();
-        // scroll to the context line (row 2) so the top visible row is code
-        app.scroll_y = 2;
+        // put the cursor on the context line (row 2)
+        app.set_cursor(2);
         app.handle_key(char_key('o'));
         let target = app
             .open_request
@@ -2350,8 +2589,8 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn o_prefers_new_side_line_number() {
         let mut app = openable_app();
-        // scroll to the +new line (row 4) so top visible is an add line
-        app.scroll_y = 4;
+        // put the cursor on the +new line (row 4)
+        app.set_cursor(4);
         app.handle_key(char_key('o'));
         let target = app.open_request.expect("open request set");
         assert_eq!(target.line, 11, "add line should use new-side number");
@@ -2360,8 +2599,8 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn o_falls_back_to_old_side_on_delete_line() {
         let mut app = openable_app();
-        // scroll to the -old line (row 3) so top visible is a delete line
-        app.scroll_y = 3;
+        // put the cursor on the -old line (row 3)
+        app.set_cursor(3);
         app.handle_key(char_key('o'));
         let target = app.open_request.expect("open request set");
         assert_eq!(target.line, 11, "delete line falls back to old-side number");
@@ -2370,9 +2609,9 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn o_on_header_scans_forward_to_first_code_line() {
         let mut app = openable_app();
-        // top of the file: scroll_y=0 is the file header. o should scan forward
-        // to the first code line (ctx at row 2).
-        app.scroll_y = 0;
+        // top of the file: the cursor sits on the file header. o should scan
+        // forward to the first code line (ctx at row 2).
+        app.set_cursor(0);
         app.handle_key(char_key('o'));
         let target = app.open_request.expect("should scan to a code line");
         assert_eq!(target.line, 10);
@@ -2381,7 +2620,7 @@ diff --git a/src/main.rs b/src/main.rs
     #[test]
     fn o_clears_request_each_press() {
         let mut app = openable_app();
-        app.scroll_y = 2;
+        app.set_cursor(2);
         app.handle_key(char_key('o'));
         assert!(app.open_request.is_some());
         // simulate the run loop consuming it
@@ -2390,13 +2629,136 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     #[test]
-    fn o_with_no_code_visible_is_noop() {
-        let mut app = openable_app();
-        // viewport height 0 → no visible code row
-        app.viewport_height = 0;
+    fn o_with_no_code_lines_is_noop() {
+        // A binary-file placeholder has no code lines anywhere in the file,
+        // so the forward scan from the cursor finds nothing to open.
+        let review = parse_unified_diff(
+            "diff --git a/bin.dat b/bin.dat\nnew file mode 100644\nBinary files /dev/null and b/bin.dat differ\n",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
         app.handle_key(char_key('o'));
         assert!(app.open_request.is_none());
         assert!(app.status.contains("nothing"));
+    }
+
+    // ---- cursor + note composition (`c`) ----
+
+    #[test]
+    fn c_composes_note_at_cursor_line() {
+        let mut app = openable_app();
+        // Cursor on the +new line (row 4, new-side line 11).
+        app.set_cursor(4);
+        app.handle_key(char_key('c'));
+        assert_eq!(app.mode, InputMode::Note, "c should open the note composer");
+        for ch in "check this".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(app.notes.len(), 1);
+        assert_eq!(
+            app.notes[0],
+            Note {
+                target: NoteTarget::Line {
+                    path: "src/main.rs".into(),
+                    line: 11
+                },
+                text: "check this".into()
+            }
+        );
+        // Mirrored into session comments under a user id.
+        assert_eq!(app.comments.len(), 1);
+        assert_eq!(app.comments[0].id, "user:1");
+        assert!(app.status.contains("note added"));
+    }
+
+    #[test]
+    fn c_on_delete_anchors_to_replacing_add_line() {
+        let mut app = openable_app();
+        // Cursor on the -old line (row 3): no new side, so the note anchors
+        // to the next new-side line (the +new line at 11).
+        app.set_cursor(3);
+        app.handle_key(char_key('c'));
+        app.handle_key(key(KeyCode::Enter)); // empty -> discarded
+                                             // Re-compose and save for real.
+        app.handle_key(char_key('c'));
+        for ch in "hm".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(
+            app.notes[0].target,
+            NoteTarget::Line {
+                path: "src/main.rs".into(),
+                line: 11
+            }
+        );
+    }
+
+    #[test]
+    fn note_composer_esc_cancels_and_enter_empty_discards() {
+        let mut app = openable_app();
+        app.set_cursor(4);
+        app.handle_key(char_key('c'));
+        for ch in "draft".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert!(app.notes.is_empty(), "Esc should discard the draft");
+        assert!(app.status.contains("cancelled"));
+
+        app.handle_key(char_key('c'));
+        app.handle_key(key(KeyCode::Enter)); // empty draft
+        assert_eq!(app.mode, InputMode::Normal);
+        assert!(app.notes.is_empty(), "empty note should be discarded");
+        assert!(app.status.contains("empty"));
+    }
+
+    #[test]
+    fn note_composer_ctrl_shortcuts_edit_the_draft() {
+        let mut app = openable_app();
+        app.set_cursor(4);
+        app.handle_key(char_key('c'));
+        for ch in "one two three".chars() {
+            app.handle_key(char_key(ch));
+        }
+        app.handle_key(ctrl('w')); // drop "three" (and its preceding space)
+        assert_eq!(app.note_draft, "one two");
+        app.handle_key(ctrl('u')); // clear
+        assert_eq!(app.note_draft, "");
+        app.handle_key(key(KeyCode::Esc));
+    }
+
+    #[test]
+    fn jump_keys_land_the_cursor_on_the_target() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('G')));
+        let bottom = app.cursor_v;
+        assert!(bottom > 0);
+        app.handle_key(key(KeyCode::Char('g')));
+        assert_eq!(app.cursor_v, 0);
+        // ]h jumps the viewport AND lands the cursor on the hunk header.
+        app.handle_key(key(KeyCode::Char(']')));
+        app.handle_key(char_key('h'));
+        assert_eq!(app.cursor_v, app.collapse.virtual_of_stream(1));
+    }
+
+    #[test]
+    fn wheel_scroll_keeps_the_cursor_in_view() {
+        let mut app = three_file_app();
+        app.viewport_height = 4;
+        // Scroll the viewport down past the cursor; the cursor clamps to the
+        // viewport's top edge.
+        app.handle_mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::ScrollDown,
+            column: 0,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, 1);
+        assert_eq!(app.cursor_v, 1, "cursor should stick to the top edge");
     }
 
     // ---- reload_review (watch hot-reload) ----
@@ -2978,14 +3340,15 @@ diff --git a/b.rs b/b.rs
             width: 80,
             height: 5,
         });
-        // Click on stream row 3 → scroll_y should become 3.
+        // Click on stream row 3 → the cursor moves there; the viewport stays.
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 10,
             row: 3,
             modifiers: KeyModifiers::NONE,
         });
-        assert_eq!(app.scroll_y, 3);
+        assert_eq!(app.cursor_v, 3);
+        assert_eq!(app.scroll_y, 0, "a click should not scroll the viewport");
     }
 
     /// A three-file review, for testing the `1-9` jump-to-Nth-file keys.
@@ -3040,40 +3403,50 @@ diff --git a/c.rs b/c.rs
     fn ctrl_d_scrolls_half_page_down() {
         let mut app = three_file_app();
         app.viewport_height = 6; // half = 3
-        app.scroll_y = 0;
-        let start = app.scroll_y;
         app.handle_key(ctrl('d'));
-        assert_eq!(app.scroll_y, start + 3);
+        assert_eq!(app.cursor_v, 3);
+        assert_eq!(
+            app.scroll_y, 0,
+            "cursor stays in view, viewport does not move"
+        );
+        app.handle_key(ctrl('d'));
+        assert_eq!(app.cursor_v, 6);
+        assert_eq!(app.scroll_y, 1, "view follows once the cursor leaves it");
     }
 
     #[test]
     fn ctrl_u_scrolls_half_page_up() {
         let mut app = three_file_app();
         app.viewport_height = 6; // half = 3
-        app.scroll_y = 5;
-        let start = app.scroll_y;
+        app.set_cursor(5);
         app.handle_key(ctrl('u'));
-        assert_eq!(app.scroll_y, start.saturating_sub(3));
+        assert_eq!(app.cursor_v, 2);
+        assert_eq!(
+            app.scroll_y, 0,
+            "view follows the cursor up to the top edge"
+        );
     }
 
     #[test]
     fn ctrl_f_scrolls_full_page_down() {
         let mut app = three_file_app();
         app.viewport_height = 4; // full = 4
-        app.scroll_y = 0;
-        let start = app.scroll_y;
         app.handle_key(ctrl('f'));
-        assert_eq!(app.scroll_y, start + 4);
+        assert_eq!(app.cursor_v, 4);
+        assert_eq!(
+            app.scroll_y, 1,
+            "view follows the cursor to the bottom edge"
+        );
     }
 
     #[test]
     fn ctrl_b_scrolls_full_page_up() {
         let mut app = three_file_app();
         app.viewport_height = 4; // full = 4
-        app.scroll_y = 5;
-        let start = app.scroll_y;
+        app.set_cursor(9);
         app.handle_key(ctrl('b'));
-        assert_eq!(app.scroll_y, start.saturating_sub(4));
+        assert_eq!(app.cursor_v, 5);
+        assert_eq!(app.scroll_y, 5, "view follows the cursor up");
     }
 
     #[test]
@@ -3081,9 +3454,11 @@ diff --git a/c.rs b/c.rs
         let mut app = three_file_app();
         app.viewport_height = 6;
         let max = app.max_scroll();
-        app.scroll_y = max; // already at the bottom
+        app.handle_key(key(KeyCode::Char('G'))); // cursor + view to the bottom
         app.handle_key(ctrl('d'));
         assert_eq!(app.scroll_y, max);
+        let last_v = app.collapse.virtual_len() - 1;
+        assert_eq!(app.cursor_v, last_v, "cursor clamps at the last row");
     }
 
     #[test]

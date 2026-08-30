@@ -53,6 +53,8 @@ pub struct Theme {
     pub match_active_bg: Color,
     /// Background of inactive (non-focused) search matches.
     pub match_inactive_bg: Color,
+    /// Background of the cursor row (the `j/k`-moving review cursor).
+    pub cursor_bg: Color,
     /// Status-bar text color when editing a query/filter.
     pub edit_mode_fg: Color,
     /// Status-bar background.
@@ -80,6 +82,7 @@ impl Theme {
             match_active_fg: hex(0x100F0F),   // black
             match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
             match_inactive_bg: hex(0x403E3C), // base-800 (subdued)
+            cursor_bg: hex(0x575653),         // base-700 (review cursor row)
             edit_mode_fg: hex(0xDA702C),      // orange-400 (active prompt)
             status_bg: hex(0x282726),         // base-900 (status band)
             note: hex(0x3AA99F),              // cyan-400 (italic agent notes)
@@ -106,6 +109,7 @@ impl Theme {
             match_active_fg: hex(0x100F0F),   // black
             match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
             match_inactive_bg: hex(0xCECDC3), // base-200 (subdued)
+            cursor_bg: hex(0xB7B5AC),         // base-300 (review cursor row)
             edit_mode_fg: hex(0xBC5215),      // orange-600 (active prompt)
             status_bg: hex(0xE6E4D9),         // base-100 (status band)
             note: hex(0x24837B),              // cyan-600 (italic agent notes)

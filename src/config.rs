@@ -97,6 +97,8 @@ pub struct Config {
     /// Collapse unchanged context: runs/gaps of ≥ this many lines render as
     /// one `··· N unchanged lines ···` marker row. `0` disables. Default 8.
     pub context_collapse: Option<usize>,
+    /// Show the review cursor row ("row", default) or hide it ("off").
+    pub cursor_line: Option<String>,
 }
 
 impl Config {
@@ -129,6 +131,9 @@ impl Config {
         }
         if other.context_collapse.is_some() {
             self.context_collapse = other.context_collapse;
+        }
+        if other.cursor_line.is_some() {
+            self.cursor_line = other.cursor_line;
         }
         self
     }
@@ -175,6 +180,9 @@ pub struct ResolvedConfig {
     /// Collapse unchanged context threshold (0 = off). See
     /// [`DEFAULT_CONTEXT_COLLAPSE`].
     pub context_collapse: usize,
+    /// Show the review cursor row (`c` composes a note on it). ON by default;
+    /// `cursor_line = "off"` hides the highlight (navigation still works).
+    pub cursor_line: bool,
 }
 
 impl Default for ResolvedConfig {
@@ -190,6 +198,7 @@ impl Default for ResolvedConfig {
             layout: LayoutMode::Unified,
             wrap: false,
             context_collapse: DEFAULT_CONTEXT_COLLAPSE,
+            cursor_line: true,
         }
     }
 }
@@ -233,6 +242,11 @@ impl ResolvedConfig {
                 .unwrap_or(d.layout),
             wrap: cfg.wrap.unwrap_or(d.wrap),
             context_collapse: cfg.context_collapse.unwrap_or(d.context_collapse),
+            cursor_line: cfg
+                .cursor_line
+                .as_deref()
+                .map(|v| v != "off" && v != "false")
+                .unwrap_or(d.cursor_line),
         }
     }
 }
@@ -426,6 +440,32 @@ mod tests {
         };
         let r = ResolvedConfig::resolve(&cfg, &cli);
         assert!(!r.line_numbers); // config false wins
+    }
+
+    #[test]
+    fn resolve_cursor_line_defaults_to_on_and_off_disables() {
+        let cli = CliFlags {
+            staged: None,
+            watch: None,
+            highlight: None,
+            include_untracked: None,
+        };
+        let r = ResolvedConfig::resolve(&Config::default(), &cli);
+        assert!(r.cursor_line, "cursor row highlight defaults on");
+
+        let cfg = Config {
+            cursor_line: Some("off".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(!r.cursor_line, "cursor_line = \"off\" hides the highlight");
+
+        let cfg = Config {
+            cursor_line: Some("row".into()),
+            ..Default::default()
+        };
+        let r = ResolvedConfig::resolve(&cfg, &cli);
+        assert!(r.cursor_line);
     }
 
     #[test]
