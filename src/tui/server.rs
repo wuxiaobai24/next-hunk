@@ -51,6 +51,8 @@ pub enum ServerCommand {
     Decision,
     /// `next-hunk get` / `next-hunk list`: request session metadata.
     Info,
+    /// `next-hunk context`: request where the human is currently looking.
+    Context,
     /// `next-hunk review --json`: request file/hunk structure.
     Review,
     /// `next-hunk navigate`: scroll the TUI to a file, hunk, or line.
@@ -153,9 +155,29 @@ pub enum ServerReply {
     /// Response to `Info`: session metadata.
     Info {
         /// Repo root path (as reported by the server).
-        repo_path: String,
+        repo_root: String,
         /// Number of files in the current review.
         file_count: usize,
+        /// PID of the session process (matches the socket name suffix).
+        pid: u32,
+        /// How the session was launched: `diff` / `show` / `serve`.
+        mode: String,
+        /// Short human-readable session title.
+        title: String,
+        /// File the human's cursor is on (display path).
+        focus_file: Option<String>,
+        /// 1-based hunk ordinal under the cursor.
+        focus_hunk: Option<usize>,
+        /// Source line under the cursor (new-side when available).
+        focus_line: Option<u32>,
+    },
+    /// Response to `Context`: the human's current focus (same fields as
+    /// `Info`'s focus triple, kept separate so `Info` can evolve without
+    /// churning the context contract).
+    Context {
+        focus_file: Option<String>,
+        focus_hunk: Option<usize>,
+        focus_line: Option<u32>,
     },
     /// Response to `Review`: file/hunk structure summary.
     Review(ReviewSummary),
@@ -255,10 +277,15 @@ fn accept_loop(listener: UnixListener, tx: mpsc::Sender<ServerRequest>) {
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Err(e) = handle_connection(stream, &tx) {
-                    // Per-connection failures shouldn't kill the accept loop;
-                    // log to stderr for debuggability.
-                    eprintln!("next-hunk serve: connection error: {e}");
+                if let Err(_e) = handle_connection(stream, &tx) {
+                    // Per-connection failures shouldn't kill the accept loop.
+                    // Deliberately not logged: this process owns the TUI, and
+                    // a stderr write would land on the alternate screen and
+                    // corrupt the display. Set NEXT_HUNK_SERVE_DEBUG=1 to
+                    // surface these while debugging the protocol.
+                    if std::env::var_os("NEXT_HUNK_SERVE_DEBUG").is_some_and(|v| v == "1") {
+                        eprintln!("next-hunk serve: connection error: {_e}");
+                    }
                 }
             }
             Err(ref e) if would_block(e) => {
@@ -292,9 +319,16 @@ fn handle_connection(mut stream: UnixStream, tx: &mpsc::Sender<ServerRequest>) -
 
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
-    reader
+    let n = reader
         .read_line(&mut line)
         .context("read command line from socket")?;
+    if n == 0 || line.trim().is_empty() {
+        // Probe connection (socket discovery connects without sending) or a
+        // client that hung up before writing. Not an error — and never worth
+        // logging: this process owns the TUI, and any stderr write lands on
+        // the alternate screen and corrupts it.
+        return Ok(());
+    }
     let command: ServerCommand =
         serde_json::from_str(line.trim()).map_err(|e| anyhow::anyhow!("parse command: {e}"))?;
 
@@ -483,29 +517,71 @@ mod tests {
         let sock = TempSocket::new("info");
         let listener = ServerListener::spawn(sock.path.clone()).unwrap();
         let drainer = std::thread::spawn(move || {
-            let mut got = listener.drain();
-            while got.is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                got = listener.drain();
-            }
-            for r in got {
-                let _ = r.reply.send(ServerReply::Info {
-                    repo_path: "/tmp/repo".into(),
-                    file_count: 3,
-                });
+            // Answer both requests (Info, then Context).
+            for _ in 0..2 {
+                let mut got = listener.drain();
+                while got.is_empty() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    got = listener.drain();
+                }
+                for r in got {
+                    if matches!(r.command, ServerCommand::Context) {
+                        let _ = r.reply.send(ServerReply::Context {
+                            focus_file: Some("src/a.rs".into()),
+                            focus_hunk: Some(2),
+                            focus_line: Some(42),
+                        });
+                    } else {
+                        let _ = r.reply.send(ServerReply::Info {
+                            repo_root: "/tmp/repo".into(),
+                            file_count: 3,
+                            pid: 4321,
+                            mode: "diff".into(),
+                            title: "demo working tree".into(),
+                            focus_file: Some("src/a.rs".into()),
+                            focus_hunk: Some(2),
+                            focus_line: Some(42),
+                        });
+                    }
+                }
             }
         });
 
         let reply = send_command(&sock.path, &ServerCommand::Info).unwrap();
         match reply {
             ServerReply::Info {
-                repo_path,
+                repo_root,
                 file_count,
+                pid,
+                mode,
+                title,
+                focus_file,
+                focus_hunk,
+                focus_line,
             } => {
-                assert_eq!(repo_path, "/tmp/repo");
+                assert_eq!(repo_root, "/tmp/repo");
                 assert_eq!(file_count, 3);
+                assert_eq!(pid, 4321);
+                assert_eq!(mode, "diff");
+                assert_eq!(title, "demo working tree");
+                assert_eq!(focus_file.as_deref(), Some("src/a.rs"));
+                assert_eq!(focus_hunk, Some(2));
+                assert_eq!(focus_line, Some(42));
             }
             other => panic!("expected Info, got {other:?}"),
+        }
+        let reply = send_command(&sock.path, &ServerCommand::Context).unwrap();
+        match reply {
+            ServerReply::Context {
+                focus_file,
+                focus_hunk,
+                focus_line,
+            } => {
+                assert_eq!(focus_file.as_deref(), Some("src/a.rs"));
+                assert_eq!(focus_hunk, Some(2));
+                assert_eq!(focus_line, Some(42));
+            }
+            other => panic!("expected Context, got {other:?}"),
         }
         drainer.join().unwrap();
     }

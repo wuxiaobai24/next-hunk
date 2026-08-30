@@ -6,6 +6,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — every review TUI is an agent-addressable session
+- **`diff` and `show` now attach the session control plane** (previously
+  `serve`-only): an everyday `nh diff` binds a per-process Unix socket and
+  `list` / `get` / `review` / `navigate` / `push` / `reload` / `comment` /
+  `decision` operate on it live. Bind failure is non-fatal — the review
+  still opens without the control plane.
+- **Session discovery by repo, multi-session safe.** Socket names carry the
+  repo hash + pid (`next-hunk-<hash>-<pid>.sock`), so several reviews of one
+  repo coexist. Session commands auto-target the single live session of the
+  current repo; with several, they list candidates and accept
+  `--hash <session-id>` (as printed by `list`). `push` and `decision` gained
+  `--hash` too.
+- **`reload` works on any session** — every interactive review keeps a
+  reloader (agent-triggered), while `--watch` remains the opt-in filesystem
+  poller (the watcher no longer starts merely because a reloader exists).
+- **Richer `Info`**: reports the real repo root (previously the first file's
+  path), pid, launch mode (`diff`/`show`/`serve`), a session title
+  (`demo working tree`, `show HEAD`), and the human's current focus
+  (file/hunk/line). `list` and `get` print these.
+- **Probe connections no longer corrupt the TUI.** Socket-discovery probes
+  (connect, no command) previously triggered an EOF error printed to stderr,
+  which lands on the TUI's alternate screen. EOF/no-command connections are
+  now silent, and connection-error logging is opt-in via
+  `NEXT_HUNK_SERVE_DEBUG=1`.
+- **Stale-socket sweep on session start**: TUIs killed by SIGHUP/SIGKILL
+  (closed terminal, killed pane) run no cleanup; the next session reclaims
+  dead `next-hunk-*.sock` files so the runtime dir doesn't accumulate them.
+
 ### Fixed — `]h`/`[h`/`Space` stuck on one-screen diffs
 - **Repeated hunk jumps now always advance.** `]h`/`[h`/`Space` anchored
   their search on the viewport-top row; when the whole stream fits on one

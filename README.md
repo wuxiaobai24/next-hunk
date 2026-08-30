@@ -41,7 +41,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
-- [x] Server mode: `next-hunk serve` + `push`/`decision` for live agent→human streaming into a persistent TUI
+- [x] Sessions: every review TUI (`diff`/`show`/`serve`) is agent-addressable — `list` / `get` / `review` / `navigate` / `push` / `reload` / `decision` work on a live session
 - [x] `line_numbers` config (no silent no-op)
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
@@ -276,30 +276,33 @@ A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when
 and how to call next-hunk — install it into your agent's skills directory. See
 the skill file for the full decision guide and examples.
 
-### Server mode (persistent TUI + live push)
+### Sessions (persistent TUI + live push)
 
-The default is **stateless** (each `next-hunk diff` is a one-shot process).
-Optional **server mode** lets an agent stream multiple updates into a single
-persistent TUI and read the human's decisions in real time, without
-re-launching:
+Every interactive review (`diff`, `show`, `serve`) is an **agent-addressable
+session**: the TUI binds a per-process Unix socket, and the session CLI
+commands below work on it live — including an everyday `nh diff`.
 
 ```bash
-# Human opens the persistent review TUI (runs with select mode on):
-next-hunk serve
-
-# Agent pushes a new focus/note into the live TUI (returns immediately):
-next-hunk push --focus src/auth.rs:88 --note banner="please check the token expiry"
-
-# Agent reads the human's accumulated decisions (one JSON line, returns immediately):
-next-hunk decision
-# {"accepted":["src/auth.rs:h1"],"rejected":[...],"undecided":[...]}
+next-hunk list                  # live sessions: id, mode, repo, focus
+next-hunk get                   # session info (mode/pid/repo/files/focus)
+next-hunk review                # file/hunk structure as JSON
+next-hunk navigate src/a.rs:42  # scroll the human's TUI to a file/line/hunk
+next-hunk push --focus src/a.rs:88 --note banner="please check the token expiry"
+next-hunk reload                # re-fetch the diff into the live session
+next-hunk decision              # {"accepted":[...],"rejected":[...],"undecided":[...]}
 ```
 
-`serve` binds a Unix socket derived from the repo root, so `push`/`decision`
-run from anywhere in the same repo find it automatically — no `--socket` flag.
-Requires the `serve` feature (on by default) and a Unix OS; on other builds the
-subcommands report that they're unavailable. The `decision` output matches the
-`--select` quit shape, so an agent parses both identically.
+Sessions are discovered by repo (no `--socket` flag): a command run anywhere
+in the repo finds the session automatically. When several reviews of the same
+repo are open, commands list the candidates and accept `--hash <session-id>`
+(the `<hash>-<pid>` id printed by `list`).
+
+`serve` is the decision-collecting flavor: a persistent TUI with select mode
+always on (`a`/`r`/`u` per hunk), so `decision` returns real accept/reject
+results. `decision` on a non-select session reports everything undecided —
+the output shape is identical, so an agent parses both the same way. Requires
+the `serve` feature (on by default) and a Unix OS; on other builds the
+subcommands report that they're unavailable.
 
 ## Testing & benchmarks
 
