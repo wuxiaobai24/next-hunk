@@ -427,33 +427,38 @@ fn apply_server_command(
             }
         }
         ServerCommand::CommentApply => {
-            // Merge comments into notes for TUI rendering. Each comment
-            // becomes a Note attached to the appropriate target.
-            let new_notes: Vec<Note> = app
-                .comments
-                .iter()
-                .map(|c| {
-                    let target = if let Some(hunk) = c.hunk {
-                        NoteTarget::Hunk {
-                            path: c.file.clone(),
-                            hunk,
-                        }
-                    } else if let Some(line) = c.line {
-                        NoteTarget::Line {
-                            path: c.file.clone(),
-                            line,
-                        }
-                    } else {
-                        NoteTarget::Banner
-                    };
-                    Note {
-                        target,
-                        text: format!("💬 {}: {}", c.id, c.text),
+            // Merge *not-yet-applied* comments into notes for TUI rendering.
+            // Each comment becomes a Note attached to the appropriate target;
+            // applied ids are remembered so re-running `comment apply` (e.g.
+            // after adding more comments) doesn't duplicate earlier notes.
+            // The renderer adds the 💬 glyph, so the text carries only the
+            // id (for `comment rm` correlation) and the body.
+            let mut new_notes: Vec<Note> = Vec::new();
+            for c in app.comments.iter() {
+                if !app.applied_comments.insert(c.id.clone()) {
+                    continue;
+                }
+                let target = if let Some(hunk) = c.hunk {
+                    NoteTarget::Hunk {
+                        path: c.file.clone(),
+                        hunk,
                     }
-                })
-                .collect();
+                } else if let Some(line) = c.line {
+                    NoteTarget::Line {
+                        path: c.file.clone(),
+                        line,
+                    }
+                } else {
+                    NoteTarget::Banner
+                };
+                new_notes.push(Note {
+                    target,
+                    text: format!("{}: {}", c.id, c.text),
+                });
+            }
+            let n = new_notes.len();
             app.notes.extend(new_notes);
-            app.set_success("comments applied");
+            app.set_success(format!("comments applied ({n} new)"));
             ServerReply::Ok
         }
         ServerCommand::Reload => match reloader {
@@ -1044,6 +1049,26 @@ diff --git a/a.rs b/a.rs
             .collect()
     }
 
+    /// Rendered terminal rows, one `String` per row (trailing blanks
+    /// trimmed). Used by tests that assert which row a piece of text lands
+    /// on (e.g. inline note placement).
+    fn rendered_rows(app: &mut App, w: u16, h: u16) -> Vec<String> {
+        let backend = TestBackend::new(w, h);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        buf.content()
+            .chunks(w as usize)
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
     #[test]
     fn select_mode_shows_undecided_marker_by_default() {
         let mut app = select_sample_app();
@@ -1091,10 +1116,10 @@ diff --git a/a.rs b/a.rs
     }
 
     #[test]
-    fn line_note_renders_below_target() {
+    fn line_note_renders_inline_when_room() {
         use crate::tui::app::{Note, NoteTarget};
         let mut app = select_sample_app();
-        // a.rs new line 1 is the +new line at row 4. Attach a note to it.
+        // a.rs new line 1 is the +new line. Attach a note to it.
         app.notes.push(Note {
             target: NoteTarget::Line {
                 path: "a.rs".into(),
@@ -1102,14 +1127,46 @@ diff --git a/a.rs b/a.rs
             },
             text: "agent says hi".into(),
         });
-        let rendered = rendered_buffer(&mut app, 60, 10);
+        let rows = rendered_rows(&mut app, 100, 10);
+        let code_row = rows
+            .iter()
+            .find(|r| r.contains("+new"))
+            .expect("+new row rendered");
         assert!(
-            rendered.contains("💬"),
-            "line note should render a 💬 marker: {rendered}"
+            code_row.contains("💬") && code_row.contains("agent says hi"),
+            "note should render inline on the code row when there is room: {code_row}"
+        );
+    }
+
+    #[test]
+    fn line_note_falls_back_to_own_row_when_narrow() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "agent says hi".into(),
+        });
+        // 40 cols: rail takes 12, stream gets 28 — no room next to a gutter
+        // line, so the note takes its own row below the code line.
+        let rows = rendered_rows(&mut app, 40, 12);
+        let code_idx = rows
+            .iter()
+            .position(|r| r.contains("+new"))
+            .expect("+new row rendered");
+        let note_idx = rows
+            .iter()
+            .position(|r| r.contains("agent says hi"))
+            .expect("note row rendered");
+        assert!(
+            note_idx > code_idx,
+            "fallback note row should sit below the code row: {rows:?}"
         );
         assert!(
-            rendered.contains("agent says hi"),
-            "note text should appear: {rendered}"
+            rows[note_idx].contains("💬"),
+            "fallback note row keeps the 💬 glyph: {rows:?}"
         );
     }
 
@@ -1129,6 +1186,135 @@ diff --git a/a.rs b/a.rs
         assert!(
             rendered.contains("💬") && rendered.contains("review this hunk"),
             "hunk note should render: {rendered}"
+        );
+    }
+
+    #[test]
+    fn rail_shows_note_count_badge() {
+        use crate::tui::app::{Note, NoteTarget};
+        let mut app = select_sample_app();
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "one".into(),
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Hunk {
+                path: "a.rs".into(),
+                hunk: 1,
+            },
+            text: "two".into(),
+        });
+        let rendered = rendered_buffer(&mut app, 80, 10);
+        // 💬 is double-width: the buffer flattens its second cell to a
+        // space, so the badge reads "💬 2" in the flattened string.
+        assert!(
+            rendered.contains("💬 2"),
+            "rail should show a per-file note count badge: {rendered}"
+        );
+    }
+
+    #[test]
+    fn note_jump_keys_move_between_annotated_rows() {
+        use crate::tui::app::{InputMode, Note, NoteTarget};
+
+        // A stream tall enough that jumps actually move the viewport:
+        // 24 context rows, then the changed line at new-side line 25.
+        let body: String = "ctx\n".repeat(24);
+        let patch = format!(
+            "diff --git a/big.rs b/big.rs\n--- a/big.rs\n+++ b/big.rs\n@@ -1,25 +1,25 @@\n{body}-old\n+new\n"
+        );
+        let review = parse_unified_diff(&patch).unwrap();
+        let mut app = App::new(review);
+        app.set_context_collapse(0); // keep rows 1:1 so the math is direct
+        app.viewport_height = 5;
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "big.rs".into(),
+                line: 25,
+            },
+            text: "look here".into(),
+        });
+        assert_eq!(app.annotated_rows().len(), 1);
+        let note_row = app.annotated_rows()[0];
+        let visible = |app: &App| {
+            let v = app.collapse.virtual_of_stream(note_row);
+            v >= app.scroll_y && v < app.scroll_y + app.viewport_height
+        };
+
+        app.handle_key(key(KeyCode::Char('}')));
+        assert!(
+            visible(&app),
+            "`}}` should scroll the annotated row into view (scroll_y={})",
+            app.scroll_y
+        );
+        assert!(
+            app.status.message.contains("note 1/1"),
+            "jump should report the note ordinal: {}",
+            app.status.message
+        );
+
+        // Repeated `}` wraps around the (single) note set instead of
+        // getting stuck when the viewport clamps at the stream end.
+        app.handle_key(key(KeyCode::Char('}')));
+        assert!(
+            app.status.message.contains("note 1/1"),
+            "wrap-around jump should re-report the note: {}",
+            app.status.message
+        );
+        // And `{` walks back.
+        app.handle_key(key(KeyCode::Char('{')));
+        assert!(
+            visible(&app),
+            "`{{` should return to the annotated row (scroll_y={})",
+            app.scroll_y
+        );
+        // Mode stays normal (the `}`/`{` keys never open an input mode).
+        assert_eq!(app.mode, InputMode::Normal);
+    }
+
+    #[test]
+    fn note_jump_without_notes_is_a_noop() {
+        let mut app = select_sample_app();
+        app.handle_key(key(KeyCode::Char('}')));
+        assert_eq!(app.scroll_y, 0);
+        assert!(
+            app.status.message.contains("no notes"),
+            "jump without notes should say so: {}",
+            app.status.message
+        );
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_apply_is_idempotent_per_comment() {
+        use crate::tui::app::CommentEntry;
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        app.comments.push(CommentEntry {
+            id: "c1".into(),
+            file: "a.rs".into(),
+            text: "check this".into(),
+            line: Some(1),
+            hunk: None,
+        });
+        apply_server_command(&mut app, ServerCommand::CommentApply, None);
+        assert_eq!(app.notes.len(), 1, "first apply converts the comment");
+        apply_server_command(&mut app, ServerCommand::CommentApply, None);
+        assert_eq!(
+            app.notes.len(),
+            1,
+            "re-running apply must not duplicate note rows"
+        );
+        assert!(
+            !app.notes[0].text.contains("💬"),
+            "renderer supplies the 💬 glyph; the note text must not carry one"
+        );
+        assert!(
+            app.notes[0].text.contains("c1"),
+            "note text keeps the comment id for `comment rm` correlation"
         );
     }
 
