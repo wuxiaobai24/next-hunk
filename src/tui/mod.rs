@@ -365,6 +365,49 @@ fn reload_once(app: &mut App, reloader: &mut Reloader) {
     }
 }
 
+/// Convert a comment entry into the `Note` that renders it in the stream.
+/// The renderer adds the 💬 glyph, so the text carries only the id (for
+/// `comment rm` correlation) and the body.
+#[cfg(all(feature = "serve", unix))]
+fn comment_note(entry: &crate::tui::app::CommentEntry) -> crate::tui::app::Note {
+    use crate::tui::app::{Note, NoteTarget};
+    let target = if let Some(hunk) = entry.hunk {
+        NoteTarget::Hunk {
+            path: entry.file.clone(),
+            hunk,
+        }
+    } else if let Some(line) = entry.line {
+        NoteTarget::Line {
+            path: entry.file.clone(),
+            line,
+        }
+    } else {
+        NoteTarget::Banner
+    };
+    Note {
+        target,
+        text: format!("{}: {}", entry.id, entry.text),
+    }
+}
+
+/// The `--focus` target for a comment: its file, refined by hunk/line when
+/// the entry carries one.
+#[cfg(all(feature = "serve", unix))]
+fn comment_focus_target(entry: &crate::tui::app::CommentEntry) -> app::FocusTarget {
+    if let Some(hunk) = entry.hunk {
+        app::FocusTarget::FileHunk(entry.file.clone(), hunk)
+    } else if let Some(line) = entry.line {
+        app::FocusTarget::FileLine(entry.file.clone(), line)
+    } else {
+        app::FocusTarget::File(entry.file.clone())
+    }
+}
+
+/// Sequence for agent comment ids (`c0`, `c1`, …) across every command that
+/// mints them (single add and batch apply share it so ids stay unique).
+#[cfg(all(feature = "serve", unix))]
+static COMMENT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Apply one server-mode command to the app and produce the reply to send back
 /// to the CLI client. Lives here (not on `App`) because it bridges the
 /// `server::ServerCommand` wire type with the App state — `App` stays free of
@@ -376,7 +419,7 @@ fn apply_server_command(
     command: server::ServerCommand,
     reloader: Option<&mut Reloader>,
 ) -> server::ServerReply {
-    use crate::tui::app::{Note, NoteTarget};
+    use crate::tui::app::Note;
     use server::{ServerCommand, ServerReply};
     match command {
         ServerCommand::Push { focus, notes } => {
@@ -434,22 +477,42 @@ fn apply_server_command(
             app.apply_focus();
             ServerReply::Ok
         }
+        ServerCommand::NoteJump { next } => {
+            if app.annotated_rows().is_empty() {
+                ServerReply::Error {
+                    message: "no notes in this diff".into(),
+                }
+            } else {
+                app.jump_note(next);
+                ServerReply::Ok
+            }
+        }
         ServerCommand::CommentAdd {
             file,
             text,
             line,
             hunk,
+            focus,
         } => {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static COUNTER: AtomicU64 = AtomicU64::new(0);
-            let id = format!("c{}", COUNTER.fetch_add(1, Ordering::SeqCst));
-            app.comments.push(crate::tui::app::CommentEntry {
+            use std::sync::atomic::Ordering;
+            let id = format!("c{}", COMMENT_SEQ.fetch_add(1, Ordering::SeqCst));
+            let entry = crate::tui::app::CommentEntry {
                 id: id.clone(),
                 file,
                 text,
                 line,
                 hunk,
-            });
+            };
+            // Render immediately (mirrors hunk's live comment cards): the
+            // note lands in the stream the moment the comment is added.
+            app.applied_comments.insert(id.clone());
+            app.notes.push(comment_note(&entry));
+            if focus {
+                app.focus_target = Some(comment_focus_target(&entry));
+                app.apply_focus();
+            }
+            app.comments.push(entry);
+            app.set_success(format!("comment {id} added by agent"));
             ServerReply::CommentAdded { id }
         }
         ServerCommand::CommentList => ServerReply::CommentList {
@@ -468,43 +531,115 @@ fn apply_server_command(
                 }
                 ServerReply::Ok
             } else {
-                ServerReply::Error(format!("comment {id} not found"))
+                ServerReply::Error {
+                    message: format!("comment {id} not found"),
+                }
             }
         }
         ServerCommand::CommentApply => {
             // Merge *not-yet-applied* comments into notes for TUI rendering.
-            // Each comment becomes a Note attached to the appropriate target;
-            // applied ids are remembered so re-running `comment apply` (e.g.
-            // after adding more comments) doesn't duplicate earlier notes.
-            // The renderer adds the 💬 glyph, so the text carries only the
-            // id (for `comment rm` correlation) and the body.
+            // `comment add` already applies its comment, so this mostly
+            // no-ops today; it stays for re-surfacing after a review swap
+            // and for callers that pre-seeded comments another way.
             let mut new_notes: Vec<Note> = Vec::new();
             for c in app.comments.iter() {
                 if !app.applied_comments.insert(c.id.clone()) {
                     continue;
                 }
-                let target = if let Some(hunk) = c.hunk {
-                    NoteTarget::Hunk {
-                        path: c.file.clone(),
-                        hunk,
-                    }
-                } else if let Some(line) = c.line {
-                    NoteTarget::Line {
-                        path: c.file.clone(),
-                        line,
-                    }
-                } else {
-                    NoteTarget::Banner
-                };
-                new_notes.push(Note {
-                    target,
-                    text: format!("{}: {}", c.id, c.text),
-                });
+                new_notes.push(comment_note(c));
             }
             let n = new_notes.len();
             app.notes.extend(new_notes);
             app.set_success(format!("comments applied ({n} new)"));
             ServerReply::Ok
+        }
+        ServerCommand::CommentApplyBatch { comments, focus } => {
+            // Validate the whole batch before mutating anything: every item
+            // must name a known file and, when given, an in-range hunk.
+            for (i, c) in comments.iter().enumerate() {
+                match crate::ir::ViewportQuery::file_index_for_path(&app.review, &c.file) {
+                    None => {
+                        return ServerReply::Error {
+                            message: format!("comment {} targets unknown file `{}`", i + 1, c.file),
+                        }
+                    }
+                    Some(fi) => {
+                        let hunk_count = app.review.files[fi].hunks.len();
+                        if let Some(h) = c.hunk {
+                            if h == 0 || h > hunk_count {
+                                return ServerReply::Error {
+                                    message: format!(
+                                        "comment {}: `{}` has {} hunk(s); hunk {h} is out of range",
+                                        i + 1,
+                                        c.file,
+                                        hunk_count
+                                    ),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            use std::sync::atomic::Ordering;
+            let mut entries = Vec::new();
+            for c in comments {
+                let id = format!("c{}", COMMENT_SEQ.fetch_add(1, Ordering::SeqCst));
+                entries.push(crate::tui::app::CommentEntry {
+                    id,
+                    file: c.file,
+                    text: c.text,
+                    line: c.line,
+                    hunk: c.hunk,
+                });
+            }
+            let n = entries.len();
+            let first_focus = focus
+                .then(|| entries.first().map(comment_focus_target))
+                .flatten();
+            for entry in &entries {
+                app.applied_comments.insert(entry.id.clone());
+                app.notes.push(comment_note(entry));
+                app.comments.push(entry.clone());
+            }
+            if let Some(t) = first_focus {
+                app.focus_target = Some(t);
+                app.apply_focus();
+            }
+            app.set_success(format!("{n} comments applied by agent"));
+            ServerReply::Ok
+        }
+        ServerCommand::CommentClear { file, all } => {
+            // Scope: `--file` limits by path; agent comments (c*) always go,
+            // human notes (user:*) only with `all`.
+            let in_scope = |c: &crate::tui::app::CommentEntry| {
+                file.as_deref().is_none_or(|f| c.file == f) && (all || !c.id.starts_with("user:"))
+            };
+            let removed: Vec<String> = app
+                .comments
+                .iter()
+                .filter(|c| in_scope(c))
+                .map(|c| c.id.clone())
+                .collect();
+            if removed.is_empty() {
+                return ServerReply::Error {
+                    message: "no comments matched".into(),
+                };
+            }
+            app.comments.retain(|c| !in_scope(c));
+            for id in &removed {
+                // Drop the paired rendered note: human notes pair through
+                // `user_notes` (their text carries no id), agent notes
+                // through the "{id}: " text prefix.
+                if let Some(note) = app.user_notes.remove(id) {
+                    app.notes.retain(|n| *n != note);
+                } else {
+                    let prefix = format!("{id}: ");
+                    app.notes.retain(|n| !n.text.starts_with(&prefix));
+                }
+            }
+            let n = removed.len();
+            app.set_success(format!("cleared {n} comment(s)"));
+            ServerReply::CommentCleared { removed: n }
         }
         ServerCommand::Reload => match reloader {
             Some(r) => match (*r)() {
@@ -513,11 +648,13 @@ fn apply_server_command(
                     app.set_success("reloaded by agent");
                     ServerReply::Ok
                 }
-                Err(e) => ServerReply::Error(format!("reload failed: {e}")),
+                Err(e) => ServerReply::Error {
+                    message: format!("reload failed: {e}"),
+                },
             },
-            None => ServerReply::Error(
-                "no reloader available (serve was started without --watch)".into(),
-            ),
+            None => ServerReply::Error {
+                message: "no reloader available (this review was opened without one)".into(),
+            },
         },
     }
 }
@@ -1483,6 +1620,207 @@ diff --git a/a.rs b/a.rs
             }
             other => panic!("expected Context, got {other:?}"),
         }
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_add_renders_note_immediately_and_focuses() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        app.cursor_v = 0;
+        app.scroll_y = 0;
+        match apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "a.rs".into(),
+                text: "live note".into(),
+                line: Some(1),
+                hunk: None,
+                focus: true,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::CommentAdded { id } => {
+                assert!(!id.is_empty());
+            }
+            other => panic!("expected CommentAdded, got {other:?}"),
+        }
+        // The note is in the stream right away…
+        assert_eq!(app.notes.len(), 1, "comment add renders its note live");
+        assert!(app.notes[0].text.contains("live note"));
+        // …listed by comment list…
+        assert_eq!(app.comments.len(), 1);
+        // …and `--focus` moved the cursor onto the target row (+new = row 3).
+        assert_eq!(app.cursor_v, 3);
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_batch_validates_atomically() {
+        use crate::tui::server::{BatchComment, ServerCommand, ServerReply};
+        let mut app = select_sample_app();
+        // Unknown file → the whole batch is rejected, nothing applied.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentApplyBatch {
+                comments: vec![
+                    BatchComment {
+                        file: "a.rs".into(),
+                        text: "ok".into(),
+                        line: Some(1),
+                        hunk: None,
+                    },
+                    BatchComment {
+                        file: "nope.rs".into(),
+                        text: "bad".into(),
+                        line: None,
+                        hunk: None,
+                    },
+                ],
+                focus: false,
+            },
+            None,
+        );
+        match reply {
+            ServerReply::Error { message: msg } => {
+                assert!(msg.contains("nope.rs"), "error names the file: {msg}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(app.comments.is_empty(), "rejected batch must not mutate");
+        assert!(app.notes.is_empty(), "rejected batch must not mutate");
+        // Out-of-range hunk ordinal is rejected too.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentApplyBatch {
+                comments: vec![BatchComment {
+                    file: "a.rs".into(),
+                    text: "bad hunk".into(),
+                    line: None,
+                    hunk: Some(7),
+                }],
+                focus: false,
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Error { .. }));
+        // A valid batch applies every comment as a note.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentApplyBatch {
+                comments: vec![
+                    BatchComment {
+                        file: "a.rs".into(),
+                        text: "one".into(),
+                        line: Some(1),
+                        hunk: None,
+                    },
+                    BatchComment {
+                        file: "a.rs".into(),
+                        text: "two".into(),
+                        line: None,
+                        hunk: Some(1),
+                    },
+                ],
+                focus: false,
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Ok));
+        assert_eq!(app.comments.len(), 2);
+        assert_eq!(app.notes.len(), 2);
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_clear_scopes_and_removes_paired_notes() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        // Seed one agent comment (live-rendered) and one human note.
+        apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "a.rs".into(),
+                text: "agent says".into(),
+                line: Some(1),
+                hunk: None,
+                focus: false,
+            },
+            None,
+        );
+        app.set_cursor(3); // +new row
+        app.handle_key(key(KeyCode::Char('c')));
+        for ch in "human says".chars() {
+            app.handle_key(key(KeyCode::Char(ch)));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.comments.len(), 2);
+        assert_eq!(app.notes.len(), 2);
+        // Default clear removes only agent comments (and their notes).
+        match apply_server_command(
+            &mut app,
+            ServerCommand::CommentClear {
+                file: None,
+                all: false,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::CommentCleared { removed } => {
+                assert_eq!(removed, 1)
+            }
+            other => panic!("expected CommentCleared, got {other:?}"),
+        }
+        assert_eq!(app.comments.len(), 1, "human note survives default clear");
+        assert_eq!(app.notes.len(), 1, "its rendered note survives too");
+        assert_eq!(app.comments[0].id, "user:1");
+        // `--all` takes the human note as well.
+        match apply_server_command(
+            &mut app,
+            ServerCommand::CommentClear {
+                file: None,
+                all: true,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::CommentCleared { removed } => {
+                assert_eq!(removed, 1)
+            }
+            other => panic!("expected CommentCleared, got {other:?}"),
+        }
+        assert!(app.comments.is_empty());
+        assert!(app.notes.is_empty());
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn note_jump_command_jumps_annotated_rows() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        // No notes yet → error reply for the agent.
+        match apply_server_command(&mut app, ServerCommand::NoteJump { next: true }, None) {
+            crate::tui::server::ServerReply::Error { message: msg } => {
+                assert!(msg.contains("no notes"), "{msg}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // One note on the +new row → jump lands the cursor on it.
+        apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "a.rs".into(),
+                text: "look here".into(),
+                line: Some(1),
+                hunk: None,
+                focus: false,
+            },
+            None,
+        );
+        app.cursor_v = 0;
+        match apply_server_command(&mut app, ServerCommand::NoteJump { next: true }, None) {
+            crate::tui::server::ServerReply::Ok => {}
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        assert_eq!(app.cursor_v, 3, "cursor lands on the annotated +new row");
     }
 
     #[test]

@@ -57,7 +57,10 @@ pub enum ServerCommand {
     Review,
     /// `next-hunk navigate`: scroll the TUI to a file, hunk, or line.
     Navigate { target: FocusTarget },
-    /// `next-hunk comment add`: add a comment/note.
+    /// `next-hunk navigate --next-note` / `--prev-note`: jump the TUI to the
+    /// next/previous annotated row (same as the `}`/`{` keys).
+    NoteJump { next: bool },
+    /// `next-hunk comment add`: add a comment and render it as a live note.
     CommentAdd {
         file: String,
         text: String,
@@ -65,15 +68,44 @@ pub enum ServerCommand {
         line: Option<u32>,
         /// Optional hunk ordinal (1-based).
         hunk: Option<usize>,
+        /// Also scroll the TUI to the new comment.
+        focus: bool,
     },
     /// `next-hunk comment list`: list all comments.
     CommentList,
     /// `next-hunk comment rm <id>`: remove a comment by id.
     CommentRm { id: String },
-    /// `next-hunk comment apply`: push comments into TUI notes.
+    /// `next-hunk comment apply`: push not-yet-applied comments into notes.
     CommentApply,
+    /// `next-hunk comment apply --stdin`: validate and apply a JSON batch in
+    /// one shot. The whole batch is validated before any mutation.
+    CommentApplyBatch {
+        comments: Vec<BatchComment>,
+        /// Also scroll the TUI to the first comment in the batch.
+        focus: bool,
+    },
+    /// `next-hunk comment clear`: remove comments (agent ones by default,
+    /// `all` also removes human-authored notes).
+    CommentClear {
+        /// Limit clearing to one file.
+        file: Option<String>,
+        /// Also remove `user:*` notes.
+        all: bool,
+    },
     /// `next-hunk reload`: re-fetch the diff content and refresh the review.
     Reload,
+}
+
+/// One item of a `comment apply --stdin` batch: a file plus a text and
+/// exactly one locator (`line` or `hunk`).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BatchComment {
+    pub file: String,
+    pub text: String,
+    /// Optional line number (new-side source line).
+    pub line: Option<u32>,
+    /// Optional hunk ordinal (1-based).
+    pub hunk: Option<usize>,
 }
 
 /// A serializable summary of one file in the review, suitable for agent
@@ -183,10 +215,15 @@ pub enum ServerReply {
     Review(ReviewSummary),
     /// Response to `CommentAdd`: the assigned comment id.
     CommentAdded { id: String },
+    /// Response to `CommentClear`: how many comments were removed.
+    CommentCleared { removed: usize },
     /// Response to `CommentList`: all session comments.
     CommentList { comments: Vec<CommentEntry> },
-    /// Server-side error (e.g. malformed command).
-    Error(String),
+    /// Server-side error (e.g. malformed command). A struct variant, not a
+    /// newtype: internally-tagged enums cannot serialize newtype variants
+    /// wrapping a primitive, so `Error(String)` would fail at runtime and
+    /// the client would see a bare EOF instead of the message.
+    Error { message: String },
 }
 
 /// Handle to the running accept thread. Mirrors [`crate::tui::watch::Watcher`]:
@@ -340,9 +377,9 @@ fn handle_connection(mut stream: UnixStream, tx: &mpsc::Sender<ServerRequest>) -
     })
     .map_err(|_| anyhow::anyhow!("main loop gone (serve quitting?)"))?;
 
-    let reply = reply_rx
-        .recv()
-        .unwrap_or_else(|_| ServerReply::Error("serve shutting down".into()));
+    let reply = reply_rx.recv().unwrap_or_else(|_| ServerReply::Error {
+        message: "serve shutting down".into(),
+    });
     let mut json = serde_json::to_string(&reply).context("serialize reply")?;
     json.push('\n');
     stream.write_all(json.as_bytes()).context("write reply")?;
@@ -694,6 +731,56 @@ mod tests {
     }
 
     #[test]
+    fn every_reply_variant_serializes() {
+        // Regression: `Error(String)` (a newtype variant under an internally
+        // tagged enum) fails to serialize at runtime, so error replies were
+        // dropped and clients saw a bare EOF. Prove every variant encodes.
+        let variants: Vec<ServerReply> = vec![
+            ServerReply::Ok,
+            ServerReply::Error {
+                message: "boom".into(),
+            },
+            ServerReply::CommentAdded { id: "c0".into() },
+            ServerReply::CommentCleared { removed: 2 },
+            ServerReply::CommentList { comments: vec![] },
+            ServerReply::Context {
+                focus_file: None,
+                focus_hunk: None,
+                focus_line: None,
+            },
+            ServerReply::Info {
+                repo_root: String::new(),
+                file_count: 0,
+                pid: 0,
+                mode: "diff".into(),
+                title: String::new(),
+                focus_file: None,
+                focus_hunk: None,
+                focus_line: None,
+            },
+            ServerReply::Review(ReviewSummary {
+                file_count: 0,
+                stream_len: 0,
+                inserts: 0,
+                deletes: 0,
+                files: vec![],
+            }),
+            ServerReply::Decisions(Selections {
+                accepted: vec![],
+                rejected: vec![],
+                undecided: vec![],
+            }),
+        ];
+        for v in variants {
+            let json = serde_json::to_string(&v).unwrap_or_else(|e| panic!("serialize {v:?}: {e}"));
+            let back: ServerReply =
+                serde_json::from_str(&json).unwrap_or_else(|e| panic!("decode {json}: {e}"));
+            assert!(json.contains("\"reply\""), "{json}");
+            let _ = back;
+        }
+    }
+
+    #[test]
     fn comment_add_list_rm_round_trip() {
         let sock = TempSocket::new("comment");
         let listener = ServerListener::spawn(sock.path.clone()).unwrap();
@@ -729,7 +816,9 @@ mod tests {
                             if all.len() < before {
                                 let _ = r.reply.send(ServerReply::Ok);
                             } else {
-                                let _ = r.reply.send(ServerReply::Error("not found".into()));
+                                let _ = r.reply.send(ServerReply::Error {
+                                    message: "not found".into(),
+                                });
                             }
                         }
                         _ => {
@@ -748,6 +837,7 @@ mod tests {
                 text: "review this".into(),
                 line: None,
                 hunk: None,
+                focus: false,
             },
         )
         .unwrap();

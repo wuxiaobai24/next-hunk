@@ -6,6 +6,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — comment & context parity with hunk
+- **`comment add` renders live.** A comment added from the CLI immediately
+  appears as a 💬 note in the running TUI (like hunk's live comment cards);
+  the old two-step `comment add` + `comment apply` dance is gone. New
+  `--focus` flag also scrolls the human's TUI to the comment.
+- **`comment apply --stdin`** — apply a JSON batch
+  (`{"comments":[{"file":"a.rs","line":4,"text":"…"},…]}`, per item exactly
+  one of `line`/`hunk`) in one round trip. The whole batch is validated
+  (known file, in-range hunk) before anything is applied; a bad item errors
+  without mutating. Optional `--focus` jumps to the first comment.
+- **`comment clear [--file <path>] [--all] --yes`** — remove comments
+  (agent ones by default; `--all` also removes human `user:*` notes) and
+  their rendered note rows. Guarded by `--yes`.
+- **`context`** — report where the human is currently looking
+  (`focus: src/a.rs:h2:42`), plain or `--json`. Mirrors hunk's
+  `session context`.
+- **`navigate --next-note` / `--prev-note`** — jump the TUI between
+  annotated rows from the CLI (same as the `}`/`{` keys).
+
+### Fixed — session error replies never reached the client
+- **`ServerReply::Error` was unserializable.** As a newtype variant under an
+  internally tagged enum it failed serde serialization at runtime, so every
+  error reply was silently dropped — CLI clients saw a bare EOF instead of
+  the message (and the failed serialize was eprintln'd onto the TUI screen).
+  Now a struct variant (`{"reply":"Error","message":"…"}`), with a
+  round-trip test over every reply variant.
+- **Duplicate comment ids** — `comment add` and batch apply used separate
+  id counters, producing colliding `c0` ids; they now share one sequence.
+
 ### Added — every review TUI is an agent-addressable session
 - **`diff` and `show` now attach the session control plane** (previously
   `serve`-only): an everyday `nh diff` binds a per-process Unix socket and

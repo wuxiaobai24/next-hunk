@@ -186,27 +186,47 @@ enum Commands {
         /// Optional repo hash to look up (defaults to current repo).
         hash: Option<String>,
     },
-    /// Navigate a running serve session to a file, hunk, or line.
+    /// Navigate a running session to a file, hunk, or line.
     ///
     /// Uses the same `--focus` syntax: `<path>`, `<path>:<line>`, or
-    /// `<path>:h<n>` (1-based hunk ordinal).
+    /// `<path>:h<n>` (1-based hunk ordinal). `--next-note` / `--prev-note`
+    /// jump between annotated rows instead (same as the TUI's `}`/`{`).
     Navigate {
         /// Navigation target: `<path>` / `<path>:<line>` / `<path>:h<n>`.
-        target: String,
+        #[arg(conflicts_with_all = &["next_note", "prev_note"])]
+        target: Option<String>,
+        /// Jump to the next annotated (💬) row.
+        #[arg(long, conflicts_with = "prev_note")]
+        next_note: bool,
+        /// Jump to the previous annotated (💬) row.
+        #[arg(long)]
+        prev_note: bool,
         /// Optional repo hash to look up (defaults to current repo).
         #[arg(long)]
         hash: Option<String>,
     },
-    /// Manage comments on a running serve session.
+    /// Manage comments on a running session.
     Comment {
         #[command(subcommand)]
         action: CommentAction,
     },
-    /// Reload the running serve session's diff content.
+    /// Report where the human is currently looking in a running session.
     ///
-    /// Re-fetches the diff from the same source the serve was started with
+    /// Prints the focused file, 1-based hunk ordinal, and source line
+    /// (new-side when available). `--json` emits the same fields as one
+    /// JSON object. Without `--hash`, targets the current repo's session.
+    Context {
+        /// Emit JSON instead of plain text.
+        #[arg(long)]
+        json: bool,
+        /// Optional repo hash to look up (defaults to current repo).
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Reload the running session's diff content.
+    ///
+    /// Re-fetches the diff from the same source the session was started with
     /// and refreshes the review, preserving focus/notes/decisions best-effort.
-    /// Requires the serve to have been started with `--watch` (or a reloader).
     Reload {
         /// Optional repo hash to look up (defaults to current repo).
         #[arg(long)]
@@ -216,7 +236,7 @@ enum Commands {
 
 #[derive(Debug, clap::Subcommand)]
 enum CommentAction {
-    /// Add a comment to a file.
+    /// Add a comment to a file (renders live in the TUI as a note).
     Add {
         /// Target file path.
         #[arg(long)]
@@ -227,6 +247,9 @@ enum CommentAction {
         /// Optional hunk ordinal (1-based).
         #[arg(long)]
         hunk: Option<usize>,
+        /// Also scroll the human's TUI to the new comment.
+        #[arg(long)]
+        focus: bool,
         /// Optional repo hash.
         #[arg(long)]
         hash: Option<String>,
@@ -248,7 +271,35 @@ enum CommentAction {
         hash: Option<String>,
     },
     /// Apply comments as TUI notes.
+    ///
+    /// Comments added via `comment add` render immediately; `apply` exists
+    /// for batches (`--stdin`, validated as a whole before mutating) and for
+    /// re-surfacing comments after a review swap.
     Apply {
+        /// Read a JSON batch from stdin instead of applying session comments:
+        /// `{"comments":[{"file":"a.rs","line":4,"text":"…"},…]}` (per item:
+        /// `file` + `text` + exactly one of `line` / `hunk`).
+        #[arg(long)]
+        stdin: bool,
+        /// Also scroll the human's TUI to the first comment in the batch
+        /// (`--stdin` only).
+        #[arg(long)]
+        focus: bool,
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Clear comments (agent comments by default, `--all` includes human ones).
+    Clear {
+        /// Limit clearing to one file.
+        #[arg(long)]
+        file: Option<String>,
+        /// Also remove human-authored notes (`user:*`).
+        #[arg(long)]
+        all: bool,
+        /// Required confirmation flag.
+        #[arg(long)]
+        yes: bool,
         /// Optional repo hash.
         #[arg(long)]
         hash: Option<String>,
@@ -577,7 +628,13 @@ fn run() -> Result<()> {
         Commands::List => run_list(),
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
-        Commands::Navigate { target, hash } => run_navigate(target, hash),
+        Commands::Navigate {
+            target,
+            next_note,
+            prev_note,
+            hash,
+        } => run_navigate(target, next_note, prev_note, hash),
+        Commands::Context { json, hash } => run_context(json, hash),
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
     }
@@ -767,7 +824,7 @@ fn run_decision(hash: Option<String>) -> Result<()> {
             println!("{}", serde_json::to_string(&selections)?);
             Ok(())
         }
-        Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -856,7 +913,7 @@ fn run_get(hash: Option<String>) -> Result<()> {
             );
             Ok(())
         }
-        Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -871,7 +928,7 @@ fn run_review(hash: Option<String>) -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&summary)?);
             Ok(())
         }
-        Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -886,6 +943,7 @@ fn run_comment(action: CommentAction) -> Result<()> {
             file,
             line,
             hunk,
+            focus,
             hash,
             text,
         } => {
@@ -897,13 +955,14 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     text,
                     line,
                     hunk,
+                    focus,
                 },
             ) {
                 Ok(crate::tui::server::ServerReply::CommentAdded { id }) => {
                     println!("ok: comment added with id {id}");
                     Ok(())
                 }
-                Ok(crate::tui::server::ServerReply::Error(msg)) => {
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
                     bail!("server error: {msg}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
@@ -928,7 +987,7 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     }
                     Ok(())
                 }
-                Ok(crate::tui::server::ServerReply::Error(msg)) => {
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
                     bail!("server error: {msg}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
@@ -942,21 +1001,105 @@ fn run_comment(action: CommentAction) -> Result<()> {
                     println!("ok: comment removed");
                     Ok(())
                 }
-                Ok(crate::tui::server::ServerReply::Error(msg)) => {
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
                     bail!("server error: {msg}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
                 Err(e) => bail_on_no_server(e),
             }
         }
-        CommentAction::Apply { hash } => {
+        CommentAction::Apply { stdin, focus, hash } => {
             let socket = resolve_socket(hash)?;
-            match crate::tui::server::send_command(&socket, &ServerCommand::CommentApply) {
-                Ok(crate::tui::server::ServerReply::Ok) => {
-                    println!("ok: comments applied to TUI");
+            if stdin {
+                // Batch mode: read a JSON payload from stdin, forward it as
+                // one command so the session validates it atomically.
+                let mut payload = String::new();
+                std::io::Read::read_to_string(&mut std::io::stdin(), &mut payload)
+                    .context("read comment batch from stdin")?;
+                let parsed: serde_json::Value =
+                    serde_json::from_str(&payload).context("parse comment batch JSON")?;
+                let raw = parsed
+                    .get("comments")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "batch payload needs a `comments` array: {{\"comments\":[…]}}"
+                        )
+                    })?;
+                let mut comments = Vec::new();
+                for (i, item) in raw.iter().enumerate() {
+                    let file = item
+                        .get("file")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("comment {}: missing `file`", i + 1))?
+                        .to_string();
+                    let text = item
+                        .get("text")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| anyhow::anyhow!("comment {}: missing `text`", i + 1))?
+                        .to_string();
+                    let line = item.get("line").and_then(|v| v.as_u64()).map(|v| v as u32);
+                    let hunk = item
+                        .get("hunk")
+                        .and_then(|v| v.as_u64())
+                        .map(|v| v as usize);
+                    comments.push(crate::tui::server::BatchComment {
+                        file,
+                        text,
+                        line,
+                        hunk,
+                    });
+                }
+                if comments.is_empty() {
+                    bail!("comment batch is empty");
+                }
+                match crate::tui::server::send_command(
+                    &socket,
+                    &ServerCommand::CommentApplyBatch { comments, focus },
+                ) {
+                    Ok(crate::tui::server::ServerReply::Ok) => {
+                        println!("ok: comment batch applied to TUI");
+                        Ok(())
+                    }
+                    Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
+                        bail!("server error: {msg}")
+                    }
+                    Ok(other) => bail!("unexpected server reply: {other:?}"),
+                    Err(e) => bail_on_no_server(e),
+                }
+            } else {
+                match crate::tui::server::send_command(&socket, &ServerCommand::CommentApply) {
+                    Ok(crate::tui::server::ServerReply::Ok) => {
+                        println!("ok: comments applied to TUI");
+                        Ok(())
+                    }
+                    Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
+                        bail!("server error: {msg}")
+                    }
+                    Ok(other) => bail!("unexpected server reply: {other:?}"),
+                    Err(e) => bail_on_no_server(e),
+                }
+            }
+        }
+        CommentAction::Clear {
+            file,
+            all,
+            yes,
+            hash,
+        } => {
+            if !yes {
+                bail!("comment clear requires --yes (add --all to also remove human notes)");
+            }
+            let socket = resolve_socket(hash)?;
+            match crate::tui::server::send_command(
+                &socket,
+                &ServerCommand::CommentClear { file, all },
+            ) {
+                Ok(crate::tui::server::ServerReply::CommentCleared { removed }) => {
+                    println!("ok: cleared {removed} comment(s)");
                     Ok(())
                 }
-                Ok(crate::tui::server::ServerReply::Error(msg)) => {
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
                     bail!("server error: {msg}")
                 }
                 Ok(other) => bail!("unexpected server reply: {other:?}"),
@@ -1007,20 +1150,72 @@ fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
 
 /// `next-hunk navigate <target> [--hash <hash>]`: navigate a serve TUI.
 #[cfg(all(feature = "serve", unix))]
-fn run_navigate(target: String, hash: Option<String>) -> Result<()> {
-    let focus_target = crate::cli_parse::parse_focus(&target)?;
+fn run_navigate(
+    target: Option<String>,
+    next_note: bool,
+    prev_note: bool,
+    hash: Option<String>,
+) -> Result<()> {
     let socket = resolve_socket(hash)?;
-    match crate::tui::server::send_command(
-        &socket,
-        &crate::tui::server::ServerCommand::Navigate {
-            target: focus_target,
-        },
-    ) {
+    let command = if next_note || prev_note {
+        crate::tui::server::ServerCommand::NoteJump { next: next_note }
+    } else {
+        let target = target.as_deref().ok_or_else(|| {
+            anyhow::anyhow!("navigate needs a target (`<path>` / `<path>:<line>` / `<path>:h<n>`) or --next-note/--prev-note")
+        })?;
+        crate::tui::server::ServerCommand::Navigate {
+            target: crate::cli_parse::parse_focus(target)?,
+        }
+    };
+    match crate::tui::server::send_command(&socket, &command) {
         Ok(crate::tui::server::ServerReply::Ok) => {
-            println!("ok: navigated to {}", target);
+            match (&target, next_note, prev_note) {
+                (Some(t), false, false) => println!("ok: navigated to {t}"),
+                (_, true, _) => println!("ok: jumped to next note"),
+                _ => println!("ok: jumped to previous note"),
+            }
             Ok(())
         }
-        Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
+        Ok(other) => bail!("unexpected server reply: {other:?}"),
+        Err(e) => bail_on_no_server(e),
+    }
+}
+
+/// `next-hunk context [--json] [--hash <hash>]`: where is the human looking?
+#[cfg(all(feature = "serve", unix))]
+fn run_context(json: bool, hash: Option<String>) -> Result<()> {
+    let socket = resolve_socket(hash)?;
+    match crate::tui::server::send_command(&socket, &crate::tui::server::ServerCommand::Context) {
+        Ok(crate::tui::server::ServerReply::Context {
+            focus_file,
+            focus_hunk,
+            focus_line,
+        }) => {
+            if json {
+                #[derive(serde::Serialize)]
+                struct Focus {
+                    file: Option<String>,
+                    hunk: Option<usize>,
+                    line: Option<u32>,
+                }
+                println!(
+                    "{}",
+                    serde_json::to_string(&Focus {
+                        file: focus_file,
+                        hunk: focus_hunk,
+                        line: focus_line,
+                    })?
+                );
+            } else {
+                println!(
+                    "focus: {}",
+                    format_focus(&focus_file, &focus_hunk, &focus_line)
+                );
+            }
+            Ok(())
+        }
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -1035,7 +1230,7 @@ fn run_reload(hash: Option<String>) -> Result<()> {
             println!("ok: session reloaded");
             Ok(())
         }
-        Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
+        Ok(crate::tui::server::ServerReply::Error { message: msg }) => bail!("server error: {msg}"),
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
@@ -1136,8 +1331,18 @@ fn run_review(_hash: Option<String>) -> Result<()> {
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
-fn run_navigate(_target: String, _hash: Option<String>) -> Result<()> {
+fn run_navigate(
+    _target: Option<String>,
+    _next_note: bool,
+    _prev_note: bool,
+    _hash: Option<String>,
+) -> Result<()> {
     bail!("`navigate` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_context(_json: bool, _hash: Option<String>) -> Result<()> {
+    bail!("`context` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
