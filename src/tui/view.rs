@@ -327,6 +327,14 @@ fn split_side_spans(
         vec![(Style::default(), side.text.clone())]
     };
 
+    // Agent attention marks paint the new-side column (Add/Context rows).
+    let runs = match (&file_and_line, side.kind, side.line_no) {
+        (Some((file_idx, _)), DiffLineKind::Add | DiffLineKind::Context, Some(n)) => {
+            apply_highlight_marks(app, runs, *file_idx, Some(n))
+        }
+        _ => runs,
+    };
+
     let mut used = 0usize;
     for (style, text) in runs {
         if used >= width {
@@ -984,6 +992,14 @@ fn stream_row_to_line(
                 hl_runs
             };
 
+            // Agent attention marks (`highlight add`) paint their char range
+            // on top of whatever styling the line already carries.
+            let runs = if matches!(kind, DiffLineKind::Add | DiffLineKind::Context) {
+                apply_highlight_marks(app, runs, file_idx, new_no)
+            } else {
+                runs
+            };
+
             let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 3);
             // Optional line-number gutter: " old new " right-aligned in 5 cols.
             if app.line_numbers_on {
@@ -1523,6 +1539,98 @@ fn word_emphasis_style(
     style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
+/// Background + underline color for an attention-mark tone. Mapped onto
+/// existing theme slots so every palette (flexoki, catppuccin, …) gets a
+/// sensible tone without new per-palette fields.
+fn tone_overlay(theme: &crate::tui::theme::Theme, tone: &str) -> Style {
+    let color = match tone {
+        "danger" => theme.delete,
+        "info" => theme.hunk_header,
+        "accent" => theme.add,
+        // "warning" and anything unrecognized: the active-match gold.
+        _ => theme.match_active_bg,
+    };
+    Style::default()
+        .bg(color)
+        .add_modifier(Modifier::UNDERLINED)
+}
+
+/// Split syntax runs so the char range `[start, end)` (1-based, `end`
+/// exclusive — the indexing `highlight add --start/--end` uses) carries
+/// `overlay`. Chars outside the range keep their style, so syntax
+/// highlighting stays visible around the mark. Multiple marks compose by
+/// calling this once per mark.
+fn overlay_runs_with_range(
+    runs: Vec<(Style, String)>,
+    start: usize,
+    end: usize,
+    overlay: Style,
+) -> Vec<(Style, String)> {
+    // Convert to 0-based half-open [lo, hi) over the line's chars.
+    let lo = start.saturating_sub(1);
+    let hi = end.saturating_sub(1).max(lo);
+    let mut out = Vec::with_capacity(runs.len() + 2);
+    let mut cursor = 0usize; // char index of the next unprocessed char
+    for (style, text) in runs {
+        let len = text.chars().count();
+        let run_lo = cursor;
+        let run_hi = cursor + len;
+        if run_hi <= lo || run_lo >= hi || len == 0 {
+            // No overlap with the marked range.
+            out.push((style, text));
+            cursor = run_hi;
+            continue;
+        }
+        // Overlap: split this run into up to three parts.
+        let chars: Vec<char> = text.chars().collect();
+        let inter_lo = lo.max(run_lo) - run_lo;
+        let inter_hi = hi.min(run_hi) - run_lo;
+        if inter_lo > 0 {
+            out.push((style, chars[..inter_lo].iter().collect()));
+        }
+        if inter_hi > inter_lo {
+            out.push((
+                style.patch(overlay),
+                chars[inter_lo..inter_hi].iter().collect(),
+            ));
+        }
+        if len > inter_hi {
+            out.push((style, chars[inter_hi..].iter().collect()));
+        }
+        cursor = run_hi;
+    }
+    out
+}
+
+/// Apply every attention mark that targets this row (same file + new-side
+/// line). Returns the (possibly re-sliced) runs. No-op when no mark matches.
+fn apply_highlight_marks(
+    app: &App,
+    runs: Vec<(Style, String)>,
+    file_idx: usize,
+    new_no: Option<u32>,
+) -> Vec<(Style, String)> {
+    let Some(line) = new_no else {
+        return runs;
+    };
+    if app.highlights.is_empty() {
+        return runs;
+    }
+    let path = app.review.display_path(file_idx);
+    let mut runs = runs;
+    for mark in &app.highlights {
+        if mark.file == path && mark.line == line {
+            runs = overlay_runs_with_range(
+                runs,
+                mark.start,
+                mark.end,
+                tone_overlay(&app.theme, &mark.tone),
+            );
+        }
+    }
+    runs
+}
+
 /// Truncate a path for the rail display.
 fn short_path(path: &str) -> String {
     if path.len() <= 24 {
@@ -1618,6 +1726,113 @@ mod tests {
         let (plus, minus) = file_stats_tail(0, 0);
         assert!(plus.is_empty());
         assert!(minus.is_empty());
+    }
+
+    // ---- highlight mark overlays ----
+
+    /// Concatenate a run list into a mask: '#' where the char carries the
+    /// given bg, '.' where it doesn't.
+    fn runs_to_mask(runs: &[(Style, String)], bg: Color) -> String {
+        let mut out = String::new();
+        for (style, text) in runs {
+            for _ in text.chars() {
+                out.push(if style.bg == Some(bg) { '#' } else { '.' });
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn overlay_marks_exact_char_range() {
+        let runs = vec![(Style::default(), "let x = 1;".to_string())];
+        let out = overlay_runs_with_range(runs, 5, 10, Style::default().bg(Color::Yellow));
+        // chars 5..=9 ("x = 1") marked, the rest plain
+        assert_eq!(runs_to_mask(&out, Color::Yellow), "....#####.");
+        // text round-trips unchanged
+        let text: String = out.iter().map(|(_, t)| t.clone()).collect();
+        assert_eq!(text, "let x = 1;");
+    }
+
+    #[test]
+    fn overlay_splits_across_syntax_runs() {
+        // Two syntax runs: "abc" + "def" — mark chars 2..5 ("bc" + "d").
+        let runs = vec![
+            (Style::default().fg(Color::Red), "abc".to_string()),
+            (Style::default().fg(Color::Blue), "def".to_string()),
+        ];
+        let out = overlay_runs_with_range(runs, 2, 5, Style::default().bg(Color::Yellow));
+        assert_eq!(runs_to_mask(&out, Color::Yellow), ".###..");
+        // base fg colors survive outside the mark
+        assert_eq!(out[0].0.fg, Some(Color::Red));
+        assert_eq!(out[out.len() - 1].0.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn overlay_out_of_range_and_empty_marks_are_noops() {
+        let runs = vec![(Style::default(), "abc".to_string())];
+        let out = overlay_runs_with_range(runs.clone(), 9, 12, Style::default().bg(Color::Yellow));
+        assert_eq!(runs_to_mask(&out, Color::Yellow), "...");
+        let out = overlay_runs_with_range(runs, 2, 2, Style::default().bg(Color::Yellow));
+        assert_eq!(runs_to_mask(&out, Color::Yellow), "...");
+    }
+
+    #[test]
+    fn overlay_composes_multiple_marks() {
+        let runs = vec![(Style::default(), "abcdef".to_string())];
+        let once = overlay_runs_with_range(runs, 1, 3, Style::default().bg(Color::Yellow));
+        let twice = overlay_runs_with_range(once, 5, 6, Style::default().bg(Color::Red));
+        assert_eq!(runs_to_mask(&twice, Color::Yellow), "##....");
+        assert_eq!(runs_to_mask(&twice, Color::Red), "....#.");
+    }
+
+    #[test]
+    fn highlight_mark_paints_inline_in_the_stream() {
+        // End-to-end: a mark on the +new line renders with the tone's bg on
+        // exactly the marked chars (drawn through the full view pipeline).
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old value here
++new value here
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.highlights.push(crate::tui::app::HighlightMark {
+            id: "hl0".into(),
+            file: "a.rs".into(),
+            line: 1,
+            start: 5, // "value"
+            end: 10,
+            tone: "danger".into(),
+        });
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let danger = app.theme.delete;
+        // Row 3 is the +new line (0 rail/status, 1 file header, 2 hunk
+        // header). The marked word "value" must carry the danger bg; the
+        // unmarked "new" prefix on the same row must not.
+        let mut marked = 0;
+        let mut unmarked = 0;
+        for cell in buf.content().iter().skip(3 * buf.area.width as usize) {
+            if cell.symbol() == " " || cell.symbol().is_empty() {
+                continue;
+            }
+            if cell.bg == danger {
+                marked += 1;
+            } else {
+                unmarked += 1;
+            }
+        }
+        assert_eq!(marked, 5, "exactly the 5 marked chars carry the tone bg");
+        assert!(unmarked > 0, "unmarked chars on the row stay plain");
     }
 
     /// The rail should now render a per-file +/- tally alongside each path.
