@@ -1675,7 +1675,8 @@ impl App {
     /// last note the search continues from the top. The anchor is the last
     /// jumped note while it is still in view, so repeated `}` keeps
     /// advancing even when the viewport clamps at the end of the stream.
-    fn jump_note(&mut self, next: bool) {
+    /// Public for the serve session bridge (`navigate --next-note`).
+    pub fn jump_note(&mut self, next: bool) {
         let rows = self.annotated_rows();
         if rows.is_empty() {
             self.set_info("no notes in this diff");
