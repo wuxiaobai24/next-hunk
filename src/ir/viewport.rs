@@ -480,6 +480,25 @@ impl ViewportQuery {
         None
     }
 
+    /// Which file and 1-based hunk ordinal contains `row` (header *or* body
+    /// line)? Unlike [`Self::locate_hunk`] this also resolves body rows —
+    /// used to report what the human is currently looking at
+    /// (`Info`/`context`). Returns `None` for file-header rows and rows
+    /// outside any hunk.
+    pub fn hunk_containing(review: &Review, row: usize) -> Option<(usize, usize)> {
+        let file_idx = Self::file_at_row(review, row)?;
+        let file = &review.files[file_idx];
+        let mut cur = file.stream_start + 1; // skip file header
+        for (hunk_idx, hunk) in file.hunks.iter().enumerate() {
+            let end = cur + hunk.lines.len(); // header + body rows
+            if row >= cur && row <= end {
+                return Some((file_idx, hunk_idx + 1));
+            }
+            cur = end + 1;
+        }
+        None
+    }
+
     /// Absolute stream row of the code line whose *new-side* source line number
     /// equals `line`, within `file_idx`. Used by `--focus path:line` to scroll
     /// to a specific source line. Walks the file's hunks accumulating the
@@ -768,6 +787,24 @@ diff --git a/c.rs b/c.rs
         assert_eq!(ViewportQuery::locate_hunk(&review, 0), None);
         assert_eq!(ViewportQuery::locate_hunk(&review, 3), None);
         assert_eq!(ViewportQuery::locate_hunk(&review, 999), None);
+    }
+
+    #[test]
+    fn hunk_containing_covers_header_and_body() {
+        let review = multi_hunk_review();
+        // same fixture: file0 hunk1 = rows 1..=4 (header 1, body 2-4),
+        // file0 hunk2 = rows 5..=8, file1 hunk1 = rows 10..=12, hunk2 = 13..=15
+        assert_eq!(ViewportQuery::hunk_containing(&review, 1), Some((0, 1)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 3), Some((0, 1)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 4), Some((0, 1)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 5), Some((0, 2)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 8), Some((0, 2)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 11), Some((1, 1)));
+        assert_eq!(ViewportQuery::hunk_containing(&review, 15), Some((1, 2)));
+        // file-header rows and out-of-range rows resolve to nothing
+        assert_eq!(ViewportQuery::hunk_containing(&review, 0), None);
+        assert_eq!(ViewportQuery::hunk_containing(&review, 9), None);
+        assert_eq!(ViewportQuery::hunk_containing(&review, 999), None);
     }
 
     // ---- row_line_numbers ----

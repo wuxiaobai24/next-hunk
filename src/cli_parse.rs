@@ -119,35 +119,98 @@ pub fn parse_note(spec: &str) -> Result<Note> {
     }
 }
 
-/// Compute the Unix socket path a `serve` process should bind for `repo_root`.
-///
-/// Path is deterministic per repo so that a `push`/`decision` CLI process in
-/// the same repo finds the same socket without an explicit `--socket` flag:
-/// `$XDG_RUNTIME_DIR/next-hunk-<hash>.sock` (fallback `/tmp/next-hunk-<hash>-<uid>.sock`
-/// when `XDG_RUNTIME_DIR` is unset, mirroring config.rs's manual env resolution).
-/// `<hash>` is a stable `DefaultHasher` of the canonical repo root — good enough
-/// to disambiguate repos without pulling in a hashing crate.
-pub fn runtime_socket_path(repo_root: &Path) -> PathBuf {
+/// Stable per-repo hash used in socket names: a `DefaultHasher` of the
+/// canonical repo root. Session ids start with this hash, so discovery can
+/// filter by repo.
+pub fn repo_socket_hash(repo_root: &Path) -> String {
     let mut hasher = DefaultHasher::new();
     repo_root.hash(&mut hasher);
-    let hash = format!("{:016x}", hasher.finish());
-    let name = format!("next-hunk-{hash}.sock");
+    format!("{:016x}", hasher.finish())
+}
+
+/// Stable per-repo socket-name prefix: `next-hunk-<hash>`. Every session
+/// socket for that repo starts with this prefix.
+pub fn repo_socket_prefix(repo_root: &Path) -> String {
+    format!("next-hunk-{}", repo_socket_hash(repo_root))
+}
+
+/// Compute the Unix socket path a session TUI should bind for `repo_root`.
+///
+/// Every interactive review (`diff`, `show`, `serve`) binds one socket, so a
+/// CLI process in the same repo can discover and drive it. The name is
+/// `<repo prefix>-<pid>.sock` — deterministic per repo (so clients can filter
+/// by repo) but unique per process (so several reviews of one repo coexist):
+/// `$XDG_RUNTIME_DIR/next-hunk-<hash>-<pid>.sock` (fallback
+/// `/tmp/next-hunk-<hash>-<pid>.sock` when `XDG_RUNTIME_DIR` is unset,
+/// mirroring config.rs's manual env resolution).
+pub fn session_socket_path(repo_root: &Path) -> PathBuf {
+    let name = format!(
+        "{}-{}.sock",
+        repo_socket_prefix(repo_root),
+        std::process::id()
+    );
     if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
         if !xdg.is_empty() {
             return PathBuf::from(xdg).join(name);
         }
     }
-    // Fallback: /tmp keyed only by the repo hash. The hash already disambiguates
-    // repos; multi-user same-repo collisions on a shared host are rare and
-    // handled by the stale-socket probe in ServerListener::spawn. Keeping the
-    // path deterministic in repo_root alone is what lets a `push`/`decision`
-    // process in the same repo find the socket.
-    PathBuf::from(format!("/tmp/next-hunk-{hash}.sock"))
+    // Fallback: /tmp keyed by the repo hash + pid. The repo hash disambiguates
+    // repos; the pid disambiguates concurrent sessions. Multi-user same-repo
+    // collisions on a shared host are rare and handled by the stale-socket
+    // probe in ServerListener::spawn.
+    PathBuf::from(format!("/tmp/{name}"))
 }
 
-/// Discover live next-hunk server sockets by scanning well-known runtime
-/// directories. Returns a list of `(socket_path, repo_hash)` pairs for sockets
-/// where a connect succeeds (i.e. a live server is running).
+/// Extract the session id from a socket file name: the part between the
+/// `next-hunk-` prefix and the `.sock` suffix — `<hash>` (legacy serve
+/// sockets) or `<hash>-<pid>` (per-process sessions). The id is what
+/// `--hash` accepts and `list` prints.
+pub fn parse_session_id(socket_name: &str) -> Option<String> {
+    socket_name
+        .strip_prefix("next-hunk-")
+        .and_then(|s| s.strip_suffix(".sock"))
+        .map(|s| s.to_string())
+}
+
+/// Remove leftover `next-hunk-*.sock` files that no longer host a live
+/// session. Called before binding a new session socket: a TUI killed by
+/// SIGHUP/SIGKILL (terminal closed, tmux pane killed) runs no `Drop`, and a
+/// pid-suffixed path is never reused, so without a sweep the runtime dir
+/// accumulates dead sockets until reboot. Live sockets (connect succeeds)
+/// are left alone.
+#[cfg(all(feature = "serve", unix))]
+pub fn sweep_stale_sockets() {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        if !xdg.is_empty() {
+            dirs.push(PathBuf::from(xdg));
+        }
+    }
+    dirs.push(PathBuf::from("/tmp"));
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            if parse_session_id(name).is_none() {
+                continue;
+            }
+            let path = entry.path();
+            if std::os::unix::net::UnixStream::connect(&path).is_err() {
+                // dead socket file (not a socket, or no listener) — reclaim
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// Discover live next-hunk session sockets by scanning well-known runtime
+/// directories. Returns a list of `(socket_path, session_id)` pairs for
+/// sockets where a connect succeeds (i.e. a live session is running).
 #[cfg(all(feature = "serve", unix))]
 pub fn discover_live_sockets() -> Vec<(PathBuf, String)> {
     let mut candidates = Vec::new();
@@ -156,13 +219,9 @@ pub fn discover_live_sockets() -> Vec<(PathBuf, String)> {
         if !xdg.is_empty() {
             if let Ok(entries) = std::fs::read_dir(&xdg) {
                 for entry in entries.flatten() {
-                    let name = entry.file_name();
-                    if let Some(name) = name.to_str() {
-                        if let Some(hash) = name
-                            .strip_prefix("next-hunk-")
-                            .and_then(|s| s.strip_suffix(".sock"))
-                        {
-                            candidates.push((entry.path(), hash.to_string()));
+                    if let Some(name) = entry.file_name().to_str() {
+                        if let Some(id) = parse_session_id(name) {
+                            candidates.push((entry.path(), id));
                         }
                     }
                 }
@@ -172,27 +231,28 @@ pub fn discover_live_sockets() -> Vec<(PathBuf, String)> {
     // Also scan /tmp for next-hunk-*.sock files.
     if let Ok(entries) = std::fs::read_dir("/tmp") {
         for entry in entries.flatten() {
-            let name = entry.file_name();
-            if let Some(name) = name.to_str() {
-                if let Some(hash) = name
-                    .strip_prefix("next-hunk-")
-                    .and_then(|s| s.strip_suffix(".sock"))
-                {
-                    candidates.push((entry.path(), hash.to_string()));
+            if let Some(name) = entry.file_name().to_str() {
+                if let Some(id) = parse_session_id(name) {
+                    candidates.push((entry.path(), id));
                 }
             }
         }
     }
-    // Deduplicate by hash (prefer XDG path over /tmp).
+    // Deduplicate by full socket name (the same socket can appear in both
+    // scans when XDG_RUNTIME_DIR points into /tmp); prefer the XDG path.
     let mut seen = std::collections::HashSet::new();
     let mut live = Vec::new();
-    for (path, hash) in candidates {
-        if !seen.insert(hash.clone()) {
+    for (path, id) in candidates {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if !seen.insert(name) {
             continue;
         }
         // Probe: is the socket live?
         if std::os::unix::net::UnixStream::connect(&path).is_ok() {
-            live.push((path, hash));
+            live.push((path, id));
         }
     }
     live
@@ -299,9 +359,9 @@ mod tests {
         assert!(parse_note("a.rs=text").is_err());
     }
 
-    // ---- runtime_socket_path ----
+    // ---- session_socket_path ----
 
-    // `runtime_socket_path` reads the process-global XDG_RUNTIME_DIR, so tests
+    // `session_socket_path` reads the process-global XDG_RUNTIME_DIR, so tests
     // that touch it race under parallel execution. Every test in this group
     // takes this lock to get a consistent view of the environment.
     static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -309,17 +369,17 @@ mod tests {
     #[test]
     fn socket_path_is_deterministic_per_repo() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        // Same repo root → same path (so push/decision can find the server).
-        let a = runtime_socket_path(Path::new("/repo/one"));
-        let b = runtime_socket_path(Path::new("/repo/one"));
+        // Same repo root → same path (so clients can filter by repo prefix).
+        let a = session_socket_path(Path::new("/repo/one"));
+        let b = session_socket_path(Path::new("/repo/one"));
         assert_eq!(a, b);
     }
 
     #[test]
     fn socket_path_differs_across_repos() {
         let _guard = ENV_MUTEX.lock().unwrap();
-        let a = runtime_socket_path(Path::new("/repo/one"));
-        let b = runtime_socket_path(Path::new("/repo/two"));
+        let a = session_socket_path(Path::new("/repo/one"));
+        let b = session_socket_path(Path::new("/repo/two"));
         assert_ne!(a, b);
     }
 
@@ -328,7 +388,7 @@ mod tests {
         let _guard = ENV_MUTEX.lock().unwrap();
         // When XDG_RUNTIME_DIR is set, the socket lands there (not /tmp).
         std::env::set_var("XDG_RUNTIME_DIR", "/tmp/xdg-test-fixture");
-        let path = runtime_socket_path(Path::new("/repo/x"));
+        let path = session_socket_path(Path::new("/repo/x"));
         std::env::remove_var("XDG_RUNTIME_DIR");
         assert!(
             path.starts_with("/tmp/xdg-test-fixture"),
@@ -338,18 +398,46 @@ mod tests {
     }
 
     #[test]
-    fn socket_path_filename_contains_next_hunk() {
+    fn socket_path_filename_contains_repo_prefix_and_pid() {
         let _guard = ENV_MUTEX.lock().unwrap();
         std::env::remove_var("XDG_RUNTIME_DIR");
-        let path = runtime_socket_path(Path::new("/repo/y"));
+        let path = session_socket_path(Path::new("/repo/y"));
         let name = path
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or_default();
+        let expected_tail = format!("-{}.sock", std::process::id());
         assert!(
-            name.starts_with("next-hunk-") && name.ends_with(".sock"),
-            "expected next-hunk-*.sock filename, got {name}"
+            name.starts_with("next-hunk-") && name.ends_with(&expected_tail),
+            "expected next-hunk-<hash>-<pid>.sock filename, got {name}"
         );
+        // the session id (between prefix and suffix) is parseable back out
+        let id = parse_session_id(name).expect("parse session id");
+        assert_eq!(
+            id,
+            name.strip_prefix("next-hunk-")
+                .unwrap()
+                .strip_suffix(".sock")
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn parse_session_id_accepts_and_rejects() {
+        // new per-process sessions: <hash>-<pid>
+        assert_eq!(
+            parse_session_id("next-hunk-131e603184455fa7-1234.sock"),
+            Some("131e603184455fa7-1234".into())
+        );
+        // legacy serve sockets: <hash> only
+        assert_eq!(
+            parse_session_id("next-hunk-131e603184455fa7.sock"),
+            Some("131e603184455fa7".into())
+        );
+        // unrelated names
+        assert_eq!(parse_session_id("next-hunk.sock"), None);
+        assert_eq!(parse_session_id("other-1.sock"), None);
+        assert_eq!(parse_session_id("next-hunk-1.txt"), None);
     }
 
     #[cfg(all(feature = "serve", unix))]
@@ -359,8 +447,8 @@ mod tests {
         let sessions = discover_live_sockets();
         // May return empty or find unrelated sockets; at minimum it shouldn't panic.
         assert!(
-            sessions.iter().all(|(_, h)| h.len() == 16),
-            "all hashes should be 16-char hex strings"
+            sessions.iter().all(|(_, h)| h.len() >= 16),
+            "all ids should carry a 16-char repo hash, got {sessions:?}"
         );
     }
 }

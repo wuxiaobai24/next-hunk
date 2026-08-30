@@ -41,9 +41,10 @@ type Tui = Terminal<CrosstermBackend<Stdout>>;
 /// touching the terminal from a background thread.
 pub type Reloader = Box<dyn FnMut() -> Result<String>>;
 
-/// Agent-bridge options threaded from the CLI into the run loop. All fields are
-/// optional/empty by default, so callers that don't care about the agent
-/// features (`--focus` / `--note` / `--select`) construct `ReviewOptions::default()`.
+/// Agent-bridge + run options threaded from the CLI into the run loop. All
+/// fields are optional/empty by default, so callers that don't care about the
+/// agent features (`--focus` / `--note` / `--select`) or sessions construct
+/// `ReviewOptions::default()`.
 #[derive(Debug, Default, Clone)]
 pub struct ReviewOptions {
     /// `--focus`: scroll here on startup.
@@ -52,6 +53,16 @@ pub struct ReviewOptions {
     pub notes: Vec<app::Note>,
     /// `--select`: enable the per-hunk accept/reject gate; emit JSON on quit.
     pub select_mode: bool,
+    /// Session metadata for the agent control plane: how this review was
+    /// launched (`"diff"` / `"show"` / `"serve"`), reported by `Info`.
+    /// Empty means no session was attached (patch/pager/filediff).
+    pub session_mode: String,
+    /// Short human-readable session title (e.g. `demo working tree`).
+    pub session_title: String,
+    /// `--watch`: start the filesystem watcher (live reload). Distinct from
+    /// the presence of a reloader — every session keeps a reloader so
+    /// `next-hunk reload` works, but only `--watch` polls the filesystem.
+    pub watch: bool,
 }
 
 /// The server-listener handle threaded into the run loop, or `()` on builds
@@ -156,6 +167,9 @@ pub fn run_review_tui(
     app.focus_target = options.focus;
     app.notes = options.notes;
     app.select_mode = options.select_mode;
+    app.repo_root = workdir.as_ref().map(|p| p.display().to_string());
+    app.session_mode = options.session_mode.clone();
+    app.session_title = options.session_title.clone();
     app.apply_focus();
     // Background highlight worker: viewport misses enqueue; main loop drains.
     let hl_worker = crate::highlight::HighlightWorker::spawn();
@@ -167,6 +181,7 @@ pub fn run_review_tui(
         workdir,
         server.as_ref(),
         Some(hl_worker),
+        options.watch,
     )
 }
 
@@ -177,11 +192,14 @@ fn run_loop(
     workdir: Option<PathBuf>,
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
+    watch_enabled: bool,
 ) -> Result<Selections> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
     // that case we keep running without live reload and surface a status note.
-    let watcher: Option<Watcher> = if reloader.is_some() {
+    // Every attached session keeps a reloader (so `next-hunk reload` works),
+    // but only `--watch` actually polls the filesystem.
+    let watcher: Option<Watcher> = if reloader.is_some() && watch_enabled {
         match Watcher::spawn(&std::env::current_dir().unwrap_or_default()) {
             Ok(w) => {
                 app.watch_mode = true;
@@ -196,9 +214,9 @@ fn run_loop(
     } else {
         None
     };
-    // Surface the run mode as a status-bar badge. `select_mode` is already set
-    // by the CLI before entering the loop.
-    app.serve_mode = server.is_some();
+    // Surface the run mode as a status-bar badge. `serve` keeps its dedicated
+    // badge; plain `diff`/`show` sessions listen too but stay visually quiet.
+    app.serve_mode = server.is_some() && app.session_mode == "serve";
     let mut last_event: Option<Instant> = None;
 
     loop {
@@ -377,16 +395,33 @@ fn apply_server_command(
             ServerReply::Decisions(app.selections())
         }
         ServerCommand::Info => {
-            // Return basic session metadata.
+            // Return session metadata (real repo root, launch mode, focus).
+            let (focus_file, focus_hunk, focus_line) = app.current_focus();
             ServerReply::Info {
-                repo_path: app
-                    .review
-                    .files
-                    .first()
-                    .and_then(|f| f.new_path.clone())
-                    .or_else(|| app.review.files.first().and_then(|f| f.old_path.clone()))
-                    .unwrap_or_default(),
+                repo_root: app.repo_root.clone().unwrap_or_default(),
                 file_count: app.review.file_count(),
+                pid: std::process::id(),
+                mode: if app.session_mode.is_empty() {
+                    "review".to_string()
+                } else {
+                    app.session_mode.clone()
+                },
+                title: if app.session_title.is_empty() {
+                    app.repo_root.clone().unwrap_or_default()
+                } else {
+                    app.session_title.clone()
+                },
+                focus_file,
+                focus_hunk,
+                focus_line,
+            }
+        }
+        ServerCommand::Context => {
+            let (focus_file, focus_hunk, focus_line) = app.current_focus();
+            ServerReply::Context {
+                focus_file,
+                focus_hunk,
+                focus_line,
             }
         }
         ServerCommand::Review => {
@@ -1394,6 +1429,60 @@ diff --git a/a.rs b/a.rs
             "comment removed"
         );
         assert!(app.notes.is_empty(), "paired note row removed too");
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn info_reports_session_meta_and_focus() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        app.repo_root = Some("/tmp/demo".into());
+        app.session_mode = "diff".into();
+        app.session_title = "demo working tree".into();
+        // cursor on the +new row (stream row 3, new-side line 1)
+        app.set_cursor(3);
+        match apply_server_command(&mut app, ServerCommand::Info, None) {
+            crate::tui::server::ServerReply::Info {
+                repo_root,
+                file_count,
+                mode,
+                title,
+                focus_file,
+                focus_hunk,
+                focus_line,
+                ..
+            } => {
+                assert_eq!(repo_root, "/tmp/demo");
+                assert_eq!(file_count, 1);
+                assert_eq!(mode, "diff");
+                assert_eq!(title, "demo working tree");
+                assert_eq!(focus_file.as_deref(), Some("a.rs"));
+                assert_eq!(focus_hunk, Some(1));
+                assert_eq!(focus_line, Some(1));
+            }
+            other => panic!("expected Info, got {other:?}"),
+        }
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn context_reports_cursor_focus() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        // hunk header row (stream row 1): file known, hunk known, no line
+        app.set_cursor(1);
+        match apply_server_command(&mut app, ServerCommand::Context, None) {
+            crate::tui::server::ServerReply::Context {
+                focus_file,
+                focus_hunk,
+                focus_line,
+            } => {
+                assert_eq!(focus_file.as_deref(), Some("a.rs"));
+                assert_eq!(focus_hunk, Some(1));
+                assert_eq!(focus_line, None, "hunk header carries no line number");
+            }
+            other => panic!("expected Context, got {other:?}"),
+        }
     }
 
     #[test]
