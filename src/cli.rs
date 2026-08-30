@@ -386,6 +386,7 @@ fn run() -> Result<()> {
                 resolved.context_collapse,
                 resolved.theme,
                 resolved.layout,
+                resolved.cursor_line,
                 Some(repo),
                 ReviewOptions {
                     focus: focus_target,
@@ -415,6 +416,10 @@ fn run() -> Result<()> {
                     .as_deref()
                     .map(crate::config::LayoutMode::parse_str)
                     .unwrap_or_default(),
+                cfg.cursor_line
+                    .as_deref()
+                    .map(|v| v != "off" && v != "false")
+                    .unwrap_or(true),
                 Some(repo),
                 ReviewOptions::default(),
                 None,
@@ -437,6 +442,10 @@ fn run() -> Result<()> {
                     .as_deref()
                     .map(crate::config::LayoutMode::parse_str)
                     .unwrap_or_default(),
+                cfg.cursor_line
+                    .as_deref()
+                    .map(|v| v != "off" && v != "false")
+                    .unwrap_or(true),
                 None,
                 ReviewOptions::default(),
                 None,
@@ -459,6 +468,7 @@ fn run() -> Result<()> {
                 crate::config::DEFAULT_CONTEXT_COLLAPSE,
                 None,
                 LayoutMode::Unified,
+                true,
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
@@ -509,6 +519,10 @@ fn run() -> Result<()> {
                     .as_deref()
                     .map(crate::config::LayoutMode::parse_str)
                     .unwrap_or_default(),
+                cfg.cursor_line
+                    .as_deref()
+                    .map(|v| v != "off" && v != "false")
+                    .unwrap_or(true),
                 workdir,
                 ReviewOptions::default(),
                 None,
@@ -652,6 +666,7 @@ fn run_serve(
         resolved.context_collapse,
         resolved.theme,
         resolved.layout,
+        resolved.cursor_line,
         Some(repo),
         ReviewOptions {
             focus: focus_target,
@@ -1018,6 +1033,7 @@ fn open_review_from_text(
     context_collapse: usize,
     theme: Option<String>,
     layout: crate::config::LayoutMode,
+    cursor_line: bool,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<crate::tui::ServerArg>,
@@ -1051,6 +1067,7 @@ fn open_review_from_text(
         context_collapse,
         theme,
         layout,
+        cursor_line,
         workdir,
         options,
         server,

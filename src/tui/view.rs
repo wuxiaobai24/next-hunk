@@ -192,9 +192,15 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
     let per_side = (area.width as usize).saturating_sub(2 * (GUTTER + 1) + 3) / 2;
 
     let title = app.current_path().to_string();
+    let cursor_row = if app.cursor_on {
+        Some(app.cursor_stream_row())
+    } else {
+        None
+    };
     let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
     for r in owned_rows {
         let abs_row = owned_row_abs(&r);
+        let is_cursor = cursor_row == Some(abs_row);
         let notes = notes_by_row.get(&abs_row);
         match r {
             OwnedRow::Pair { old, new, .. } => {
@@ -218,7 +224,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                 // pair's notes always take the full-width fallback row.
                 push_line_with_note_fallback(
                     &mut lines,
-                    Line::from(spans),
+                    style_cursor(Line::from(spans), is_cursor, app.theme.cursor_bg),
                     false,
                     notes,
                     app.theme.note,
@@ -227,6 +233,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
             other => {
                 // Full-width rows (headers) can host an inline annotation.
                 let line = stream_row_to_line(app, other, current_match_row, &match_rows);
+                let line = style_cursor(line, is_cursor, app.theme.cursor_bg);
                 let (line, inline_ok) = match notes {
                     Some(notes) => {
                         append_inline_notes(line, notes, area.width as usize, app.theme.note)
@@ -391,6 +398,11 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     let notes_by_row = build_notes_by_row(&app.review, &app.notes);
 
     let title = app.current_path().to_string();
+    let cursor_row = if app.cursor_on {
+        Some(app.cursor_stream_row())
+    } else {
+        None
+    };
     let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
     for r in owned_rows {
         let abs_row = owned_row_abs(&r);
@@ -401,6 +413,11 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
             notes_by_row.get(&abs_row)
         };
         let line = stream_row_to_line(app, r, current_match_row, &match_rows);
+        let line = style_cursor(
+            line,
+            !is_marker && cursor_row == Some(abs_row),
+            app.theme.cursor_bg,
+        );
         // Markers share an abs_row with the following real row; only the
         // real row carries the note. With wrapping on there is no meaningful
         // "rest of the row", so notes always take the fallback row.
@@ -455,6 +472,11 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
 
     let notes_by_row = build_notes_by_row(&app.review, &app.notes);
 
+    let cursor_row = if app.cursor_on {
+        Some(app.cursor_stream_row())
+    } else {
+        None
+    };
     let mut lines: Vec<Line> = Vec::new();
     // Group rows by file to produce old/new blocks per file.
     let mut file_rows: Vec<(usize, Vec<OwnedRow>)> = Vec::new();
@@ -531,7 +553,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                 // they annotate — same convention as the other layouts.
                 push_line_with_note_fallback(
                     &mut lines,
-                    line,
+                    style_cursor(line, cursor_row == Some(*abs_row), app.theme.cursor_bg),
                     false,
                     notes_by_row.get(abs_row),
                     app.theme.note,
@@ -575,7 +597,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                 );
                 push_line_with_note_fallback(
                     &mut lines,
-                    line,
+                    style_cursor(line, cursor_row == Some(*abs_row), app.theme.cursor_bg),
                     false,
                     notes_by_row.get(abs_row),
                     app.theme.note,
@@ -621,6 +643,18 @@ fn build_notes_by_row(
         }
     }
     out
+}
+
+/// Apply the review-cursor row background to a rendered line. Callers pass
+/// `is_cursor` only for real rows (markers alias the following row's
+/// `abs_row`). Span-level backgrounds (the active search match) still win,
+/// which is the desired precedence: the match highlight is more informative.
+fn style_cursor(line: Line<'static>, is_cursor: bool, cursor_bg: Color) -> Line<'static> {
+    if is_cursor {
+        line.style(Style::default().bg(cursor_bg))
+    } else {
+        line
+    }
 }
 
 /// Try to place a row's notes as a right-aligned inline annotation
@@ -1174,7 +1208,7 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_widget(para, area);
 }
 
-/// Render the help line, or an input prompt when editing search/filter.
+/// Render the help line, or an input prompt when editing search/filter/notes.
 fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     let content = match app.mode {
         InputMode::Search => {
@@ -1189,14 +1223,20 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                 app.path_filter
             )
         }
+        InputMode::Note => {
+            format!(
+                "note: {}▌  (anchored to the cursor row · Enter save · Esc cancel)",
+                app.note_draft
+            )
+        }
         InputMode::Normal => {
             // In `--select` mode the decision keys (a/r/u) are the primary
             // actions, so lead with them — the long base cheatsheet would push
             // them to the tail, where narrow-terminal truncation hides them.
             if app.select_mode {
-                " a accept · r reject · u undecided · ]h/[h hunk · j/k scroll · / search · ? help · q quit ".to_string()
+                " a accept · r reject · u undecided · ]h/[h hunk · j/k cursor · c note · / search · ? help · q quit ".to_string()
             } else {
-                " j/k scroll · J/K half-page · g/G top/bottom · ]h/[h hunk · SPC next hunk · zc/zo fold · zx ctx · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
+                " j/k cursor · J/K half-page · g/G top/bottom · ]h/[h hunk · }/{ note · c note here · zc/zo fold · zx ctx · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
             }
         }
     };
@@ -1261,12 +1301,12 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
         &mut lines,
         "Navigation",
         &[
-            ("j / ↓", "scroll down one row"),
-            ("k / ↑", "scroll up one row"),
-            ("J / PgDn", "scroll half a page"),
-            ("K / PgUp", "scroll half a page up"),
-            ("Ctrl-D / Ctrl-U", "scroll half a page down / up"),
-            ("Ctrl-F / Ctrl-B", "scroll a full page down / up"),
+            ("j / ↓", "cursor down one row"),
+            ("k / ↑", "cursor up one row"),
+            ("J / PgDn", "cursor half a page"),
+            ("K / PgUp", "cursor half a page up"),
+            ("Ctrl-D / Ctrl-U", "cursor half a page down / up"),
+            ("Ctrl-F / Ctrl-B", "cursor a full page down / up"),
             ("g / Home", "jump to top"),
             ("G / End", "jump to bottom"),
             ("]h / [h", "next / previous hunk (wraps files)"),
@@ -1276,7 +1316,8 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("BackTab / h", "previous file"),
             ("1-9", "jump to the Nth file"),
             ("b", "toggle file rail"),
-            ("o", "open focused line in $EDITOR"),
+            ("c", "add a note at the cursor row"),
+            ("o", "open cursor line in $EDITOR"),
         ],
         head,
         key,
