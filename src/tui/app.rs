@@ -289,6 +289,13 @@ pub struct App {
     pub layout_mode: LayoutMode,
     /// Agent comments (separate from --note annotations).
     pub comments: Vec<CommentEntry>,
+    /// Comment ids already converted into `notes` by `comment apply`.
+    /// Prevents duplicate note rows when apply runs more than once.
+    pub applied_comments: std::collections::HashSet<String>,
+    /// Stream row of the last `}`/`{` note jump, while it is still in view.
+    /// Anchors repeated jumps so `}` keeps advancing near the clamped end of
+    /// the stream instead of re-finding the same row.
+    pub last_note_jump: Option<usize>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -331,6 +338,23 @@ pub enum NoteTarget {
 pub struct Note {
     pub target: NoteTarget,
     pub text: String,
+}
+
+/// Resolve a note target to the absolute stream row it attaches to.
+/// `None` for banner notes (they live in the status bar) and for targets
+/// whose file/line/hunk no longer exists after a reload.
+pub fn note_stream_row(review: &Review, target: &NoteTarget) -> Option<usize> {
+    match target {
+        NoteTarget::Line { path, line } => ViewportQuery::file_index_for_path(review, path)
+            .and_then(|idx| ViewportQuery::row_for_new_line(review, idx, *line)),
+        NoteTarget::Hunk { path, hunk } => {
+            // CLI hunk ordinals are 1-based; storage is 0-based.
+            let hunk0 = hunk.saturating_sub(1);
+            ViewportQuery::file_index_for_path(review, path)
+                .and_then(|idx| ViewportQuery::hunk_start_row(review, idx, hunk0))
+        }
+        NoteTarget::Banner => None,
+    }
 }
 
 /// A comment entry in the session. Defined here (not in server.rs) so it's
@@ -438,6 +462,8 @@ impl App {
             serve_mode: false,
             decisions: std::collections::HashMap::new(),
             comments: Vec::new(),
+            applied_comments: std::collections::HashSet::new(),
+            last_note_jump: None,
             folded: HashSet::new(),
             collapse,
             collapse_on: true,
@@ -961,6 +987,13 @@ impl App {
             KeyCode::Char(' ') => {
                 self.jump_hunk(true);
             }
+            // next / previous annotated row (a line or hunk carrying a note)
+            KeyCode::Char('}') => {
+                self.jump_note(true);
+            }
+            KeyCode::Char('{') => {
+                self.jump_note(false);
+            }
             // toggle highlight
             KeyCode::Char('H') => {
                 self.highlight_on = !self.highlight_on;
@@ -1420,6 +1453,77 @@ impl App {
             None => {
                 self.set_error("no hunks to jump to");
             }
+        }
+    }
+
+    /// Sorted, deduplicated stream rows that carry notes (`--note`
+    /// annotations and applied serve comments). These are the `}`/`{` jump
+    /// targets and the source of the rail's per-file 💬 badges.
+    pub fn annotated_rows(&self) -> Vec<usize> {
+        let mut rows: Vec<usize> = self
+            .notes
+            .iter()
+            .filter_map(|n| note_stream_row(&self.review, &n.target))
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        rows
+    }
+
+    /// Per-file note counts for the rail's 💬 badge. Banner notes and targets
+    /// on unknown files are skipped.
+    pub fn note_counts_by_file(&self) -> std::collections::HashMap<usize, usize> {
+        let mut out = std::collections::HashMap::new();
+        for note in &self.notes {
+            let idx = match &note.target {
+                NoteTarget::Line { path, .. } | NoteTarget::Hunk { path, .. } => {
+                    ViewportQuery::file_index_for_path(&self.review, path)
+                }
+                NoteTarget::Banner => None,
+            };
+            if let Some(idx) = idx {
+                *out.entry(idx).or_insert(0) += 1;
+            }
+        }
+        out
+    }
+
+    /// Jump to the next (`}`) / previous (`{`) annotated row — a code line or
+    /// hunk header carrying a note. Wraps around (mirroring `]h`): past the
+    /// last note the search continues from the top. The anchor is the last
+    /// jumped note while it is still in view, so repeated `}` keeps
+    /// advancing even when the viewport clamps at the end of the stream.
+    fn jump_note(&mut self, next: bool) {
+        let rows = self.annotated_rows();
+        if rows.is_empty() {
+            self.set_info("no notes in this diff");
+            return;
+        }
+        let scroll_anchor = self.collapse.stream_at_virtual(self.scroll_y);
+        let anchor = match self.last_note_jump {
+            Some(r)
+                if {
+                    let v = self.collapse.virtual_of_stream(r);
+                    v >= self.scroll_y && v < self.scroll_y + self.viewport_height
+                } =>
+            {
+                r
+            }
+            _ => scroll_anchor,
+        };
+        let hit = if next {
+            rows.iter().find(|&&r| r > anchor).or_else(|| rows.first())
+        } else {
+            rows.iter()
+                .rev()
+                .find(|&&r| r < anchor)
+                .or_else(|| rows.last())
+        };
+        if let Some(&row) = hit {
+            let ordinal = rows.iter().position(|&r| r == row).map_or(0, |i| i + 1);
+            self.jump_to_stream(row);
+            self.last_note_jump = Some(row);
+            self.set_info(format!("💬 note {ordinal}/{}", rows.len()));
         }
     }
 

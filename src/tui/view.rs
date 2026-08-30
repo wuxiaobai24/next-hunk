@@ -76,7 +76,9 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
 }
 
 fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
+    use unicode_width::UnicodeWidthStr;
     let visible = app.visible_files();
+    let note_counts = app.note_counts_by_file();
     // Inner width available for a rail row, minus the left border and the
     // " N " index prefix. Used to pad the path so the +/- tail right-aligns.
     let rail_inner_w = area.width.saturating_sub(1) as usize;
@@ -99,17 +101,27 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             // where the change mass sits.
             let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
             let head = format!(" {}. ", i + 1);
+            // Note badge: how many agent notes/comments target this file
+            // (jump between them with `}`/`{`).
+            let badge = match note_counts.get(&i) {
+                Some(&n) if n > 0 => format!(" 💬{n}"),
+                _ => String::new(),
+            };
             // Pad the path so the tally right-aligns within the row. Count
-            // widths before moving the strings into Spans below.
+            // widths before moving the strings into Spans below. The badge
+            // is measured with unicode-width (💬 is double-width).
             let tail = format!("  {}{}", plus, minus);
-            let need_pad = !plus.is_empty() || !minus.is_empty();
+            let need_pad = !plus.is_empty() || !minus.is_empty() || !badge.is_empty();
             let used = head.chars().count() + path.chars().count();
             let mut spans: Vec<Span> = vec![Span::styled(head, style), Span::styled(path, style)];
             if need_pad {
-                let pad = rail_inner_w.saturating_sub(used + tail.chars().count());
+                let pad = rail_inner_w.saturating_sub(used + tail.chars().count() + badge.width());
                 spans.push(Span::raw(" ".repeat(pad)));
                 spans.push(Span::styled(plus, Style::default().fg(app.theme.add)));
                 spans.push(Span::styled(minus, Style::default().fg(app.theme.delete)));
+                if !badge.is_empty() {
+                    spans.push(Span::styled(badge, Style::default().fg(app.theme.note)));
+                }
             }
             ListItem::new(Line::from(spans))
         })
@@ -183,6 +195,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
     let mut lines: Vec<Line> = Vec::with_capacity(owned_rows.len());
     for r in owned_rows {
         let abs_row = owned_row_abs(&r);
+        let notes = notes_by_row.get(&abs_row);
         match r {
             OwnedRow::Pair { old, new, .. } => {
                 let mut spans: Vec<Span> = Vec::with_capacity(8);
@@ -201,26 +214,26 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                     current_match_row,
                     &match_rows,
                 ));
-                lines.push(Line::from(spans));
+                // Pair columns are width-exact (padded to per_side), so a
+                // pair's notes always take the full-width fallback row.
+                push_line_with_note_fallback(
+                    &mut lines,
+                    Line::from(spans),
+                    false,
+                    notes,
+                    app.theme.note,
+                );
             }
             other => {
-                lines.push(stream_row_to_line(
-                    app,
-                    other,
-                    current_match_row,
-                    &match_rows,
-                ));
-            }
-        }
-        // Note fan-out spans both columns (keyed on the pair's stream row).
-        if let Some(notes) = notes_by_row.get(&abs_row) {
-            for text in notes {
-                lines.push(Line::from(Span::styled(
-                    format!("  💬 {}", text),
-                    Style::default()
-                        .fg(app.theme.note)
-                        .add_modifier(Modifier::ITALIC),
-                )));
+                // Full-width rows (headers) can host an inline annotation.
+                let line = stream_row_to_line(app, other, current_match_row, &match_rows);
+                let (line, inline_ok) = match notes {
+                    Some(notes) => {
+                        append_inline_notes(line, notes, area.width as usize, app.theme.note)
+                    }
+                    None => (line, false),
+                };
+                push_line_with_note_fallback(&mut lines, line, inline_ok, notes, app.theme.note);
             }
         }
     }
@@ -371,9 +384,10 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     };
 
     // Build a lookup of agent notes keyed by the absolute stream row they
-    // attach to (line-level and hunk-level). Rendered as extra rows below
-    // the target via a viewport fan-out — does NOT touch `stream_len`, so scroll /
-    // search / hunk-jump indices stay stable.
+    // attach to (line-level and hunk-level). Notes render as a right-aligned
+    // inline annotation on the target row when there's room (wrap off), and
+    // fall back to a dedicated row below — neither touches `stream_len`, so
+    // scroll / search / hunk-jump indices stay stable.
     let notes_by_row = build_notes_by_row(&app.review, &app.notes);
 
     let title = app.current_path().to_string();
@@ -381,22 +395,22 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
     for r in owned_rows {
         let abs_row = owned_row_abs(&r);
         let is_marker = matches!(r, OwnedRow::Unchanged { .. });
-        lines.push(stream_row_to_line(app, r, current_match_row, &match_rows));
-        // Fan out: append any note rows attached to this logical row.
+        let notes = if is_marker {
+            None
+        } else {
+            notes_by_row.get(&abs_row)
+        };
+        let line = stream_row_to_line(app, r, current_match_row, &match_rows);
         // Markers share an abs_row with the following real row; only the
-        // real row carries the note.
-        if !is_marker {
-            if let Some(notes) = notes_by_row.get(&abs_row) {
-                for text in notes {
-                    lines.push(Line::from(Span::styled(
-                        format!("  💬 {}", text),
-                        Style::default()
-                            .fg(app.theme.note)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
-                }
+        // real row carries the note. With wrapping on there is no meaningful
+        // "rest of the row", so notes always take the fallback row.
+        let (line, inline_ok) = match notes {
+            Some(notes) if !app.wrap_on => {
+                append_inline_notes(line, notes, area.width as usize, app.theme.note)
             }
-        }
+            _ => (line, false),
+        };
+        push_line_with_note_fallback(&mut lines, line, inline_ok, notes, app.theme.note);
     }
 
     let mut para = Paragraph::new(lines).block(
@@ -512,17 +526,16 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     current_match_row,
                     &match_rows,
                 );
-                if let Some(notes) = notes_by_row.get(abs_row) {
-                    for text in notes {
-                        lines.push(Line::from(Span::styled(
-                            format!("  💬 {}", text),
-                            Style::default()
-                                .fg(app.theme.note)
-                                .add_modifier(Modifier::ITALIC),
-                        )));
-                    }
-                }
-                lines.push(line);
+                // Stack columns have no inline margin (blocks are full
+                // width); notes take the dedicated row, kept below the line
+                // they annotate — same convention as the other layouts.
+                push_line_with_note_fallback(
+                    &mut lines,
+                    line,
+                    false,
+                    notes_by_row.get(abs_row),
+                    app.theme.note,
+                );
             }
         }
         // New block
@@ -560,17 +573,13 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     current_match_row,
                     &match_rows,
                 );
-                if let Some(notes) = notes_by_row.get(abs_row) {
-                    for text in notes {
-                        lines.push(Line::from(Span::styled(
-                            format!("  💬 {}", text),
-                            Style::default()
-                                .fg(app.theme.note)
-                                .add_modifier(Modifier::ITALIC),
-                        )));
-                    }
-                }
-                lines.push(line);
+                push_line_with_note_fallback(
+                    &mut lines,
+                    line,
+                    false,
+                    notes_by_row.get(abs_row),
+                    app.theme.note,
+                );
             }
         }
     }
@@ -605,25 +614,80 @@ fn build_notes_by_row(
     review: &Review,
     notes: &[crate::tui::app::Note],
 ) -> std::collections::HashMap<usize, Vec<String>> {
-    use crate::tui::app::NoteTarget;
     let mut out: std::collections::HashMap<usize, Vec<String>> = std::collections::HashMap::new();
     for note in notes {
-        let row = match &note.target {
-            NoteTarget::Line { path, line } => ViewportQuery::file_index_for_path(review, path)
-                .and_then(|idx| ViewportQuery::row_for_new_line(review, idx, *line)),
-            NoteTarget::Hunk { path, hunk } => {
-                // CLI hunk ordinals are 1-based; storage is 0-based.
-                let hunk0 = hunk.saturating_sub(1);
-                ViewportQuery::file_index_for_path(review, path)
-                    .and_then(|idx| ViewportQuery::hunk_start_row(review, idx, hunk0))
-            }
-            NoteTarget::Banner => continue, // shown in the status bar, not here
-        };
-        if let Some(row) = row {
+        if let Some(row) = crate::tui::app::note_stream_row(review, &note.target) {
             out.entry(row).or_default().push(note.text.clone());
         }
     }
     out
+}
+
+/// Try to place a row's notes as a right-aligned inline annotation
+/// (` 💬 text`) on the same rendered row — the note reads as attached to the
+/// code it describes, like an editor diagnostic. Returns the (possibly
+/// extended) line and whether the notes were placed; when they don't fit
+/// (long code line, narrow terminal) the caller falls back to a dedicated
+/// note row below via [`note_row`].
+fn append_inline_notes(
+    mut line: Line<'static>,
+    notes: &[String],
+    width: usize,
+    note_color: Color,
+) -> (Line<'static>, bool) {
+    use unicode_width::UnicodeWidthStr;
+    let note = format!(" 💬 {}", notes.join(" · "));
+    let note_w = note.width();
+    let used: usize = line.spans.iter().map(|s| s.content.width()).sum();
+    let free = width.saturating_sub(used);
+    // Need the annotation plus one blank column of separation; cramming it
+    // against the code would hurt readability more than the fallback row.
+    if note_w + 1 > free {
+        return (line, false);
+    }
+    line.spans.push(Span::raw(" ".repeat(free - note_w)));
+    line.spans.push(Span::styled(
+        note,
+        Style::default()
+            .fg(note_color)
+            .add_modifier(Modifier::ITALIC),
+    ));
+    (line, true)
+}
+
+/// A dedicated note row — the fallback when the inline annotation doesn't
+/// fit. A slim note-colored bar marks it as annotation, never diff content.
+fn note_row(text: &str, note_color: Color) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("▎", Style::default().fg(note_color)),
+        Span::styled(
+            format!(" 💬 {text}"),
+            Style::default()
+                .fg(note_color)
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])
+}
+
+/// Push `line`, then any note rows for `abs_row` that did not fit inline.
+/// `inline_ok` says whether the notes were already placed on the line by
+/// [`append_inline_notes`] (callers pass `false` when wrapping is on or the
+/// row type never goes inline).
+fn push_line_with_note_fallback(
+    lines: &mut Vec<Line<'static>>,
+    line: Line<'static>,
+    inline_ok: bool,
+    notes: Option<&Vec<String>>,
+    note_color: Color,
+) {
+    lines.push(line);
+    if !inline_ok {
+        if let Some(notes) = notes {
+            for text in notes {
+                lines.push(note_row(text, note_color));
+            }
+        }
+    }
 }
 
 /// Owned snapshot of a stream row's display data, so we can release the
@@ -1206,6 +1270,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("g / Home", "jump to top"),
             ("G / End", "jump to bottom"),
             ("]h / [h", "next / previous hunk (wraps files)"),
+            ("} / {", "next / previous note (💬 rows)"),
             ("SPC", "next hunk"),
             ("Tab / l", "next file"),
             ("BackTab / h", "previous file"),

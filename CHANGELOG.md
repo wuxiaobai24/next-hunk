@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — inline agent notes (`--note` / serve comments)
+- **Notes render attached to their code, not as orphan rows.** When the
+  terminal has room, a row's notes appear as a right-aligned inline
+  annotation (` 💬 text`) on the same rendered row — code line or hunk
+  header, unified/split alike. When the code line is long or the terminal
+  is narrow (or `wrap` is on), the note falls back to a dedicated
+  `▎ 💬 text` row directly below its target. Multiple notes on one row
+  join with ` · ` inline, or stack as rows in the fallback.
+- **`}` / `{` jump between annotated rows** (code lines / hunk headers
+  carrying notes), mirroring `]h`/`[h` hunk jumps: wrap-around across
+  files, status shows the ordinal (`💬 note 3/7`). Listed in the `?` help.
+- **Per-file note counts in the file rail** — a `💬N` badge next to the
+  `+ins/−del` tally shows where agent attention sits; `}`/`{` walks it.
+- **`comment apply` is now idempotent per comment** — re-running it (e.g.
+  after adding more comments) only converts comments not yet applied,
+  instead of duplicating earlier note rows. Applied note text carries the
+  comment id (`c1: …`) for `comment rm` correlation; the 💬 glyph comes
+  from the renderer, not the text.
+
 ### Added — `nh` short alias binary
 - **`nh`** — same program as `next-hunk`, shorter to type (`nh`, `nh diff -s`).
   Usage/error output brands itself after argv[0], so `nh --help` says `nh`.
