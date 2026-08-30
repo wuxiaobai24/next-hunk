@@ -128,10 +128,20 @@
   （`Segment::Pairs` 虚拟行 = 配对行）；保持 viewport-only 物化（bench 无回退）
 - [x] **`layout = "auto"`**：按流面板宽度选 split/stack/unified（≥120/≥40 阈值，
   宽度变化自动重建索引并保锚点）
-- [ ] **行内 agent 注释**：`--note` / serve comment 渲染到对应代码行右侧，
-  而非独立注释行
-- [ ] 布局/折叠状态进 watch/reload 保序路径（与 decisions/folds 同批）
-- [ ] CI 增加 bench 门禁（或从 ARCHITECTURE 撤回「regressions fail CI」承诺）
+- [x] **行内 agent 注释**：`--note` / serve comment 渲染到对应代码行右侧
+  （有空间内联、否则独立注释行回退；`}`/`{` 注释跳转、文件栏 💬 计数）
+  （#83）
+- [x] 布局/折叠/光标状态进 watch/reload 保序路径（与 decisions/folds 同批；
+  `reload_preserves_view_state_layout_collapse_cursor` 回归测试）（#83/#84）
+- [x] CI 增加 perf 门禁：`perf-gate` job 生成 huge fixture 并跑带耗时上限的
+  parse/viewport 断言（宽松 debug 上限，精确数字仍在 PERF.md / cargo bench）（#86）
+
+**0.9 超额交付（2026-08-30，#83–#86）：** 审查光标 + `c` 就地写注释
+（人类注释镜像为 serve 会话 `user:N`，`comment rm` 联动删除）、五套主题预设
+（flexoki/catppuccin/gruvbox/nord/tokyonight，`T` 循环）、`comment apply`
+幂等修复。此时主路径与 hunk 0.20 对齐度：引擎性能领先（~3ms 冷启动 vs
+~530-750ms），全文搜索与 word-diff 为我们独有；差异化的 `--select` 审批闸门
+保留。未追（有意）：扩展平台、STML、jj/sl、HTTP broker。
 
 **继续不做：** 复刻 OpenTUI/React 栈、完整 broker/MCP 运维面、像素级 UI 抄袭、
 以二进制体积为 KPI。
