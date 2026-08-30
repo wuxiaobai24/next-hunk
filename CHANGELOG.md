@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — attention marks (`highlight`)
+- **`highlight add`** paints an agent's attention onto exact char ranges of
+  a diff line — "look at these columns while I explain". The mark renders
+  in the live TUI as a tone background + underline over the range
+  (syntax highlighting stays visible around it), in both unified and split
+  layouts. `--tone warning|danger|info|accent`, `--focus` scrolls the human
+  to the line. `highlight list` and `highlight clear [--file]` manage marks.
+  Ranges are 1-based half-open (`--start 8 --end 14` marks chars 8..13).
+
 ### Added — comment & context parity with hunk
 - **`comment add` renders live.** A comment added from the CLI immediately
   appears as a 💬 note in the running TUI (like hunk's live comment cards);

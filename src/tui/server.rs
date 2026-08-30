@@ -92,6 +92,24 @@ pub enum ServerCommand {
         /// Also remove `user:*` notes.
         all: bool,
     },
+    /// `next-hunk highlight add`: paint an attention mark over a char range.
+    HighlightAdd {
+        file: String,
+        /// New-side source line number.
+        line: u32,
+        /// 1-based start char index (inclusive).
+        start: usize,
+        /// 1-based end char index (exclusive).
+        end: usize,
+        /// Tone: `warning` (default) / `danger` / `info` / `accent`.
+        tone: String,
+        /// Also scroll the TUI to the marked line.
+        focus: bool,
+    },
+    /// `next-hunk highlight list`: list active marks.
+    HighlightList,
+    /// `next-hunk highlight clear`: remove marks (`file` limits the scope).
+    HighlightClear { file: Option<String> },
     /// `next-hunk reload`: re-fetch the diff content and refresh the review.
     Reload,
 }
@@ -217,6 +235,12 @@ pub enum ServerReply {
     CommentAdded { id: String },
     /// Response to `CommentClear`: how many comments were removed.
     CommentCleared { removed: usize },
+    /// Response to `HighlightList`: the active marks.
+    HighlightList {
+        marks: Vec<crate::tui::app::HighlightMark>,
+    },
+    /// Response to `HighlightClear`: how many marks were removed.
+    HighlightCleared { removed: usize },
     /// Response to `CommentList`: all session comments.
     CommentList { comments: Vec<CommentEntry> },
     /// Server-side error (e.g. malformed command). A struct variant, not a
@@ -742,6 +766,8 @@ mod tests {
             },
             ServerReply::CommentAdded { id: "c0".into() },
             ServerReply::CommentCleared { removed: 2 },
+            ServerReply::HighlightList { marks: vec![] },
+            ServerReply::HighlightCleared { removed: 1 },
             ServerReply::CommentList { comments: vec![] },
             ServerReply::Context {
                 focus_file: None,

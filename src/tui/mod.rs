@@ -641,6 +641,71 @@ fn apply_server_command(
             app.set_success(format!("cleared {n} comment(s)"));
             ServerReply::CommentCleared { removed: n }
         }
+        ServerCommand::HighlightAdd {
+            file,
+            line,
+            start,
+            end,
+            tone,
+            focus,
+        } => {
+            // Validate: known file, sensible range. The line itself is
+            // best-effort (a mark on a line not in the diff just never
+            // renders), but a garbage range or unknown file is an error.
+            if crate::ir::ViewportQuery::file_index_for_path(&app.review, &file).is_none() {
+                return ServerReply::Error {
+                    message: format!("highlight targets unknown file `{file}`"),
+                };
+            }
+            if start == 0 || end <= start {
+                return ServerReply::Error {
+                    message: format!(
+                        "highlight range must satisfy 1 <= start < end (got {start}..{end})"
+                    ),
+                };
+            }
+            let tone = if tone.is_empty() {
+                "warning".to_string()
+            } else {
+                tone
+            };
+            let mark = crate::tui::app::HighlightMark {
+                id: format!("hl{}", app.highlights.len()),
+                file,
+                line,
+                start,
+                end,
+                tone,
+            };
+            if focus {
+                app.focus_target = Some(app::FocusTarget::FileLine(mark.file.clone(), mark.line));
+                app.apply_focus();
+            }
+            app.set_success("attention mark painted by agent");
+            app.highlights.push(mark);
+            ServerReply::Ok
+        }
+        ServerCommand::HighlightList => ServerReply::HighlightList {
+            marks: app.highlights.clone(),
+        },
+        ServerCommand::HighlightClear { file } => {
+            let before = app.highlights.len();
+            // Retain only marks outside the scope: with no `--file` every
+            // mark goes; with one, that file's marks go.
+            app.highlights.retain(|m| match file.as_deref() {
+                Some(f) => m.file != f,
+                None => false,
+            });
+            let removed = before - app.highlights.len();
+            if removed == 0 {
+                ServerReply::Error {
+                    message: "no marks matched".into(),
+                }
+            } else {
+                app.set_success(format!("cleared {removed} mark(s)"));
+                ServerReply::HighlightCleared { removed }
+            }
+        }
         ServerCommand::Reload => match reloader {
             Some(r) => match (*r)() {
                 Ok(text) => {
@@ -1789,6 +1854,85 @@ diff --git a/a.rs b/a.rs
         }
         assert!(app.comments.is_empty());
         assert!(app.notes.is_empty());
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn highlight_add_validates_and_stores_marks() {
+        use crate::tui::server::ServerCommand;
+        let mut app = select_sample_app();
+        app.cursor_v = 0;
+        app.scroll_y = 0;
+        // Unknown file → error, nothing stored.
+        match apply_server_command(
+            &mut app,
+            ServerCommand::HighlightAdd {
+                file: "ghost.rs".into(),
+                line: 1,
+                start: 1,
+                end: 4,
+                tone: "warning".into(),
+                focus: false,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::Error { message } => {
+                assert!(message.contains("ghost.rs"), "{message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        // Bad range → error.
+        match apply_server_command(
+            &mut app,
+            ServerCommand::HighlightAdd {
+                file: "a.rs".into(),
+                line: 1,
+                start: 4,
+                end: 4,
+                tone: "warning".into(),
+                focus: false,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::Error { message } => {
+                assert!(message.contains("start"), "{message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
+        assert!(app.highlights.is_empty(), "rejected marks are not stored");
+        // Valid mark with focus lands the cursor on the marked line.
+        match apply_server_command(
+            &mut app,
+            ServerCommand::HighlightAdd {
+                file: "a.rs".into(),
+                line: 1,
+                start: 1,
+                end: 3,
+                tone: String::new(),
+                focus: true,
+            },
+            None,
+        ) {
+            crate::tui::server::ServerReply::Ok => {}
+            other => panic!("expected Ok, got {other:?}"),
+        }
+        assert_eq!(app.highlights.len(), 1);
+        assert_eq!(app.highlights[0].tone, "warning", "empty tone defaults");
+        assert_eq!(app.cursor_v, 3, "focus moved to the marked +new row");
+        // List + clear.
+        match apply_server_command(&mut app, ServerCommand::HighlightList, None) {
+            crate::tui::server::ServerReply::HighlightList { marks } => {
+                assert_eq!(marks.len(), 1);
+            }
+            other => panic!("expected HighlightList, got {other:?}"),
+        }
+        match apply_server_command(&mut app, ServerCommand::HighlightClear { file: None }, None) {
+            crate::tui::server::ServerReply::HighlightCleared { removed } => {
+                assert_eq!(removed, 1)
+            }
+            other => panic!("expected HighlightCleared, got {other:?}"),
+        }
+        assert!(app.highlights.is_empty());
     }
 
     #[test]

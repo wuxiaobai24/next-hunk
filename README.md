@@ -293,6 +293,7 @@ next-hunk push --focus src/a.rs:88 --note banner="please check the token expiry"
 next-hunk comment add "drops the legacy column" --file src/db.rs --line 140 --focus
 next-hunk comment apply --stdin # JSON batch, validated as a whole
 next-hunk comment clear --yes   # remove agent comments (and their notes)
+next-hunk highlight add --file src/db.rs --line 140 --start 8 --end 14 --tone danger --focus
 next-hunk reload                # re-fetch the diff into the live session
 next-hunk decision              # {"accepted":[...],"rejected":[...],"undecided":[...]}
 ```

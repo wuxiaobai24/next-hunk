@@ -409,7 +409,10 @@ impl TempRepo {
                 String::from_utf8_lossy(&out.stderr)
             );
         };
-        git(&["init", "-q"]);
+        // `--template=` skips template copying: on the macOS CI runner the
+        // homebrew git's template copy has a flaky "File exists" failure when
+        // two test repos init concurrently, and the templates are unused here.
+        git(&["init", "-q", "--template="]);
         git(&["config", "user.email", "test@next-hunk"]);
         git(&["config", "user.name", "Test"]);
         std::fs::create_dir_all(dir.join("src")).unwrap();

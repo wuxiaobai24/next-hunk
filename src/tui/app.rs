@@ -331,6 +331,9 @@ pub struct App {
     pub session_mode: String,
     /// Short human-readable session title (e.g. `demo working tree`).
     pub session_title: String,
+    /// Agent-painted attention marks (`highlight add`), rendered as
+    /// char-range overlays on their source line.
+    pub highlights: Vec<HighlightMark>,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -401,6 +404,24 @@ pub struct CommentEntry {
     pub text: String,
     pub line: Option<u32>,
     pub hunk: Option<usize>,
+}
+
+/// An agent-painted attention mark over a char range of one source line —
+/// "look at exactly these columns while I explain". Rendered as a
+/// background + underline overlay on the marked chars.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct HighlightMark {
+    pub id: String,
+    /// Display path of the file.
+    pub file: String,
+    /// New-side source line number.
+    pub line: u32,
+    /// 1-based start char index (inclusive).
+    pub start: usize,
+    /// 1-based end char index (exclusive) — marks chars `[start, end)`.
+    pub end: usize,
+    /// Tone name: `warning` (default) / `danger` / `info` / `accent`.
+    pub tone: String,
 }
 
 /// Stable identity of a hunk: file index + hunk index within that file. Used as
@@ -510,6 +531,7 @@ impl App {
             repo_root: None,
             session_mode: String::new(),
             session_title: String::new(),
+            highlights: Vec::new(),
             folded: HashSet::new(),
             collapse,
             collapse_on: true,

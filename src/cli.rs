@@ -223,12 +223,61 @@ enum Commands {
         #[arg(long)]
         hash: Option<String>,
     },
+    /// Paint attention marks on char ranges of the running session's diff
+    /// lines — "look at exactly these columns".
+    Highlight {
+        #[command(subcommand)]
+        action: HighlightAction,
+    },
     /// Reload the running session's diff content.
     ///
     /// Re-fetches the diff from the same source the session was started with
     /// and refreshes the review, preserving focus/notes/decisions best-effort.
     Reload {
         /// Optional repo hash to look up (defaults to current repo).
+        #[arg(long)]
+        hash: Option<String>,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum HighlightAction {
+    /// Paint a mark over a char range of one source line.
+    Add {
+        /// Target file path.
+        #[arg(long)]
+        file: String,
+        /// New-side source line number.
+        #[arg(long)]
+        line: u32,
+        /// 1-based start char index (inclusive).
+        #[arg(long)]
+        start: usize,
+        /// 1-based end char index (exclusive): marks chars `[start, end)`.
+        #[arg(long)]
+        end: usize,
+        /// Tone: `warning` (default) / `danger` / `info` / `accent`.
+        #[arg(long)]
+        tone: Option<String>,
+        /// Also scroll the human's TUI to the marked line.
+        #[arg(long)]
+        focus: bool,
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// List active marks.
+    List {
+        /// Optional repo hash.
+        #[arg(long)]
+        hash: Option<String>,
+    },
+    /// Remove marks (all, or one file's).
+    Clear {
+        /// Limit clearing to one file.
+        #[arg(long)]
+        file: Option<String>,
+        /// Optional repo hash.
         #[arg(long)]
         hash: Option<String>,
     },
@@ -635,6 +684,7 @@ fn run() -> Result<()> {
             hash,
         } => run_navigate(target, next_note, prev_note, hash),
         Commands::Context { json, hash } => run_context(json, hash),
+        Commands::Highlight { action } => run_highlight(action),
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
     }
@@ -1234,6 +1284,87 @@ fn run_reload(hash: Option<String>) -> Result<()> {
         Ok(other) => bail!("unexpected server reply: {other:?}"),
         Err(e) => bail_on_no_server(e),
     }
+}
+
+/// `next-hunk highlight <action>`: paint/list/clear attention marks.
+#[cfg(all(feature = "serve", unix))]
+fn run_highlight(action: HighlightAction) -> Result<()> {
+    use crate::tui::server::ServerCommand;
+    match action {
+        HighlightAction::Add {
+            file,
+            line,
+            start,
+            end,
+            tone,
+            focus,
+            hash,
+        } => {
+            let socket = resolve_socket(hash)?;
+            let command = ServerCommand::HighlightAdd {
+                file,
+                line,
+                start,
+                end,
+                tone: tone.unwrap_or_else(|| "warning".into()),
+                focus,
+            };
+            match crate::tui::server::send_command(&socket, &command) {
+                Ok(crate::tui::server::ServerReply::Ok) => {
+                    println!("ok: mark painted on line {line}");
+                    Ok(())
+                }
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+        HighlightAction::List { hash } => {
+            let socket = resolve_socket(hash)?;
+            match crate::tui::server::send_command(&socket, &ServerCommand::HighlightList) {
+                Ok(crate::tui::server::ServerReply::HighlightList { marks }) => {
+                    if marks.is_empty() {
+                        println!("no marks");
+                    } else {
+                        for m in &marks {
+                            println!(
+                                "{}  {}:{}  chars {}..{}  {}",
+                                m.id, m.file, m.line, m.start, m.end, m.tone
+                            );
+                        }
+                    }
+                    Ok(())
+                }
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+        HighlightAction::Clear { file, hash } => {
+            let socket = resolve_socket(hash)?;
+            match crate::tui::server::send_command(&socket, &ServerCommand::HighlightClear { file })
+            {
+                Ok(crate::tui::server::ServerReply::HighlightCleared { removed }) => {
+                    println!("ok: cleared {removed} mark(s)");
+                    Ok(())
+                }
+                Ok(crate::tui::server::ServerReply::Error { message: msg }) => {
+                    bail!("server error: {msg}")
+                }
+                Ok(other) => bail!("unexpected server reply: {other:?}"),
+                Err(e) => bail_on_no_server(e),
+            }
+        }
+    }
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn run_highlight(_action: HighlightAction) -> Result<()> {
+    bail!("`highlight` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
 /// Turn a socket-connect failure into an actionable "no server" message,
