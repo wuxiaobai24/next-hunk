@@ -6,6 +6,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — CI perf gate
+- **`perf-gate` workflow job** — generates the deterministic huge fixture
+  (1.1 MB / 38k lines) with `scripts/gen_fixtures.sh` and runs the
+  huge-fixture gate with explicit time ceilings: parse ≤ 500 ms, mid-stream
+  viewport h40 ≤ 50 ms (debug build, ~30× observed debug timings so slow
+  runners never flake; precise numbers stay in `docs/PERF.md` via
+  `cargo bench`). This makes the ARCHITECTURE "regressions fail CI"
+  promise real — previously the gate test skipped in CI because the
+  fixture is gitignored.
+
+### Fixed — reload preserves the whole view state
+- **Watch/agent reload now provably keeps layout, context-collapse,
+  folds, and the review cursor** (alongside the existing decisions /
+  selected-file / search preservation), re-anchored on the same stream
+  row — covered by a regression test.
+
 ### Added — theme presets (`T`)
 - **Curated chrome palettes** beyond the Flexoki default: `catppuccin-mocha`
   / `catppuccin-latte`, `gruvbox-dark`, `nord`, and `tokyonight`, each

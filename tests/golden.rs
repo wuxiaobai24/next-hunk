@@ -2,7 +2,7 @@
 //! the resulting `Review` structure. These exercise the full parse → IR path
 //! against hand-crafted edge-case diffs committed under `fixtures/`.
 
-use next_hunk::ir::{parse_unified_diff, DiffLineKind, Viewport, ViewportQuery};
+use next_hunk::ir::{parse_unified_diff, CollapseIndex, DiffLineKind, Viewport, ViewportQuery};
 
 fn fixture(name: &str) -> String {
     let path = std::path::Path::new("fixtures").join(name);
@@ -93,9 +93,13 @@ fn viewport_over_golden_fixture() {
 ///
 /// This is a fast CI-friendly smoke gate (not a full bench). It verifies the
 /// huge fixture (1.1 MB / 38k lines / ~200 files) can be parsed and a viewport
-/// materialized without regression. The PERF.md gates are tighter and measured
+/// materialized without regression. The PERF.md numbers are tighter and measured
 /// via `cargo bench --bench parse` and `cargo bench --bench viewport`; this
-/// test catches gross regressions (OOM, multi-second parse, wrong row count).
+/// test is the CI gate (the `perf-gate` workflow job generates the fixture and
+/// runs exactly this test) and catches gross regressions with deliberately
+/// loose debug-build ceilings — ~30× the observed debug timings so slow CI
+/// runners never flake, while an O(n)-blown materialization or a parser
+/// regression still trips them.
 #[test]
 fn huge_fixture_parse_and_viewport_gate() {
     let text = match std::fs::read_to_string("fixtures/huge.patch") {
@@ -108,7 +112,11 @@ fn huge_fixture_parse_and_viewport_gate() {
     };
 
     // Parse must succeed and produce a reasonable number of files/rows.
+    // (Timed: the ceiling below is the gross-regression gate — see the
+    // doc comment above.)
+    let t_parse = std::time::Instant::now();
     let review = parse_unified_diff(&text).expect("parse huge fixture");
+    let parse_elapsed = t_parse.elapsed();
     assert!(review.file_count() > 0, "huge fixture should have files");
     assert!(
         review.stream_len > 1000,
@@ -155,6 +163,29 @@ fn huge_fixture_parse_and_viewport_gate() {
             "viewport at start={start} height={height} should produce {expected} rows"
         );
     }
+
+    // Timed gates (debug build, deliberately loose — see doc comment).
+    // Local debug reference: parse ~15 ms, viewport h40 ~0.6 ms.
+    assert!(
+        parse_elapsed.as_millis() <= 500,
+        "parse took {parse_elapsed:?} (>500 ms): gross parser regression"
+    );
+    let index = CollapseIndex::build(&review, 8, &std::collections::HashSet::new(), false);
+    let t_vp = std::time::Instant::now();
+    let rows = ViewportQuery::rows_virtual(
+        &review,
+        Viewport {
+            start: index.virtual_len() / 2,
+            height: 40,
+        },
+        &index,
+    );
+    let vp_elapsed = t_vp.elapsed();
+    assert_eq!(rows.len(), 40, "mid-stream viewport should fill 40 rows");
+    assert!(
+        vp_elapsed.as_millis() <= 50,
+        "viewport h40 took {vp_elapsed:?} (>50 ms): materialization blew up"
+    );
 
     // file_at_row must return valid indices for positions within the stream.
     for &row in &[0usize, 100, 1000, review.stream_len.saturating_sub(1)] {

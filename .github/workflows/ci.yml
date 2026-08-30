@@ -51,6 +51,25 @@ jobs:
         # to GitHub's 6h cap. Normal runs finish in well under 10 min.
         timeout-minutes: 10
 
+  # Perf gate: generate the deterministic huge fixture (gitignored, pure
+  # awk — no Windows/macOS shell assumptions, so this lives on ubuntu) and
+  # run the timing-asserted huge-fixture test. The ceilings are loose
+  # debug-build bounds (see tests/golden.rs) — precise numbers stay in
+  # docs/PERF.md via `cargo bench`. This is what makes the ARCHITECTURE
+  # "regressions fail CI" promise real.
+  perf-gate:
+    name: perf gate (huge fixture)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: generate fixtures
+        run: ./scripts/gen_fixtures.sh
+      - name: run huge-fixture gate
+        run: cargo test --all-features --test golden huge_fixture -- --nocapture
+        timeout-minutes: 10
+
   # Verify the crate builds with no default features — the headline
   # `--watch` and syntax-highlight flags must degrade gracefully, not break
   # the build, for constrained/offline environments.

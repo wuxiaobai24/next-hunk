@@ -2875,6 +2875,47 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
+    fn reload_preserves_view_state_layout_collapse_cursor() {
+        let (before, after) = reload_pair();
+        let review = parse_unified_diff(&before).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 3;
+        // Arrange a non-default view state: split layout, collapse off,
+        // b.rs folded, cursor on a code line.
+        app.layout_mode = crate::config::LayoutMode::Split;
+        app.collapse_on = false;
+        app.context_threshold = 0;
+        app.folded.insert(1);
+        app.rebuild_collapse();
+        app.set_cursor(2);
+        let cursor_row = app.cursor_stream_row();
+
+        app.reload_review(&after);
+
+        assert_eq!(
+            app.layout_mode,
+            crate::config::LayoutMode::Split,
+            "layout choice survives reload"
+        );
+        assert!(!app.collapse_on, "context-collapse toggle survives reload");
+        assert!(
+            app.folded.contains(&1),
+            "folded files survive reload (path-remapped)"
+        );
+        // The cursor stays clamped inside the new stream (same file kept
+        // its rows in reload_pair's "after").
+        assert!(
+            app.cursor_v < app.collapse.virtual_len(),
+            "cursor re-anchored inside the new stream"
+        );
+        assert_eq!(
+            app.cursor_stream_row(),
+            cursor_row,
+            "cursor keeps its stream row across reload"
+        );
+    }
+
+    #[test]
     fn reload_preserves_selected_file_by_path() {
         let (before, after) = reload_pair();
         let review = parse_unified_diff(&before).unwrap();

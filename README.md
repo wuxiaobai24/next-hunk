@@ -50,6 +50,10 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Wrap config: `wrap = true` for line wrapping (default truncate)
 - [x] Context collapsing: inter-hunk gaps and long context runs fold to `··· N unchanged lines ···` markers (default on, `zx` toggles)
 - [x] Split layout: side-by-side aligned columns (`layout = "split"`); `layout = "auto"` picks split/stack/unified by terminal width
+- [x] Inline agent notes: `--note` / serve comments render attached to their code line (inline when there's room, dedicated row otherwise); `}`/`{` jumps between notes; file-rail 💬 counts
+- [x] Review cursor: highlighted cursor row (`j`/`k`, clicks); `c` composes a note on it (mirrored into serve comments as `user:N`); `o` opens the cursor line; `cursor_line = "off"` hides the highlight
+- [x] Theme presets: catppuccin-mocha/latte, gruvbox-dark, nord, tokyonight + flexoki (`T` cycles family, `t` cycles mode)
+- [x] CI perf gate: huge-fixture parse/viewport ceilings run on every PR (`perf-gate` job)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
 
@@ -170,8 +174,8 @@ All forms accept the full binary name too (`next-hunk diff …`).
 
 | Key | Action |
 |-----|--------|
-| `j` / `↓` | scroll down one row |
-| `k` / `↑` | scroll up one row |
+| `j` / `↓` | cursor down one row (viewport follows at the edges) |
+| `k` / `↑` | cursor up one row |
 | `J` / `PgDn` | scroll half a page |
 | `K` / `PgUp` | scroll half a page up |
 | `Ctrl-D` / `Ctrl-F` | scroll down (half / full page) |
@@ -186,9 +190,10 @@ All forms accept the full binary name too (`next-hunk diff …`).
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
 | `1`–`9` | jump to the Nth file |
+| `}` / `{` | next / previous note (💬 rows, wraps) |
 | `b` | toggle the file-rail sidebar |
 | click file rail | select that file |
-| click stream | position the viewport on that row |
+| click stream | put the review cursor on that row |
 | `H` | toggle syntax highlight |
 | `#` | toggle line-number gutter |
 | `w` | toggle word-level inline diff |
@@ -197,7 +202,8 @@ All forms accept the full binary name too (`next-hunk diff …`).
 | `T` | cycle theme palette: flexoki → catppuccin → gruvbox → nord → tokyonight |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
-| `o` | open the focused line in `$EDITOR` (at that line) |
+| `c` | compose a note on the cursor row (Enter save · Esc cancel) |
+| `o` | open the cursor line in `$EDITOR` (at that line) |
 | `?` | toggle the full-screen keybinding help |
 | `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 

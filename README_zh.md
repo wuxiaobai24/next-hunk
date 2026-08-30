@@ -48,6 +48,10 @@
 - [x] Stack 布局：`layout = "stack"` 配置（默认 unified）
 - [x] 折行配置：`wrap = true` 折行显示（默认截断）
 - [x] 异步语法高亮（后台 worker + gen-id 拒绝过期结果；miss 先 plain）
+- [x] 行内 agent 注释：`--note` / serve comment 渲染到对应代码行旁（有空间则内联，否则独立行）；`}`/`{` 注释跳转；文件栏 💬 计数
+- [x] 审查光标：高亮光标行（`j`/`k`、点击）；`c` 就地写注释（镜像为 serve 会话的 `user:N`）；`o` 打开光标行；`cursor_line = "off"` 可关
+- [x] 主题预设：catppuccin-mocha/latte、gruvbox-dark、nord、tokyonight + flexoki（`T` 循环调色板，`t` 循环模式）
+- [x] CI 性能门禁：每个 PR 跑 huge fixture 的 parse/viewport 耗时上限（`perf-gate` job）
 - [x] 对常见工具（如 delta）的公开性能说明（设计对比 + bench 见 `docs/PERF.md`）
 
 ## 安装
@@ -132,8 +136,8 @@ nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 
 | 按键 | 动作 |
 |-----|------|
-| `j` / `↓` | 向下滚动一行 |
-| `k` / `↑` | 向上滚动一行 |
+| `j` / `↓` | 光标下移一行（到边缘时视口跟随） |
+| `k` / `↑` | 光标上移一行 |
 | `J` / `PgDn` | 向下滚动半屏 |
 | `K` / `PgUp` | 向上滚动半屏 |
 | `Ctrl-D` / `Ctrl-F` | 向下滚动（半屏 / 整屏） |
@@ -149,8 +153,9 @@ nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 | `Shift+Tab` / `h` / `←` | 上一个文件 |
 | `1`–`9` | 跳到第 N 个文件 |
 | `b` | 切换文件侧边栏显示 |
+| `}` / `{` | 下一个 / 上一个注释行（💬，环绕） |
 | 点击文件栏 | 选中该文件 |
-| 点击 diff 区 | 把视口定位到该行 |
+| 点击 diff 区 | 把审查光标放到该行 |
 | `H` | 切换语法高亮 |
 | `#` | 切换行号显示 |
 | `w` | 切换词级行内 diff |
@@ -158,7 +163,8 @@ nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 | `t` | 循环主题：light → auto → dark |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
-| `o` | 在 `$EDITOR` 中打开当前行（跳到那一行） |
+| `c` | 在光标行写注释（Enter 保存 · Esc 取消） |
+| `o` | 在 `$EDITOR` 中打开光标行（跳到那一行） |
 | `?` | 切换全屏快捷键帮助 |
 | `q` / `Esc` / `Ctrl+C` | 退出（`Esc` 先清除激活的搜索） |
 
