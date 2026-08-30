@@ -146,14 +146,24 @@ enum Commands {
         /// Attach an agent annotation into the running TUI, repeatable.
         #[arg(long, action = clap::ArgAction::Append)]
         note: Vec<String>,
+        /// Optional session id to target (defaults to the current repo's
+        /// session; see `list`).
+        #[arg(long)]
+        hash: Option<String>,
     },
-    /// Read the human's accumulated per-hunk decisions from a running `serve`.
+    /// Read the human's accumulated per-hunk decisions from a running session.
     ///
     /// Prints one JSON line on stdout (same shape as `--select` quit output):
     /// `{"accepted":[...],"rejected":[...],"undecided":[...]}`. Returns
     /// immediately — does not wait for the human to quit. Requires a running
-    /// `next-hunk serve` in this repo.
-    Decision,
+    /// next-hunk session in this repo (decisions are only collected in
+    /// `serve` / `--select` mode).
+    Decision {
+        /// Optional session id to target (defaults to the current repo's
+        /// session; see `list`).
+        #[arg(long)]
+        hash: Option<String>,
+    },
     /// List live next-hunk server sessions.
     ///
     /// Scans well-known socket directories for live servers. Prints one line
@@ -366,17 +376,25 @@ fn run() -> Result<()> {
                     resolved.include_untracked,
                 )?,
             };
-            let reloader = if resolved.watch {
-                Some(make_diff_reloader(
-                    repo.clone(),
-                    resolved.staged,
-                    target,
-                    pathspecs,
-                    resolved.include_untracked,
-                ))
-            } else {
-                None
+            // Every interactive review attaches an agent-controllable session
+            // socket (like `serve`), so `list`/`navigate`/`comment`/`reload`
+            // work on an everyday `nh diff` too. Bind failure is non-fatal:
+            // the review still opens, just without the control plane.
+            let server = spawn_session_listener(&repo);
+            // Keep a reloader around even without `--watch` so an agent can
+            // `next-hunk reload` this session on demand.
+            let session_title = match (&target, resolved.staged) {
+                (Some(t), _) => format!("{} vs {t}", session_title_prefix(&repo)),
+                (None, true) => format!("{} staged", session_title_prefix(&repo)),
+                (None, false) => format!("{} working tree", session_title_prefix(&repo)),
             };
+            let reloader = Some(make_diff_reloader(
+                repo.clone(),
+                resolved.staged,
+                target,
+                pathspecs,
+                resolved.include_untracked,
+            ));
             open_review_from_text(
                 &text,
                 reloader,
@@ -392,8 +410,11 @@ fn run() -> Result<()> {
                     focus: focus_target,
                     notes,
                     select_mode: select,
+                    session_mode: "diff".into(),
+                    session_title,
+                    watch: resolved.watch,
                 },
-                None,
+                server,
             )
         }
         Commands::Show { rev } => {
@@ -403,9 +424,11 @@ fn run() -> Result<()> {
             // `show` is a one-shot snapshot: no watch, highlight default on.
             // Honor the user/project theme config even for `show`.
             let cfg = Config::load(&cwd);
+            // Attach an agent-controllable session socket like `diff` does.
+            let server = spawn_session_listener(&repo);
             open_review_from_text(
                 &text,
-                None,
+                Some(make_show_reloader(repo.clone(), rev.clone())),
                 true,
                 cfg.line_numbers.unwrap_or(true),
                 cfg.wrap.unwrap_or(false),
@@ -421,8 +444,12 @@ fn run() -> Result<()> {
                     .map(|v| v != "off" && v != "false")
                     .unwrap_or(true),
                 Some(repo),
-                ReviewOptions::default(),
-                None,
+                ReviewOptions {
+                    session_mode: "show".into(),
+                    session_title: format!("show {rev}"),
+                    ..Default::default()
+                },
+                server,
             )
         }
         Commands::Patch { path } => {
@@ -545,8 +572,8 @@ fn run() -> Result<()> {
             note,
             extra,
         ),
-        Commands::Push { focus, note } => run_push(focus, note),
-        Commands::Decision => run_decision(),
+        Commands::Push { focus, note, hash } => run_push(focus, note, hash),
+        Commands::Decision { hash } => run_decision(hash),
         Commands::List => run_list(),
         Commands::Get { hash } => run_get(hash),
         Commands::Review { hash } => run_review(hash),
@@ -592,6 +619,21 @@ fn disk_path_as_pathspec(workdir: &Path, cwd: &Path, target: &str) -> Option<Str
         }
     }
     None
+}
+
+/// Short session-title prefix: the repo directory's name (`demo working
+/// tree`), so `list` output reads like hunk's session titles.
+fn session_title_prefix(repo: &Path) -> String {
+    repo.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| repo.display().to_string())
+}
+
+/// Reloader for `show` sessions: re-run `git show <rev>` on demand (an agent
+/// `reload` after the underlying ref moved). Not wired to a filesystem
+/// watcher — `show` has no `--watch`.
+fn make_show_reloader(repo: PathBuf, rev: String) -> crate::tui::Reloader {
+    Box::new(move || git_show(&repo, &rev).context("re-run git show for reload"))
 }
 
 /// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
@@ -642,20 +684,21 @@ fn run_serve(
 
     // Bind the server socket before opening the TUI, so a `push`/`decision`
     // issued the instant the TUI appears finds a live socket. A bind failure
-    // (e.g. another serve running) is fatal and leaves no half-open TUI.
+    // is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&repo)?;
 
     let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
-    let reloader = if resolved.watch {
-        Some(make_diff_reloader(
-            repo.clone(),
-            resolved.staged,
-            None,
-            extra,
-            resolved.include_untracked,
-        ))
+    let reloader = Some(make_diff_reloader(
+        repo.clone(),
+        resolved.staged,
+        None,
+        extra,
+        resolved.include_untracked,
+    ));
+    let session_title = if resolved.staged {
+        format!("{} staged (serve)", session_title_prefix(&repo))
     } else {
-        None
+        format!("{} working tree (serve)", session_title_prefix(&repo))
     };
     open_review_from_text(
         &text,
@@ -673,15 +716,18 @@ fn run_serve(
             notes,
             // serve exists to collect decisions, so select mode is always on.
             select_mode: true,
+            session_mode: "serve".into(),
+            session_title,
+            watch: resolved.watch,
         },
         Some(server),
     )
 }
 
-/// `next-hunk push`: send a focus/note update to the running server in this
+/// `next-hunk push`: send a focus/note update to the running session in this
 /// repo. Returns immediately with a short status line.
 #[cfg(all(feature = "serve", unix))]
-fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
+fn run_push(focus: Option<String>, note: Vec<String>, hash: Option<String>) -> Result<()> {
     let focus_target = focus
         .map(|s| crate::cli_parse::parse_focus(&s))
         .transpose()?;
@@ -690,9 +736,7 @@ fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
         .map(|s| crate::cli_parse::parse_note(s))
         .collect::<Result<Vec<_>>>()?;
 
-    let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
-    let socket = crate::cli_parse::runtime_socket_path(&repo);
+    let socket = resolve_socket(hash)?;
 
     let command = crate::tui::server::ServerCommand::Push {
         focus: focus_target,
@@ -700,7 +744,7 @@ fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
     };
     match crate::tui::server::send_command(&socket, &command) {
         Ok(crate::tui::server::ServerReply::Ok) => {
-            println!("ok: pushed to running server");
+            println!("ok: pushed to running session");
             Ok(())
         }
         Ok(other) => {
@@ -715,10 +759,8 @@ fn run_push(focus: Option<String>, note: Vec<String>) -> Result<()> {
 /// running server, printed as one JSON line on stdout (same shape as
 /// `--select` quit output, so an agent parses it identically).
 #[cfg(all(feature = "serve", unix))]
-fn run_decision() -> Result<()> {
-    let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
-    let socket = crate::cli_parse::runtime_socket_path(&repo);
+fn run_decision(hash: Option<String>) -> Result<()> {
+    let socket = resolve_socket(hash)?;
 
     match crate::tui::server::send_command(&socket, &crate::tui::server::ServerCommand::Decision) {
         Ok(crate::tui::server::ServerReply::Decisions(selections)) => {
@@ -731,7 +773,27 @@ fn run_decision() -> Result<()> {
     }
 }
 
-/// `next-hunk list`: discover live server sessions.
+/// Format an `Info` focus triple as one human-readable `path:h2:42`-style
+/// token (parts omitted when unknown).
+#[cfg(all(feature = "serve", unix))]
+fn format_focus(file: &Option<String>, hunk: &Option<usize>, line: &Option<u32>) -> String {
+    match (file, hunk, line) {
+        (None, _, _) => "-".to_string(),
+        (Some(f), h, l) => {
+            let mut s = f.clone();
+            if let Some(h) = h {
+                s.push_str(&format!(":h{h}"));
+            }
+            if let Some(l) = l {
+                s.push_str(&format!(":{l}"));
+            }
+            s
+        }
+    }
+}
+
+/// `next-hunk list`: discover live session sockets and summarize each via
+/// `Info` (mode, repo, file count, current focus).
 #[cfg(all(feature = "serve", unix))]
 fn run_list() -> Result<()> {
     let sessions = crate::cli_parse::discover_live_sockets();
@@ -739,22 +801,28 @@ fn run_list() -> Result<()> {
         println!("no live sessions found");
         return Ok(());
     }
-    for (path, hash) in &sessions {
+    for (path, id) in &sessions {
         // Try to get session info for richer output.
         let info = crate::tui::server::send_command(path, &crate::tui::server::ServerCommand::Info);
         match info {
             Ok(crate::tui::server::ServerReply::Info {
-                repo_path,
+                repo_root,
                 file_count,
+                pid,
+                mode,
+                title,
+                focus_file,
+                focus_hunk,
+                focus_line,
             }) => {
                 println!(
-                    "{}  {}  files={file_count}  repo={repo_path}",
-                    hash,
+                    "{id}  mode={mode} pid={pid}  files={file_count}  focus={}  repo={repo_root}  \"{title}\"  {}",
+                    format_focus(&focus_file, &focus_hunk, &focus_line),
                     path.display()
                 );
             }
             _ => {
-                println!("{}  {}", hash, path.display());
+                println!("{id}  {}", path.display());
             }
         }
     }
@@ -767,12 +835,25 @@ fn run_get(hash: Option<String>) -> Result<()> {
     let socket = resolve_socket(hash)?;
     match crate::tui::server::send_command(&socket, &crate::tui::server::ServerCommand::Info) {
         Ok(crate::tui::server::ServerReply::Info {
-            repo_path,
+            repo_root,
             file_count,
+            pid,
+            mode,
+            title,
+            focus_file,
+            focus_hunk,
+            focus_line,
         }) => {
-            println!("socket: {}", socket.display());
-            println!("repo:   {repo_path}");
-            println!("files:  {file_count}");
+            println!("socket:  {}", socket.display());
+            println!("mode:    {mode}");
+            println!("title:   {title}");
+            println!("pid:     {pid}");
+            println!("repo:    {repo_root}");
+            println!("files:   {file_count}");
+            println!(
+                "focus:   {}",
+                format_focus(&focus_file, &focus_hunk, &focus_line)
+            );
             Ok(())
         }
         Ok(crate::tui::server::ServerReply::Error(msg)) => bail!("server error: {msg}"),
@@ -885,20 +966,42 @@ fn run_comment(action: CommentAction) -> Result<()> {
     }
 }
 
-/// Resolve a socket path from an optional hash or the current repo.
+/// Resolve the socket of the session a CLI subcommand should talk to.
+///
+/// Sessions are discovered by scanning the runtime socket dirs and matching
+/// ids against a filter: the current repo's `<hash>` prefix by default, or an
+/// explicit `--hash <session-id>` (as printed by `list`, `<hash>-<pid>`).
+/// Exactly one live match wins; zero and multiple are actionable errors.
 #[cfg(all(feature = "serve", unix))]
 fn resolve_socket(hash: Option<String>) -> Result<PathBuf> {
-    if let Some(h) = &hash {
-        let sessions = crate::cli_parse::discover_live_sockets();
-        let found = sessions.iter().find(|(_, hh)| hh == h);
-        match found {
-            Some((path, _)) => Ok(path.clone()),
-            None => bail!("no live session with hash {h}"),
+    let sessions = crate::cli_parse::discover_live_sockets();
+    let filter = match &hash {
+        Some(f) => f.clone(),
+        None => {
+            let cwd = std::env::current_dir()?;
+            let repo = find_repo(&cwd)?;
+            crate::cli_parse::repo_socket_hash(&repo)
         }
-    } else {
-        let cwd = std::env::current_dir()?;
-        let repo = find_repo(&cwd)?;
-        Ok(crate::cli_parse::runtime_socket_path(&repo))
+    };
+    let matches: Vec<&(PathBuf, String)> = sessions
+        .iter()
+        .filter(|(_, id)| id.starts_with(&filter))
+        .collect();
+    match matches.len() {
+        0 => bail!(
+            "no live next-hunk session for this repo; open `next-hunk diff` or `next-hunk serve` first (see `next-hunk list`)"
+        ),
+        1 => Ok(matches[0].0.clone()),
+        n => {
+            let listing = matches
+                .iter()
+                .map(|(path, id)| format!("  {id}  {}", path.display()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            bail!(
+                "{n} live sessions match this repo; pick one with --hash <session-id>:\n{listing}\n(run `next-hunk list` for details)"
+            )
+        }
     }
 }
 
@@ -949,7 +1052,7 @@ fn bail_on_no_server(err: anyhow::Error) -> Result<()> {
     // exact io::ErrorKind across platforms.
     let msg = format!("{err:#}");
     if msg.contains("connect to server socket") {
-        bail!("no next-hunk server running in this repo; start one with `next-hunk serve`");
+        bail!("the next-hunk session went away; list live ones with `next-hunk list`");
     }
     Err(err)
 }
@@ -960,14 +1063,38 @@ fn bail_on_no_server(err: anyhow::Error) -> Result<()> {
 // the CLI surface but report unavailability at runtime — matching how `watch`
 // advertises itself when compiled out.
 
-/// Bind the server socket for `serve`. The path is derived from the repo root
-/// so a `push`/`decision` in the same repo finds it without an explicit flag.
-/// `ServerArg` is a type alias for `ServerListener` under the `serve` feature,
-/// so we return the listener directly.
+/// Bind the session socket for an interactive review. The path is derived
+/// from the repo root + pid so several reviews of one repo coexist, and a
+/// CLI process in the same repo discovers them without an explicit flag.
+/// `ServerArg` is a type alias for `ServerListener` under the `serve`
+/// feature, so we return the listener directly.
 #[cfg(all(feature = "serve", unix))]
 fn spawn_serve_listener(repo: &std::path::Path) -> Result<crate::tui::ServerArg> {
-    let socket = crate::cli_parse::runtime_socket_path(repo);
+    // Reclaim sockets stranded by sessions that died without running Drop
+    // (SIGHUP/SIGKILL) before binding a fresh one.
+    crate::cli_parse::sweep_stale_sockets();
+    let socket = crate::cli_parse::session_socket_path(repo);
     crate::tui::server::ServerListener::spawn(socket)
+}
+
+/// Attach an agent-controllable session socket to an everyday `diff`/`show`.
+/// Best-effort: on failure (feature off, socket dir unwritable) the review
+/// still opens, just without the control plane — only `serve` treats a bind
+/// failure as fatal.
+#[cfg(all(feature = "serve", unix))]
+fn spawn_session_listener(repo: &std::path::Path) -> Option<crate::tui::ServerArg> {
+    match spawn_serve_listener(repo) {
+        Ok(l) => Some(l),
+        Err(e) => {
+            eprintln!("note: agent session socket unavailable: {e}");
+            None
+        }
+    }
+}
+
+#[cfg(not(all(feature = "serve", unix)))]
+fn spawn_session_listener(_repo: &std::path::Path) -> Option<crate::tui::ServerArg> {
+    None
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
@@ -984,12 +1111,12 @@ fn run_serve(
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
-fn run_push(_focus: Option<String>, _note: Vec<String>) -> Result<()> {
+fn run_push(_focus: Option<String>, _note: Vec<String>, _hash: Option<String>) -> Result<()> {
     bail!("`push` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
 }
 
 #[cfg(not(all(feature = "serve", unix)))]
-fn run_decision() -> Result<()> {
+fn run_decision(_hash: Option<String>) -> Result<()> {
     bail!("`decision` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 

@@ -324,6 +324,13 @@ pub struct App {
     /// Human notes by their `user:N` id — the bridge back from
     /// `comment rm user:N` to the rendered `Note`.
     pub user_notes: std::collections::HashMap<String, Note>,
+    /// Repo root this review was launched from (reported by `Info` so
+    /// `list`/`get` can show which checkout a session belongs to).
+    pub repo_root: Option<String>,
+    /// How this session was launched — `"diff"` / `"show"` / `"serve"`.
+    pub session_mode: String,
+    /// Short human-readable session title (e.g. `demo working tree`).
+    pub session_title: String,
 }
 
 /// A request to open a file in an external editor at a line, produced when the
@@ -500,6 +507,9 @@ impl App {
             note_pending: None,
             user_note_seq: 0,
             user_notes: std::collections::HashMap::new(),
+            repo_root: None,
+            session_mode: String::new(),
+            session_title: String::new(),
             folded: HashSet::new(),
             collapse,
             collapse_on: true,
@@ -1605,6 +1615,27 @@ impl App {
                 self.set_error("no hunks to jump to");
             }
         }
+    }
+
+    /// What the human is currently looking at — the file, 1-based hunk
+    /// ordinal, and source line under the review cursor. Best-effort
+    /// (rows outside any hunk report file only); used by `Info`/`context`
+    /// so an agent can sync with the human's viewport.
+    pub fn current_focus(&self) -> (Option<String>, Option<usize>, Option<u32>) {
+        let cursor_stream = self.collapse.stream_at_virtual(
+            self.cursor_v
+                .min(self.collapse.virtual_len().saturating_sub(1)),
+        );
+        let file_idx = match ViewportQuery::file_at_row(&self.review, cursor_stream) {
+            Some(idx) => idx,
+            None => return (None, None, None),
+        };
+        let path = self.review.display_path(file_idx).to_string();
+        let hunk =
+            ViewportQuery::hunk_containing(&self.review, cursor_stream).map(|(_, ordinal)| ordinal);
+        let line = ViewportQuery::row_line_numbers(&self.review, cursor_stream)
+            .and_then(|(old, new)| new.or(old));
+        (Some(path), hunk, line)
     }
 
     /// Sorted, deduplicated stream rows that carry notes (`--note`
