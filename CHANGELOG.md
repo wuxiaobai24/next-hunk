@@ -6,6 +6,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — config parity: tab_width, sidebar, agent_notes
+
+- **`tab_width`** (1–16, default 4, `--tab-width` flag) — tabs in diff lines
+  now expand to configured stops at render time instead of relying on
+  terminal tab stops (usually 8), which silently broke the split layout's
+  column alignment. Attention-mark ranges (`highlight add`) are raw-diff
+  columns and are remapped onto the expanded text, so marks land on the
+  right on-screen cells.
+- **`sidebar`** config (`true`/`false`, plus hunk-style `"auto"` accepted as
+  `true`) — start with the file rail hidden; `b` still toggles at runtime.
+- **`agent_notes = false`** — plain-diff mode: no 💬 inline annotations, note
+  rows, or rail badges; `}`/`{` and `c` report "notes hidden" instead of
+  jumping/composing.
+- **`show` / `patch` / `pager` / `filediff` now honor the full config** —
+  previously each cherry-picked fields (`show` ignored `highlight`, `pager`
+  ignored `sidebar`, …). All review modes resolve the same layered config
+  via a new `ViewSettings` struct that also replaces the 9-positional-bool
+  plumbing between `cli` and the TUI.
+
 ### Added — attention marks (`highlight`)
 - **`highlight add`** paints an agent's attention onto exact char ranges of
   a diff line — "look at these columns while I explain". The mark renders

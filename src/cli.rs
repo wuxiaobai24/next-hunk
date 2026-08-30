@@ -7,7 +7,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::config::{CliFlags, Config, LayoutMode, ResolvedConfig};
+use crate::config::{CliFlags, Config, ResolvedConfig, ViewSettings};
 use crate::ir::{parse_unified_diff, Review};
 use crate::source::{
     find_repo, git_diff, git_diff_target, git_file_diff, git_show, open_repo, rev_resolves,
@@ -44,6 +44,10 @@ enum Commands {
         /// Include untracked files in worktree diff (default: off).
         #[arg(long)]
         include_untracked: bool,
+        /// Tab-stop width (columns) for rendering tabs in diff lines,
+        /// 1-16 (default 4, or `tab_width` in config.toml).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=16))]
+        tab_width: Option<u32>,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal). Agent-bridge: point the human
         /// at what matters.
@@ -121,6 +125,10 @@ enum Commands {
         /// Include untracked files in worktree diff (default: off).
         #[arg(long)]
         include_untracked: bool,
+        /// Tab-stop width (columns) for rendering tabs in diff lines,
+        /// 1-16 (default 4, or `tab_width` in config.toml).
+        #[arg(long, value_parser = clap::value_parser!(u32).range(1..=16))]
+        tab_width: Option<u32>,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal).
         #[arg(long)]
@@ -389,6 +397,7 @@ fn run() -> Result<()> {
         watch: false,
         no_highlight: false,
         include_untracked: false,
+        tab_width: None,
         focus: None,
         note: Vec::new(),
         select: false,
@@ -400,6 +409,7 @@ fn run() -> Result<()> {
             watch,
             no_highlight,
             include_untracked,
+            tab_width,
             focus,
             note,
             select,
@@ -437,6 +447,7 @@ fn run() -> Result<()> {
                     watch: if watch { Some(true) } else { None },
                     highlight: if no_highlight { Some(false) } else { None },
                     include_untracked: if include_untracked { Some(true) } else { None },
+                    tab_width,
                 },
             );
 
@@ -498,13 +509,7 @@ fn run() -> Result<()> {
             open_review_from_text(
                 &text,
                 reloader,
-                resolved.highlight,
-                resolved.line_numbers,
-                resolved.wrap,
-                resolved.context_collapse,
-                resolved.theme,
-                resolved.layout,
-                resolved.cursor_line,
+                ViewSettings::from(&resolved),
                 Some(repo),
                 ReviewOptions {
                     focus: focus_target,
@@ -521,28 +526,18 @@ fn run() -> Result<()> {
             let cwd = std::env::current_dir()?;
             let repo = find_repo(&cwd)?;
             let text = git_show(&repo, &rev)?;
-            // `show` is a one-shot snapshot: no watch, highlight default on.
-            // Honor the user/project theme config even for `show`.
-            let cfg = Config::load(&cwd);
+            // `show` is a one-shot snapshot (no watch), but honors the same
+            // user/project config as `diff` — theme, layout, tabs, notes, …
+            let settings = ViewSettings::from(&ResolvedConfig::resolve(
+                &Config::load(&cwd),
+                &CliFlags::default(),
+            ));
             // Attach an agent-controllable session socket like `diff` does.
             let server = spawn_session_listener(&repo);
             open_review_from_text(
                 &text,
                 Some(make_show_reloader(repo.clone(), rev.clone())),
-                true,
-                cfg.line_numbers.unwrap_or(true),
-                cfg.wrap.unwrap_or(false),
-                cfg.context_collapse
-                    .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
-                cfg.theme,
-                cfg.layout
-                    .as_deref()
-                    .map(crate::config::LayoutMode::parse_str)
-                    .unwrap_or_default(),
-                cfg.cursor_line
-                    .as_deref()
-                    .map(|v| v != "off" && v != "false")
-                    .unwrap_or(true),
+                settings,
                 Some(repo),
                 ReviewOptions {
                     session_mode: "show".into(),
@@ -555,28 +550,11 @@ fn run() -> Result<()> {
         Commands::Patch { path } => {
             let text = read_patch_input(&path)?;
             let cwd = std::env::current_dir()?;
-            let cfg = Config::load(&cwd);
-            open_review_from_text(
-                &text,
-                None,
-                true,
-                true,
-                false,
-                cfg.context_collapse
-                    .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
-                cfg.theme,
-                cfg.layout
-                    .as_deref()
-                    .map(crate::config::LayoutMode::parse_str)
-                    .unwrap_or_default(),
-                cfg.cursor_line
-                    .as_deref()
-                    .map(|v| v != "off" && v != "false")
-                    .unwrap_or(true),
-                None,
-                ReviewOptions::default(),
-                None,
-            )
+            let settings = ViewSettings::from(&ResolvedConfig::resolve(
+                &Config::load(&cwd),
+                &CliFlags::default(),
+            ));
+            open_review_from_text(&text, None, settings, None, ReviewOptions::default(), None)
         }
         Commands::Filediff { old, new } => {
             let cwd = std::env::current_dir()?;
@@ -586,16 +564,14 @@ fn run() -> Result<()> {
                 eprintln!("(files are identical)");
                 return Ok(());
             }
+            let settings = ViewSettings::from(&ResolvedConfig::resolve(
+                &Config::load(&cwd),
+                &CliFlags::default(),
+            ));
             open_review_from_text(
                 &text,
                 None,
-                true,
-                true,
-                false,
-                crate::config::DEFAULT_CONTEXT_COLLAPSE,
-                None,
-                LayoutMode::Unified,
-                true,
+                settings,
                 repo.workdir().map(|p| p.to_owned()),
                 ReviewOptions::default(),
                 None,
@@ -633,23 +609,11 @@ fn run() -> Result<()> {
             // `o` (open in editor) resolves relative paths against the repo
             // workdir if we're in one, else the cwd.
             let workdir = find_repo(&cwd).ok();
+            let settings = ViewSettings::from(&ResolvedConfig::resolve(&cfg, &CliFlags::default()));
             open_review_from_text(
                 &buf,
                 None,
-                true,
-                cfg.line_numbers.unwrap_or(true),
-                cfg.wrap.unwrap_or(false),
-                cfg.context_collapse
-                    .unwrap_or(crate::config::DEFAULT_CONTEXT_COLLAPSE),
-                cfg.theme,
-                cfg.layout
-                    .as_deref()
-                    .map(crate::config::LayoutMode::parse_str)
-                    .unwrap_or_default(),
-                cfg.cursor_line
-                    .as_deref()
-                    .map(|v| v != "off" && v != "false")
-                    .unwrap_or(true),
+                settings,
                 workdir,
                 ReviewOptions::default(),
                 None,
@@ -660,14 +624,18 @@ fn run() -> Result<()> {
             watch,
             no_highlight,
             include_untracked,
+            tab_width,
             focus,
             note,
             extra,
         } => run_serve(
-            staged,
-            watch,
-            no_highlight,
-            include_untracked,
+            CliFlags {
+                staged: if staged { Some(true) } else { None },
+                watch: if watch { Some(true) } else { None },
+                highlight: if no_highlight { Some(false) } else { None },
+                include_untracked: if include_untracked { Some(true) } else { None },
+                tab_width,
+            },
             focus,
             note,
             extra,
@@ -750,10 +718,7 @@ fn make_show_reloader(repo: PathBuf, rev: String) -> crate::tui::Reloader {
 /// binds a server listener on the repo's runtime socket path.
 #[cfg(all(feature = "serve", unix))]
 fn run_serve(
-    staged: bool,
-    watch: bool,
-    no_highlight: bool,
-    include_untracked: bool,
+    flags: CliFlags,
     focus: Option<String>,
     note: Vec<String>,
     extra: Vec<String>,
@@ -775,15 +740,7 @@ fn run_serve(
     let repo = find_repo(&cwd)?;
 
     let cfg = Config::load(&cwd);
-    let resolved = ResolvedConfig::resolve(
-        &cfg,
-        &CliFlags {
-            staged: if staged { Some(true) } else { None },
-            watch: if watch { Some(true) } else { None },
-            highlight: if no_highlight { Some(false) } else { None },
-            include_untracked: if include_untracked { Some(true) } else { None },
-        },
-    );
+    let resolved = ResolvedConfig::resolve(&cfg, &flags);
 
     if resolved.watch && !crate::tui::watch::Watcher::is_enabled() {
         eprintln!("note: `--watch` requires the `watch` feature (rebuild with --features watch)");
@@ -810,13 +767,7 @@ fn run_serve(
     open_review_from_text(
         &text,
         reloader,
-        resolved.highlight,
-        resolved.line_numbers,
-        resolved.wrap,
-        resolved.context_collapse,
-        resolved.theme,
-        resolved.layout,
-        resolved.cursor_line,
+        ViewSettings::from(&resolved),
         Some(repo),
         ReviewOptions {
             focus: focus_target,
@@ -1425,10 +1376,7 @@ fn spawn_session_listener(_repo: &std::path::Path) -> Option<crate::tui::ServerA
 
 #[cfg(not(all(feature = "serve", unix)))]
 fn run_serve(
-    _staged: bool,
-    _watch: bool,
-    _no_highlight: bool,
-    _include_untracked: bool,
+    _flags: CliFlags,
     _focus: Option<String>,
     _note: Vec<String>,
     _extra: Vec<String>,
@@ -1486,17 +1434,10 @@ fn run_reload(_hash: Option<String>) -> Result<()> {
     bail!("`reload` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
-#[allow(clippy::too_many_arguments)]
 fn open_review_from_text(
     text: &str,
     reloader: Option<crate::tui::Reloader>,
-    highlight_on: bool,
-    line_numbers_on: bool,
-    wrap_on: bool,
-    context_collapse: usize,
-    theme: Option<String>,
-    layout: crate::config::LayoutMode,
-    cursor_line: bool,
+    settings: crate::config::ViewSettings,
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<crate::tui::ServerArg>,
@@ -1521,20 +1462,7 @@ fn open_review_from_text(
         print_inspect(&review);
         return Ok(());
     }
-    match run_review_tui(
-        review.clone(),
-        reloader,
-        highlight_on,
-        line_numbers_on,
-        wrap_on,
-        context_collapse,
-        theme,
-        layout,
-        cursor_line,
-        workdir,
-        options,
-        server,
-    ) {
+    match run_review_tui(review.clone(), reloader, settings, workdir, options, server) {
         Ok(selections) => {
             // In --select mode the human's per-hunk decisions go to stdout as
             // JSON for the agent to parse. Outside --select, silently drop the
