@@ -1331,7 +1331,11 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
             ("#", "toggle line-number gutter"),
             ("w", "toggle word-level inline diff"),
             ("W", "toggle ignore-whitespace"),
-            ("t", "cycle theme (dark → light → auto)"),
+            ("t", "cycle theme mode (dark → light → auto)"),
+            (
+                "T",
+                "cycle theme palette (flexoki → catppuccin → gruvbox → nord → tokyonight)",
+            ),
             ("zc / zo", "fold / unfold current file"),
             ("zx", "toggle context collapse (··· N unchanged lines ···)"),
             ("L", "cycle layout (unified → split → stack)"),

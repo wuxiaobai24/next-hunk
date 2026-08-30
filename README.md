@@ -193,7 +193,8 @@ All forms accept the full binary name too (`next-hunk diff …`).
 | `#` | toggle line-number gutter |
 | `w` | toggle word-level inline diff |
 | `W` | toggle ignore-whitespace (hide whitespace-only changes) |
-| `t` | cycle theme: light → auto → dark |
+| `t` | cycle theme mode: dark → light → auto |
+| `T` | cycle theme palette: flexoki → catppuccin → gruvbox → nord → tokyonight |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `o` | open the focused line in `$EDITOR` (at that line) |
@@ -221,7 +222,7 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side columns), or `"auto"` (pick split/stack/unified from the live stream width) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
-| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"` (`t` cycles). Palettes are [Flexoki](https://flexoki.com). |
+| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
 
 Example `~/.config/next-hunk/config.toml`:
 

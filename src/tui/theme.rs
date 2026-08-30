@@ -5,15 +5,16 @@
 //! the user's choice (dark / light / auto); `auto` resolves via the
 //! `$COLORFGBG` convention at startup.
 //!
-//! Both palettes are [Flexoki](https://flexoki.com) — an inky, contrast-balanced
-//! color system by Steph Ango — mapped onto the semantic slots. The light
-//! variant uses Flexoki's paper background (`#FFFCF0`) with the deeper 600-level
-//! accents; the dark variant uses the black background (`#100F0F`) with the
-//! brighter 400-level accents.
+//! The default palette is [Flexoki](https://flexoki.com) — an inky,
+//! contrast-balanced color system by Steph Ango — mapped onto the semantic
+//! slots (light: paper background + 600-level accents; dark: black
+//! background + 400-level accents).
 //!
-//! This themes only the TUI chrome (line prefixes, gutters, status bar, …).
-//! Syntax-highlight (syntect) keeps its own default theme; swapping that is a
-//! follow-up.
+//! Curated presets ([`Palette`]) add Catppuccin, Gruvbox, Nord, and Tokyo
+//! Night for the terminals people actually run.
+//!
+//! This themes the TUI chrome (line prefixes, gutters, status bar, …) and
+//! picks the closest matching syntect syntax theme per palette.
 
 use ratatui::style::Color;
 
@@ -114,6 +115,268 @@ impl Theme {
             status_bg: hex(0xE6E4D9),         // base-100 (status band)
             note: hex(0x24837B),              // cyan-600 (italic agent notes)
         }
+    }
+
+    /// Catppuccin Mocha — dark, pastel-on-cold. Mapped from the official
+    /// palette (base `#1E1E2E`, mantle `#181825`, surface `#313244`/`#45475A`).
+    pub fn catppuccin_mocha() -> Self {
+        Self {
+            add: hex(0xA6E3A1),               // green
+            delete: hex(0xF38BA8),            // red
+            word_add: hex(0xA6E3A1),          // green (rendered reversed+bold)
+            word_del: hex(0xF38BA8),          // red
+            dim: hex(0x6C7086),               // overlay0
+            file_header: hex(0xCBA6F7),       // mauve (bold)
+            hunk_header: hex(0x89B4FA),       // blue (bold)
+            selection_fg: hex(0xCDD6F4),      // text
+            selection_bg: hex(0x45475A),      // surface1 (rail bar)
+            match_active_fg: hex(0x11111B),   // crust
+            match_active_bg: hex(0xF9E2AF),   // yellow (gold match)
+            match_inactive_bg: hex(0x313244), // surface0 (subdued)
+            cursor_bg: hex(0x45475A),         // surface1 (review cursor row)
+            edit_mode_fg: hex(0xFAB387),      // peach (active prompt)
+            status_bg: hex(0x181825),         // mantle (status band)
+            note: hex(0x94E2D5),              // teal (italic agent notes)
+        }
+    }
+
+    /// Catppuccin Latte — the light sibling of Mocha (base `#EFF1F5`,
+    /// mantle `#E6E9EF`, surface `#CCD0DA`/`#BCC0CC`).
+    pub fn catppuccin_latte() -> Self {
+        Self {
+            add: hex(0x40A02B),               // green
+            delete: hex(0xD20F39),            // red
+            word_add: hex(0x40A02B),          // green
+            word_del: hex(0xD20F39),          // red
+            dim: hex(0x6C6F85),               // subtext0
+            file_header: hex(0x8839EF),       // mauve (bold)
+            hunk_header: hex(0x1E66F5),       // blue (bold)
+            selection_fg: hex(0x4C4F69),      // text
+            selection_bg: hex(0xBCC0CC),      // surface1 (rail bar)
+            match_active_fg: hex(0x4C4F69),   // text on gold
+            match_active_bg: hex(0xDF8E1D),   // yellow (gold match)
+            match_inactive_bg: hex(0xCCD0DA), // surface0 (subdued)
+            cursor_bg: hex(0xBCC0CC),         // surface1 (review cursor row)
+            edit_mode_fg: hex(0xFE640B),      // peach (active prompt)
+            status_bg: hex(0xE6E9EF),         // mantle (status band)
+            note: hex(0x179299),              // teal (italic agent notes)
+        }
+    }
+
+    /// Gruvbox Dark — warm, earthy retro (bg `#282828`, fg `#EBDBB2`).
+    pub fn gruvbox_dark() -> Self {
+        Self {
+            add: hex(0xB8BB26),               // green
+            delete: hex(0xFB4934),            // red
+            word_add: hex(0xB8BB26),          // green
+            word_del: hex(0xFB4934),          // red
+            dim: hex(0xA89984),               // fg4 (gutter, meta, help line)
+            file_header: hex(0xD3869B),       // purple (bold)
+            hunk_header: hex(0x83A598),       // blue (bold)
+            selection_fg: hex(0xEBDBB2),      // fg
+            selection_bg: hex(0x504945),      // bg2 (rail bar)
+            match_active_fg: hex(0x282828),   // bg0
+            match_active_bg: hex(0xFABD2F),   // yellow (gold match)
+            match_inactive_bg: hex(0x3C3836), // bg1 (subdued)
+            cursor_bg: hex(0x504945),         // bg2 (review cursor row)
+            edit_mode_fg: hex(0xFE8019),      // orange (active prompt)
+            status_bg: hex(0x3C3836),         // bg1 (status band)
+            note: hex(0x8EC07C),              // aqua (italic agent notes)
+        }
+    }
+
+    /// Nord — cool, arctic-blue (polar night bg `#2E3440`, snow fg
+    /// `#ECEFF4`, frost blues `#81A1C1`/`#88C0D0`, aurora accents).
+    pub fn nord() -> Self {
+        Self {
+            add: hex(0xA3BE8C),               // nord14 (green)
+            delete: hex(0xBF616A),            // nord11 (red)
+            word_add: hex(0xA3BE8C),          // nord14
+            word_del: hex(0xBF616A),          // nord11
+            dim: hex(0x4C566A),               // nord3 (gutter, meta, help line)
+            file_header: hex(0xB48EAD),       // nord15 (purple, bold)
+            hunk_header: hex(0x81A1C1),       // nord9 (frost blue, bold)
+            selection_fg: hex(0xECEFF4),      // nord6 (snow)
+            selection_bg: hex(0x434C5E),      // nord2 (rail bar)
+            match_active_fg: hex(0x2E3440),   // nord0
+            match_active_bg: hex(0xEBCB8B),   // nord13 (gold match)
+            match_inactive_bg: hex(0x3B4252), // nord1 (subdued)
+            cursor_bg: hex(0x434C5E),         // nord2 (review cursor row)
+            edit_mode_fg: hex(0xD08770),      // nord12 (orange, active prompt)
+            status_bg: hex(0x3B4252),         // nord1 (status band)
+            note: hex(0x88C0D0),              // nord8 (frost cyan, italic notes)
+        }
+    }
+
+    /// Tokyo Night — deep blue night city (bg `#1A1B26`, fg `#C0CAF5`,
+    /// highlight `#292E42`, comment `#565F89`).
+    pub fn tokyonight() -> Self {
+        Self {
+            add: hex(0x9ECE6A),               // green
+            delete: hex(0xF7768E),            // red
+            word_add: hex(0x9ECE6A),          // green
+            word_del: hex(0xF7768E),          // red
+            dim: hex(0x565F89),               // comment (gutter, meta, help line)
+            file_header: hex(0xBB9AF7),       // magenta (bold)
+            hunk_header: hex(0x7AA2F7),       // blue (bold)
+            selection_fg: hex(0xC0CAF5),      // fg
+            selection_bg: hex(0x292E42),      // bg_highlight (rail bar)
+            match_active_fg: hex(0x1A1B26),   // bg
+            match_active_bg: hex(0xE0AF68),   // yellow (gold match)
+            match_inactive_bg: hex(0x414868), // terminal_black (subdued)
+            cursor_bg: hex(0x292E42),         // bg_highlight (review cursor row)
+            edit_mode_fg: hex(0xFF9E64),      // orange (active prompt)
+            status_bg: hex(0x16161E),         // bg_dark (status band)
+            note: hex(0x7DCFFF),              // cyan (italic agent notes)
+        }
+    }
+}
+
+/// A curated chrome palette family. Each family provides a dark variant
+/// (Flexoki, Catppuccin, Gruvbox, Nord, Tokyo Night also offer light where
+/// the source palette defines one) and the closest syntect syntax theme.
+///
+/// Config: `theme = "catppuccin-mocha"`, `"gruvbox-dark"`, `"nord"`,
+/// `"tokyonight"`, `"flexoki"` / `"flexoki-light"` — plus the legacy
+/// `"dark"` / `"light"` / `"auto"` (Flexoki + mode). Runtime: `T` cycles
+/// families, `t` cycles dark/light/auto within the family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Palette {
+    #[default]
+    Flexoki,
+    Catppuccin,
+    Gruvbox,
+    Nord,
+    TokyoNight,
+}
+
+impl Palette {
+    /// Cycler order for `T`: Flexoki → Catppuccin → Gruvbox → Nord →
+    /// Tokyo Night → Flexoki.
+    pub fn cycle(self) -> Self {
+        match self {
+            Palette::Flexoki => Palette::Catppuccin,
+            Palette::Catppuccin => Palette::Gruvbox,
+            Palette::Gruvbox => Palette::Nord,
+            Palette::Nord => Palette::TokyoNight,
+            Palette::TokyoNight => Palette::Flexoki,
+        }
+    }
+
+    /// Short family name (status line, parse input).
+    pub fn name(self) -> &'static str {
+        match self {
+            Palette::Flexoki => "flexoki",
+            Palette::Catppuccin => "catppuccin",
+            Palette::Gruvbox => "gruvbox",
+            Palette::Nord => "nord",
+            Palette::TokyoNight => "tokyonight",
+        }
+    }
+
+    /// The full preset name shown in the status line, e.g.
+    /// `catppuccin-mocha`. Mode maps to the family's variant; families
+    /// without a light variant keep their dark one in light mode.
+    pub fn preset_name(self, mode: ThemeMode) -> String {
+        let mode = if mode == ThemeMode::Auto {
+            if background_is_light() {
+                ThemeMode::Light
+            } else {
+                ThemeMode::Dark
+            }
+        } else {
+            mode
+        };
+        match (self, mode) {
+            (Palette::Flexoki, ThemeMode::Dark) => "flexoki".into(),
+            (Palette::Flexoki, _) => "flexoki-light".into(),
+            (Palette::Catppuccin, ThemeMode::Dark) => "catppuccin-mocha".into(),
+            (Palette::Catppuccin, _) => "catppuccin-latte".into(),
+            (Palette::Gruvbox, _) => "gruvbox-dark".into(),
+            (Palette::Nord, _) => "nord".into(),
+            (Palette::TokyoNight, _) => "tokyonight".into(),
+        }
+    }
+
+    /// Resolve the family + mode to a concrete [`Theme`].
+    pub fn theme(self, mode: ThemeMode) -> Theme {
+        let light = match mode {
+            ThemeMode::Dark => false,
+            ThemeMode::Light => true,
+            ThemeMode::Auto => background_is_light(),
+        };
+        match self {
+            Palette::Flexoki => {
+                if light {
+                    Theme::light()
+                } else {
+                    Theme::dark()
+                }
+            }
+            Palette::Catppuccin => {
+                if light {
+                    Theme::catppuccin_latte()
+                } else {
+                    Theme::catppuccin_mocha()
+                }
+            }
+            // Single-variant families: no official light palette shipped,
+            // so light mode keeps the dark one.
+            Palette::Gruvbox => Theme::gruvbox_dark(),
+            Palette::Nord => Theme::nord(),
+            Palette::TokyoNight => Theme::tokyonight(),
+        }
+    }
+
+    /// The closest syntect syntax theme for this family + mode, chosen from
+    /// syntect's built-in set.
+    pub fn syntect_theme_name(self, mode: ThemeMode) -> &'static str {
+        let light = match mode {
+            ThemeMode::Dark => false,
+            ThemeMode::Light => true,
+            ThemeMode::Auto => background_is_light(),
+        };
+        match self {
+            Palette::Flexoki => {
+                if light {
+                    "base16-ocean.light"
+                } else {
+                    "base16-ocean.dark"
+                }
+            }
+            Palette::Catppuccin => {
+                if light {
+                    "InspiredGitHub"
+                } else {
+                    "base16-mocha.dark"
+                }
+            }
+            Palette::Gruvbox => "base16-eighties.dark",
+            Palette::Nord => "base16-ocean.dark",
+            Palette::TokyoNight => "base16-ocean.dark",
+        }
+    }
+}
+
+/// Parse a `theme = "…"` config value into (palette, mode). Accepts preset
+/// names (`catppuccin-mocha`, `gruvbox-dark`, `nord`, `tokyonight`,
+/// `flexoki`/`flexoki-light`), the light variants of those families
+/// (`catppuccin-latte`), and the legacy mode names (`dark`/`light`/`auto`,
+/// Flexoki). Unknown values fall back to the default (Flexoki light), so a
+/// typo never breaks the TUI.
+pub fn parse_theme(s: &str) -> (Palette, ThemeMode) {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "dark" => (Palette::Flexoki, ThemeMode::Dark),
+        "light" => (Palette::Flexoki, ThemeMode::Light),
+        "auto" => (Palette::Flexoki, ThemeMode::Auto),
+        "flexoki" | "flexoki-dark" => (Palette::Flexoki, ThemeMode::Dark),
+        "flexoki-light" => (Palette::Flexoki, ThemeMode::Light),
+        "catppuccin" | "catppuccin-mocha" => (Palette::Catppuccin, ThemeMode::Dark),
+        "catppuccin-latte" => (Palette::Catppuccin, ThemeMode::Light),
+        "gruvbox" | "gruvbox-dark" => (Palette::Gruvbox, ThemeMode::Dark),
+        "nord" => (Palette::Nord, ThemeMode::Dark),
+        "tokyonight" | "tokyonight-night" => (Palette::TokyoNight, ThemeMode::Dark),
+        _ => (Palette::Flexoki, ThemeMode::Light),
     }
 }
 
@@ -244,6 +507,141 @@ mod tests {
             None => std::env::remove_var("COLORFGBG"),
         }
         result
+    }
+
+    #[test]
+    fn parse_theme_accepts_presets_and_legacy_modes() {
+        assert_eq!(
+            parse_theme("catppuccin-mocha"),
+            (Palette::Catppuccin, ThemeMode::Dark)
+        );
+        assert_eq!(
+            parse_theme("Catppuccin-Latte"),
+            (Palette::Catppuccin, ThemeMode::Light)
+        );
+        assert_eq!(
+            parse_theme("gruvbox-dark"),
+            (Palette::Gruvbox, ThemeMode::Dark)
+        );
+        assert_eq!(parse_theme("nord"), (Palette::Nord, ThemeMode::Dark));
+        assert_eq!(
+            parse_theme("tokyonight"),
+            (Palette::TokyoNight, ThemeMode::Dark)
+        );
+        assert_eq!(parse_theme("flexoki"), (Palette::Flexoki, ThemeMode::Dark));
+        // Legacy mode names keep their old meaning (Flexoki + mode).
+        assert_eq!(parse_theme("dark"), (Palette::Flexoki, ThemeMode::Dark));
+        assert_eq!(parse_theme("auto"), (Palette::Flexoki, ThemeMode::Auto));
+        // Unknown falls back to the default (Flexoki light): a typo never
+        // breaks the TUI.
+        assert_eq!(parse_theme("banana"), (Palette::Flexoki, ThemeMode::Light));
+    }
+
+    #[test]
+    fn palette_cycle_wraps_through_all_families() {
+        let mut p = Palette::Flexoki;
+        let mut seen = vec![p.name()];
+        for _ in 0..5 {
+            p = p.cycle();
+            seen.push(p.name());
+        }
+        assert_eq!(
+            seen,
+            vec![
+                "flexoki",
+                "catppuccin",
+                "gruvbox",
+                "nord",
+                "tokyonight",
+                "flexoki"
+            ]
+        );
+    }
+
+    #[test]
+    fn preset_palettes_are_distinct_from_flexoki() {
+        let base = Theme::dark();
+        for (name, t) in [
+            ("catppuccin-mocha", Theme::catppuccin_mocha()),
+            ("gruvbox-dark", Theme::gruvbox_dark()),
+            ("nord", Theme::nord()),
+            ("tokyonight", Theme::tokyonight()),
+        ] {
+            assert_ne!(t.file_header, base.file_header, "{name} header differs");
+            assert_ne!(t.status_bg, base.status_bg, "{name} status bg differs");
+            assert_ne!(t.add, base.add, "{name} add color differs");
+        }
+        // Latte differs from Flexoki light too.
+        assert_ne!(
+            Theme::catppuccin_latte().status_bg,
+            Theme::light().status_bg
+        );
+    }
+
+    #[test]
+    fn catppuccin_mode_resolves_to_its_own_variants() {
+        let mocha = Palette::Catppuccin.theme(ThemeMode::Dark);
+        let latte = Palette::Catppuccin.theme(ThemeMode::Light);
+        assert_eq!(mocha.status_bg, Theme::catppuccin_mocha().status_bg);
+        assert_eq!(latte.status_bg, Theme::catppuccin_latte().status_bg);
+        // Single-variant families keep their dark theme in light mode.
+        assert_eq!(
+            Palette::Nord.theme(ThemeMode::Light).status_bg,
+            Theme::nord().status_bg
+        );
+    }
+
+    #[test]
+    fn preset_names_read_like_config_values() {
+        assert_eq!(
+            Palette::Catppuccin.preset_name(ThemeMode::Dark),
+            "catppuccin-mocha"
+        );
+        assert_eq!(
+            Palette::Catppuccin.preset_name(ThemeMode::Light),
+            "catppuccin-latte"
+        );
+        assert_eq!(Palette::Flexoki.preset_name(ThemeMode::Dark), "flexoki");
+        assert_eq!(Palette::Nord.preset_name(ThemeMode::Dark), "nord");
+        // Round-trip: a preset name parses back to the same (palette, mode).
+        for (p, m) in [
+            (Palette::Flexoki, ThemeMode::Dark),
+            (Palette::Catppuccin, ThemeMode::Dark),
+            (Palette::Catppuccin, ThemeMode::Light),
+            (Palette::Gruvbox, ThemeMode::Dark),
+            (Palette::Nord, ThemeMode::Dark),
+            (Palette::TokyoNight, ThemeMode::Dark),
+        ] {
+            let name = p.preset_name(m);
+            assert_eq!(parse_theme(&name), (p, m), "round-trip {name}");
+        }
+    }
+
+    #[test]
+    fn syntect_names_are_valid_builtin_selections() {
+        for p in [
+            Palette::Flexoki,
+            Palette::Catppuccin,
+            Palette::Gruvbox,
+            Palette::Nord,
+            Palette::TokyoNight,
+        ] {
+            for m in [ThemeMode::Dark, ThemeMode::Light] {
+                let name = p.syntect_theme_name(m);
+                assert!(
+                    [
+                        "base16-ocean.dark",
+                        "base16-ocean.light",
+                        "base16-mocha.dark",
+                        "base16-eighties.dark",
+                        "InspiredGitHub"
+                    ]
+                    .contains(&name),
+                    "unexpected syntect pick {name} for {} {m:?}",
+                    p.name()
+                );
+            }
+        }
     }
 
     #[test]

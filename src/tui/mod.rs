@@ -133,17 +133,18 @@ pub fn run_review_tui(
     let mut terminal = Terminal::new(backend).context("create terminal")?;
     terminal.clear()?;
 
-    // Honor the config theme: parse "dark"/"light"/"auto" into a ThemeMode
-    // (unknown/empty falls back to dark inside ThemeMode::parse).
-    let theme_mode = theme
-        .as_deref()
-        .map(theme::ThemeMode::parse)
-        .unwrap_or_default();
+    // Honor the config theme: parse preset names ("catppuccin-mocha",
+    // "gruvbox-dark", …) or legacy modes ("dark"/"light"/"auto") into a
+    // (palette, mode) pair; unknown values fall back to the default inside
+    // `parse_theme`.
+    let (palette, theme_mode) = theme.as_deref().map(theme::parse_theme).unwrap_or_default();
     let highlighter = std::sync::Arc::new(
-        crate::highlight::Highlighter::load(theme_mode.syntect_theme_name())
+        crate::highlight::Highlighter::load(palette.syntect_theme_name(theme_mode))
             .unwrap_or_else(|_| crate::highlight::Highlighter::load_noop()),
     );
     let mut app = App::with_theme(review, highlighter, theme_mode);
+    app.palette = palette;
+    app.theme = palette.theme(theme_mode);
     app.highlight_on = start_highlight;
     app.line_numbers_on = start_line_numbers;
     app.wrap_on = wrap_on;
@@ -1294,6 +1295,26 @@ diff --git a/a.rs b/a.rs
             app.status.message.contains("no notes"),
             "jump without notes should say so: {}",
             app.status.message
+        );
+    }
+
+    #[test]
+    fn catppuccin_palette_paints_the_status_bar_mocha() {
+        let mut app = select_sample_app();
+        app.palette = theme::Palette::Catppuccin;
+        app.theme_mode = theme::ThemeMode::Dark;
+        app.apply_theme();
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        // Catppuccin Mocha's status band is the mantle color #181825.
+        let mocha_mantle = ratatui::style::Color::Rgb(0x18, 0x18, 0x25);
+        assert!(
+            buf.content()
+                .iter()
+                .any(|c| c.style().bg == Some(mocha_mantle)),
+            "status bar should be painted with the Mocha mantle color"
         );
     }
 

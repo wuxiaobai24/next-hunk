@@ -6,6 +6,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — theme presets (`T`)
+- **Curated chrome palettes** beyond the Flexoki default: `catppuccin-mocha`
+  / `catppuccin-latte`, `gruvbox-dark`, `nord`, and `tokyonight`, each
+  mapped onto the semantic slots from the official source palettes with a
+  matching syntect syntax theme. Config: `theme = "catppuccin-mocha"` (or
+  `"gruvbox-dark"`, `"nord"`, `"tokyonight"`, `"flexoki"` /
+  `"flexoki-light"`); legacy `"dark"` / `"light"` / `"auto"` values keep
+  their old meaning. Unknown names fall back to the default — a typo never
+  breaks the TUI.
+- **`T` cycles the palette family** (flexoki → catppuccin → gruvbox → nord
+  → tokyonight, wrap-around), keeping the current mode; `t` still cycles
+  dark/light/auto *within* the family. Both reload the syntax palette and
+  bump the highlight-cache generation so stale runs are discarded. The
+  status line names the live preset (`theme: catppuccin-mocha (dark)`).
+
 ### Added — review cursor + `c` note composition
 - **A visible review cursor** — `j`/`k` (and arrows, `J`/`K`, Ctrl-D/U/F/B,
   PgUp/PgDn, `g`/`G`) now move a highlighted cursor row; the viewport

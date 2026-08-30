@@ -242,6 +242,8 @@ pub struct App {
     /// User's theme choice (dark / light / auto). `theme` is the resolved
     /// palette the view reads from; `t` cycles the mode and refreshes it.
     pub theme_mode: ThemeMode,
+    /// The chrome palette family (Flexoki / Catppuccin / …); `T` cycles it.
+    pub palette: crate::tui::theme::Palette,
     pub theme: Theme,
 
     /// Current input mode (normal / search-edit / filter-edit).
@@ -472,6 +474,7 @@ impl App {
             stream_rect: None,
             show_help: false,
             theme_mode,
+            palette: crate::tui::theme::Palette::default(),
             theme,
             mode: InputMode::Normal,
             search: Search::default(),
@@ -1155,17 +1158,27 @@ impl App {
                 self.rebuild_collapse();
                 self.set_success(format!("layout: {}", self.layout_mode.as_str()));
             }
-            // cycle theme: dark → light → auto → dark; reload syntect palette
+            // cycle theme mode: dark → light → auto → dark (within the
+            // current palette family); reloads the syntect palette to match
             KeyCode::Char('t') => {
                 self.theme_mode = self.theme_mode.cycle();
-                self.theme = self.theme_mode.to_theme();
-                // New Arc so in-flight worker jobs keep the old theme gen-safe.
-                self.highlighter = Arc::new(
-                    Highlighter::load(self.theme_mode.syntect_theme_name())
-                        .unwrap_or_else(|_| Highlighter::load_noop()),
-                );
-                self.cache.invalidate();
-                self.set_info(format!("theme: {}", self.theme_mode.name()));
+                self.apply_theme();
+                self.set_info(format!(
+                    "theme: {} ({})",
+                    self.palette.preset_name(self.theme_mode),
+                    self.theme_mode.name()
+                ));
+            }
+            // cycle the palette family: flexoki → catppuccin → gruvbox →
+            // nord → tokyonight → flexoki; keeps the current mode
+            KeyCode::Char('T') => {
+                self.palette = self.palette.cycle();
+                self.apply_theme();
+                self.set_info(format!(
+                    "theme: {} ({})",
+                    self.palette.preset_name(self.theme_mode),
+                    self.theme_mode.name()
+                ));
             }
             // begin in-stream search
             KeyCode::Char('/') => {
@@ -1629,6 +1642,20 @@ impl App {
             self.last_note_jump = Some(row);
             self.set_info(format!("💬 note {ordinal}/{}", rows.len()));
         }
+    }
+
+    /// Re-resolve the chrome theme and the syntect syntax palette from the
+    /// current (palette, mode) pair. Shared by `t` (mode cycle), `T`
+    /// (palette cycle), and startup. Loads a fresh `Highlighter` Arc so
+    /// in-flight worker jobs keep the old theme gen-safe, then bumps the
+    /// cache generation so stale runs are discarded.
+    pub fn apply_theme(&mut self) {
+        self.theme = self.palette.theme(self.theme_mode);
+        self.highlighter = Arc::new(
+            Highlighter::load(self.palette.syntect_theme_name(self.theme_mode))
+                .unwrap_or_else(|_| Highlighter::load_noop()),
+        );
+        self.cache.invalidate();
     }
 
     // ── note composition (`c` at the cursor) ─────────────────────────────────
@@ -2643,6 +2670,52 @@ diff --git a/src/main.rs b/src/main.rs
     }
 
     // ---- cursor + note composition (`c`) ----
+
+    #[test]
+    fn shift_t_cycles_the_palette_and_reloads_the_theme() {
+        let mut app = two_file_app();
+        assert_eq!(app.palette, crate::tui::theme::Palette::Flexoki);
+        app.theme_mode = crate::tui::theme::ThemeMode::Dark;
+        app.apply_theme();
+        let gen_before = app.cache.current_gen();
+        app.handle_key(char_key('T'));
+        assert_eq!(app.palette, crate::tui::theme::Palette::Catppuccin);
+        assert_eq!(
+            app.theme.status_bg,
+            crate::tui::theme::Theme::catppuccin_mocha().status_bg,
+            "chrome should switch to Mocha"
+        );
+        assert!(
+            app.cache.current_gen() > gen_before,
+            "highlight cache generation must bump so stale runs are dropped"
+        );
+        assert!(
+            app.status.contains("catppuccin-mocha"),
+            "status should name the preset: {}",
+            app.status.message
+        );
+        // Keep cycling wraps back to Flexoki after the full ring.
+        for _ in 0..4 {
+            app.handle_key(char_key('T'));
+        }
+        assert_eq!(app.palette, crate::tui::theme::Palette::Flexoki);
+    }
+
+    #[test]
+    fn t_cycles_mode_within_the_current_palette() {
+        let mut app = two_file_app();
+        app.palette = crate::tui::theme::Palette::Catppuccin;
+        app.theme_mode = crate::tui::theme::ThemeMode::Dark;
+        app.apply_theme();
+        app.handle_key(char_key('t'));
+        assert_eq!(app.theme_mode, crate::tui::theme::ThemeMode::Light);
+        assert_eq!(
+            app.theme.status_bg,
+            crate::tui::theme::Theme::catppuccin_latte().status_bg,
+            "mode switch should resolve to the family's light variant"
+        );
+        assert!(app.status.contains("catppuccin-latte"));
+    }
 
     #[test]
     fn c_composes_note_at_cursor_line() {
