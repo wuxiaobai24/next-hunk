@@ -21,7 +21,7 @@ use crate::ir::{CollapseIndex, Review, Viewport, ViewportQuery};
 use crate::tui::theme::{Theme, ThemeMode};
 
 /// Format a [`FocusTarget`] for status messages (compact, human-readable).
-fn focus_display(target: &FocusTarget) -> String {
+pub fn focus_display(target: &FocusTarget) -> String {
     match target {
         FocusTarget::File(p) => p.clone(),
         FocusTarget::FileLine(p, l) => format!("{p}:{l}"),
