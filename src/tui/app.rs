@@ -1543,11 +1543,13 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.prompt_clear_before();
+                    self.update_live_filter();
                     self.set_info(format!("filter: {}", self.path_filter));
                     return;
                 }
                 KeyCode::Char('w') => {
                     self.prompt_drop_word();
+                    self.update_live_filter();
                     self.set_info(format!("filter: {}", self.path_filter));
                     return;
                 }
@@ -1566,10 +1568,12 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.prompt_backspace();
+                self.update_live_filter();
                 self.set_info(format!("filter: {}", self.path_filter));
             }
             KeyCode::Delete => {
                 self.prompt_delete();
+                self.update_live_filter();
                 self.set_info(format!("filter: {}", self.path_filter));
             }
             KeyCode::Left => self.move_prompt_cursor(-1),
@@ -1578,6 +1582,7 @@ impl App {
             KeyCode::End => self.prompt_cursor = self.path_filter.chars().count(),
             KeyCode::Char(c) => {
                 self.prompt_insert(c);
+                self.update_live_filter();
                 self.set_info(format!("filter: {}", self.path_filter));
             }
             _ => {}
@@ -1691,14 +1696,14 @@ impl App {
         }
     }
 
-    /// Apply the path filter: clamp selected_file into the visible set.
-    fn apply_filter(&mut self) {
+    /// Incremental filter: re-anchor while typing. The visible set derives
+    /// from `path_filter` directly (the rail recomputes it every draw), so
+    /// this only moves the selection/jump when the current file no longer
+    /// matches. A no-op while the filter is empty.
+    fn update_live_filter(&mut self) {
         if self.path_filter.trim().is_empty() {
-            self.set_success("filter cleared");
             return;
         }
-        // Keep selected_file valid: if it no longer matches, jump to the first
-        // file that does.
         let needle = self.path_filter.to_lowercase();
         let selected_matches = self
             .review
@@ -1710,16 +1715,27 @@ impl App {
                 self.selected_file = first;
                 let row = ViewportQuery::file_start_row(&self.review, first);
                 self.jump_to_stream(row);
-            } else {
-                self.set_error(format!("no files match {:?}", self.path_filter));
-                return;
             }
         }
-        self.set_info(format!(
-            "filter: {:?} ({} files)",
-            self.path_filter,
-            self.visible_files().len()
-        ));
+    }
+
+    /// Confirm the filter (Enter): report the narrowed set (or that nothing
+    /// matches). The live updater already re-anchored the selection.
+    fn apply_filter(&mut self) {
+        if self.path_filter.trim().is_empty() {
+            self.set_success("filter cleared");
+            return;
+        }
+        self.update_live_filter();
+        if self.visible_files().is_empty() {
+            self.set_error(format!("no files match {:?}", self.path_filter));
+        } else {
+            self.set_info(format!(
+                "filter: {:?} ({} files)",
+                self.path_filter,
+                self.visible_files().len()
+            ));
+        }
     }
 
     /// Indices of files matching the current path filter (all if empty).
@@ -3995,6 +4011,29 @@ diff --git a/b.rs b/b.rs
         assert_eq!(s.rejected, vec!["b.rs:h2".to_string()]);
         // The other 2 remain undecided.
         assert_eq!(s.undecided.len(), 2);
+    }
+
+    #[test]
+    fn filter_is_live_while_typing_before_enter() {
+        let mut app = three_file_app();
+        app.handle_key(char_key('f'));
+        assert_eq!(app.mode, InputMode::Filter);
+        // The first keystroke already narrows the rail and moves the
+        // selection — no Enter needed.
+        app.handle_key(char_key('b'));
+        assert_eq!(app.visible_files(), vec![1]);
+        assert_eq!(app.selected_file, 1);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(app.visible_files(), vec![1]);
+        // Editing the filter live widens/narrows again.
+        app.handle_key(char_key('f'));
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.visible_files().len(), 3);
+        app.handle_key(char_key('c'));
+        assert_eq!(app.visible_files(), vec![2]);
+        app.handle_key(key(KeyCode::Esc));
+        assert_eq!(app.visible_files().len(), 3, "Esc clears the filter");
     }
 
     #[test]
