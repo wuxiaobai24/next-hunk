@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — markdown export robustness
+
+- Comment bodies in the Markdown report are now blockquoted (`> …`): a
+  multi-line note (serve `comment add` can contain newlines) keeps its
+  line structure, and a line starting with `#` can no longer hijack the
+  report's headings.
+- The human-note dedup now consumes one mirror per match — an agent
+  `--note` with byte-identical target and text to a human's `c` note used
+  to be silently swallowed by it in the report.
+
 ### Changed — docs synced with current behavior
 
 - README_zh: added the `T`/`L` keybinding rows, the `cursor_line`,
