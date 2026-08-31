@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — quitting with unsaved notes asks for confirmation
+
+- **A stray `q`/Ctrl+C no longer silently discards your notes.** In a plain
+  review (no `--export` / `export_on_quit`, not `--select`) the notes you
+  compose with `c` exist only in that session — quitting dropped them with
+  no warning. The first quit attempt now warns (`N notes would be
+  discarded — quit again to confirm, or set --export / export_on_quit to
+  keep them`) and arms; the next `q` or Ctrl+C quits. Sessions with an
+  export target, or no notes, quit immediately as before.
+
 ### Changed — Esc cancels instead of quitting
 
 - **`Esc` no longer quits in normal mode.** Esc is the cancel key in every
