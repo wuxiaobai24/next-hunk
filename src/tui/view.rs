@@ -1569,6 +1569,9 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     if !app.collapse_on {
         mid.push(Span::styled(" zx−", badge));
     }
+    if app.wrap_on {
+        mid.push(Span::styled(" wrap", badge));
+    }
     match app.effective_layout() {
         crate::config::LayoutMode::Split => mid.push(Span::styled(" split", badge)),
         crate::config::LayoutMode::Stack => mid.push(Span::styled(" stack", badge)),
@@ -1718,7 +1721,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                 )
             } else {
                 format!(
-                    " {}/{} cursor · {}/{} half-page · {}/{} top/bottom · {}/{} hunk · {}/{} note · {} note here · {}/{} fold · {} ctx · {} file · {} rail · {} search · {} filter · {} open · {} hl · {} lines · {} word · {} ws · {} theme · {} help · {} quit ",
+                    " {}/{} cursor · {}/{} half-page · {}/{} top/bottom · {}/{} hunk · {}/{} note · {} note here · {}/{} fold · {} ctx · {} file · {} rail · {} search · {} filter · {} open · {} hl · {} lines · {} word · {} ws · {} wrap · {} theme · {} help · {} quit ",
                     k(Action::CursorDown),
                     k(Action::CursorUp),
                     k(Action::HalfPageDown),
@@ -1742,6 +1745,7 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                     k(Action::ToggleLineNumbers),
                     k(Action::ToggleWordDiff),
                     k(Action::ToggleIgnoreWhitespace),
+                    k(Action::ToggleWrap),
                     k(Action::CycleThemeMode),
                     k(Action::Help),
                     k(Action::Quit),
@@ -1875,6 +1879,7 @@ fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
             HelpRow::Action(Action::ToggleLineNumbers),
             HelpRow::Action(Action::ToggleWordDiff),
             HelpRow::Action(Action::ToggleIgnoreWhitespace),
+            HelpRow::Action(Action::ToggleWrap),
             HelpRow::Action(Action::ToggleContextCollapse),
             HelpRow::Action(Action::CycleLayout),
             HelpRow::Action(Action::CycleThemeMode),
@@ -2833,6 +2838,7 @@ diff --git a/b.rs b/b.rs
         app.ignore_ws = true;
         app.word_diff_on = false;
         app.collapse_on = false;
+        app.wrap_on = true;
         app.layout_mode = crate::config::LayoutMode::Stack;
         let backend = ratatui::backend::TestBackend::new(80, 10);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
@@ -2849,6 +2855,7 @@ diff --git a/b.rs b/b.rs
         assert!(rendered.contains(" WS"), "ignore-ws badge: {rendered}");
         assert!(rendered.contains(" wd−"), "word-diff-off badge: {rendered}");
         assert!(rendered.contains(" zx−"), "collapse-off badge: {rendered}");
+        assert!(rendered.contains(" wrap"), "wrap-on badge: {rendered}");
         assert!(
             rendered.contains(" stack"),
             "stack layout badge: {rendered}"

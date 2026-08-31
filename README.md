@@ -235,6 +235,7 @@ still requires a git object store (any colocated repo has one).
 | `Space` | next hunk (quick `]h` alias) |
 | `zc` | fold (collapse) current file |
 | `zo` | unfold (expand) current file |
+| `zw` | toggle line wrapping (default off; truncates long lines) |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
 | `1`–`9` | jump to the Nth file |

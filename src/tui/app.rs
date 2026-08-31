@@ -1277,6 +1277,14 @@ impl App {
                     self.set_info("ignore-whitespace off");
                 }
             }
+            Action::ToggleWrap => {
+                self.wrap_on = !self.wrap_on;
+                if self.wrap_on {
+                    self.set_info("wrap on (scroll position approximate)");
+                } else {
+                    self.set_info("wrap off");
+                }
+            }
             Action::ToggleRail => {
                 self.show_rail = !self.show_rail;
                 if self.show_rail {
@@ -2347,6 +2355,20 @@ diff --git a/b.rs b/b.rs
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.should_quit, "Esc must not quit in normal mode");
         assert_eq!(app.pending_prefix, None, "Esc clears the armed prefix");
+    }
+
+    #[test]
+    fn zw_toggles_wrap_at_runtime() {
+        let mut app = two_file_app();
+        assert!(!app.wrap_on);
+        app.handle_key(key(KeyCode::Char('z')));
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(app.wrap_on);
+        assert!(app.status.contains("wrap on"));
+        app.handle_key(key(KeyCode::Char('z')));
+        app.handle_key(key(KeyCode::Char('w')));
+        assert!(!app.wrap_on);
+        assert!(app.status.contains("wrap off"));
     }
 
     #[test]
