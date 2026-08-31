@@ -54,6 +54,7 @@ pub enum Action {
     ToggleLineNumbers,
     ToggleWordDiff,
     ToggleIgnoreWhitespace,
+    ToggleWrap,
     ToggleRail,
     CycleLayout,
     CycleThemeMode,
@@ -98,6 +99,7 @@ impl Action {
             Action::ToggleLineNumbers => "toggle_line_numbers",
             Action::ToggleWordDiff => "toggle_word_diff",
             Action::ToggleIgnoreWhitespace => "toggle_ignore_whitespace",
+            Action::ToggleWrap => "toggle_wrap",
             Action::ToggleRail => "toggle_rail",
             Action::CycleLayout => "cycle_layout",
             Action::CycleThemeMode => "cycle_theme_mode",
@@ -141,6 +143,7 @@ impl Action {
             Action::ToggleLineNumbers => "toggle the line-number gutter",
             Action::ToggleWordDiff => "toggle word-level diff emphasis",
             Action::ToggleIgnoreWhitespace => "toggle ignore-whitespace view",
+            Action::ToggleWrap => "toggle line wrapping",
             Action::ToggleRail => "toggle the file rail",
             Action::CycleLayout => "cycle layout (unified → split → stack)",
             Action::CycleThemeMode => "cycle theme mode (dark/light/auto)",
@@ -184,6 +187,7 @@ impl Action {
             Action::ToggleLineNumbers => &["#"],
             Action::ToggleWordDiff => &["w"],
             Action::ToggleIgnoreWhitespace => &["W"],
+            Action::ToggleWrap => &["zw"],
             Action::ToggleRail => &["b"],
             Action::CycleLayout => &["L"],
             Action::CycleThemeMode => &["t"],
@@ -545,6 +549,7 @@ pub fn all_actions() -> &'static [Action] {
         Action::ToggleLineNumbers,
         Action::ToggleWordDiff,
         Action::ToggleIgnoreWhitespace,
+        Action::ToggleWrap,
         Action::ToggleRail,
         Action::CycleLayout,
         Action::CycleThemeMode,
@@ -607,6 +612,10 @@ mod tests {
         assert_eq!(
             km.lookup_sequence('z', &key(KeyCode::Char('x'))),
             Some(Action::ToggleContextCollapse)
+        );
+        assert_eq!(
+            km.lookup_sequence('z', &key(KeyCode::Char('w'))),
+            Some(Action::ToggleWrap)
         );
     }
 

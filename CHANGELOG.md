@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — runtime wrap toggle (`zw`)
+
+- **`zw` toggles line wrapping** at runtime (in the `zc`/`zo`/`zx` fold-key
+  family). Wrapping was config-only (`wrap = true`) — hitting one 500-column
+  line meant quitting to edit config.toml. A ` wrap` badge appears in the
+  status bar while it's on; the toast notes that scroll positions are
+  approximate while wrapped (one virtual row can span multiple screen rows).
+
 ### Changed — transient toasts sit flush right (no more clipping)
 
 - The status message (errors, confirmations) is rendered **right-aligned**
