@@ -297,8 +297,10 @@ pub struct App {
     pub search: Search,
     /// File-rail path filter substring (empty = show all).
     pub path_filter: String,
-    /// Pending first key of a two-key sequence (`]` / `[`). Cleared on the next
-    /// key or after a short no-op. Used to spell `]h` / `[h` (next/prev hunk).
+    /// Pending first key of a two-key sequence (`]` / `[` / `z`). Cleared by
+    /// the next key or `Esc`; while armed, a `{prefix}…` badge shows in the
+    /// status bar. Used to spell `]h` / `[h` (next/prev hunk) and the `z`
+    /// fold family.
     pub pending_prefix: Option<char>,
     /// A pending "open in editor" request. Set when the user presses `o` on a
     /// code line; the run loop (which owns the terminal) consumes it, suspends
