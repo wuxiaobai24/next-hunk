@@ -393,6 +393,29 @@ pub fn parse_theme(s: &str) -> (Palette, ThemeMode) {
     }
 }
 
+/// True when `s` is a token [`parse_theme`] understands. Used at startup to
+/// warn on a typo (`theme = "cattpuccin"`) instead of silently falling back
+/// to the default theme.
+pub fn theme_known(s: &str) -> bool {
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "dark"
+            | "light"
+            | "auto"
+            | "flexoki"
+            | "flexoki-dark"
+            | "flexoki-light"
+            | "catppuccin"
+            | "catppuccin-mocha"
+            | "catppuccin-latte"
+            | "gruvbox"
+            | "gruvbox-dark"
+            | "nord"
+            | "tokyonight"
+            | "tokyonight-night"
+    )
+}
+
 /// The user's theme choice. `Auto` resolves at startup via `$COLORFGBG`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
@@ -554,6 +577,32 @@ mod tests {
             None => std::env::remove_var("COLORFGBG"),
         }
         result
+    }
+
+    #[test]
+    fn theme_known_covers_every_parse_theme_token() {
+        for s in [
+            "dark",
+            "light",
+            "auto",
+            "flexoki",
+            "flexoki-dark",
+            "flexoki-light",
+            "catppuccin",
+            "catppuccin-mocha",
+            "catppuccin-latte",
+            "gruvbox",
+            "gruvbox-dark",
+            "nord",
+            "tokyonight",
+            "tokyonight-night",
+            " Flexoki ",
+        ] {
+            assert!(theme_known(s), "{s} should be known");
+        }
+        for s in ["", "banana", "cattpuccin", "flexoki-darkk"] {
+            assert!(!theme_known(s), "{s} should be unknown");
+        }
     }
 
     #[test]

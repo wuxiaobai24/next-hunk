@@ -144,6 +144,17 @@ pub fn run_review_tui(
         anyhow::bail!("nothing to review (empty diff)");
     }
 
+    // Warn before the alternate screen swallows stderr: an unknown theme
+    // silently falls back to the default inside parse_theme.
+    if let Some(t) = settings.theme.as_deref() {
+        if !theme::theme_known(t) {
+            eprintln!(
+                "warning: unknown theme {t:?} (valid: flexoki, catppuccin, gruvbox, nord, \
+                 tokyonight, with -light/-dark variants, plus dark/light/auto) — using flexoki dark"
+            );
+        }
+    }
+
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
