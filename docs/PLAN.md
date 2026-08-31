@@ -160,8 +160,9 @@
   （`ViewSettings` 替换 9 个位置布尔参数）
 - [ ] **`[keybindings]` 按键重映射**：命令名 → 键位，默认 = 现有键位；
   未知命令/冲突告警（hunk 日常头号功能）
-- [ ] **jj / Sapling revset**：`.jj`/`.sl` 探测，`diff`/`show` 直通
-  `jj diff --git` / `sl diff`
+- [x] **jj / Sapling revset**：`.jj`/`.sl` 探测（colocated 时 jj 优先），
+  `diff`/`show`/`serve`/`inspect` 直通 `jj diff --git -r` / `sl diff`；
+  会话标题带 jj 标识，`reload`/`--watch` 重跑同一 VCS 命令
 - [ ] **CLI 细节**：`skill path`、`--agent-context`、difftool 兼容调用、
   `update --check`
 - [ ] **UI 打磨**：文件头 A/M/D/R 徽章 + 增删比例条、文件栏/注释卡片/

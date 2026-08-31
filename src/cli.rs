@@ -435,6 +435,89 @@ fn run() -> Result<()> {
             }
 
             let cwd = std::env::current_dir()?;
+            // Jujutsu / Sapling workspaces route through their CLIs (revsets
+            // are native); git stays on the in-process gix path.
+            match crate::source::detect(&cwd) {
+                crate::source::Vcs::Jujutsu | crate::source::Vcs::Sapling => {
+                    let jj = crate::source::detect(&cwd) == crate::source::Vcs::Jujutsu;
+                    let marker = if jj { ".jj" } else { ".sl" };
+                    let root = crate::source::find_marker_root(&cwd, marker)?;
+                    if staged {
+                        eprintln!("note: --staged is git-only; ignored in this workspace");
+                    }
+                    if include_untracked {
+                        eprintln!(
+                            "note: --include-untracked is git-only; the working copy is always shown"
+                        );
+                    }
+                    let mut pathspecs: Vec<String> =
+                        extra.into_iter().filter(|s| s != "--").collect();
+                    // Any non-path target is a revset; the VCS CLI reports a
+                    // bad revset in its own words.
+                    let target = match target {
+                        Some(t) => {
+                            if let Some(rel) = disk_path_as_pathspec(&root, &cwd, &t) {
+                                eprintln!("note: `{t}` is a path; using it as a pathspec");
+                                pathspecs.push(rel);
+                                None
+                            } else {
+                                Some(t)
+                            }
+                        }
+                        None => None,
+                    };
+                    let text = if jj {
+                        crate::source::jj_diff(&root, target.as_deref(), &pathspecs)?
+                    } else {
+                        crate::source::sl_diff(&root, target.as_deref(), &pathspecs)?
+                    };
+                    let session_title = match &target {
+                        Some(r) => {
+                            if jj {
+                                format!("jj {r}")
+                            } else {
+                                format!("sl {r}")
+                            }
+                        }
+                        None => {
+                            if jj {
+                                "jj working copy (@)".to_string()
+                            } else {
+                                "sl working copy".to_string()
+                            }
+                        }
+                    };
+                    let reloader =
+                        Some(make_vcs_diff_reloader(root.clone(), target, pathspecs, jj));
+                    let server = spawn_session_listener(&root);
+                    let resolved = ResolvedConfig::resolve(
+                        &Config::load(&cwd),
+                        &CliFlags {
+                            highlight: if no_highlight { Some(false) } else { None },
+                            watch: if watch { Some(true) } else { None },
+                            tab_width,
+                            ..Default::default()
+                        },
+                    );
+                    return open_review_from_text(
+                        &text,
+                        reloader,
+                        ViewSettings::from(&resolved),
+                        Some(root),
+                        ReviewOptions {
+                            focus: focus_target,
+                            notes,
+                            select_mode: select,
+                            session_mode: "diff".into(),
+                            session_title,
+                            watch: resolved.watch,
+                        },
+                        server,
+                    );
+                }
+                crate::source::Vcs::Git => {}
+            }
+
             let repo = find_repo(&cwd)?;
 
             // Layered config: project (.next-hunk/config.toml) > user
@@ -524,6 +607,38 @@ fn run() -> Result<()> {
         }
         Commands::Show { rev } => {
             let cwd = std::env::current_dir()?;
+            // jj/sl: the rev argument is a revset; their CLI prints the diff.
+            let vcs = crate::source::detect(&cwd);
+            if vcs != crate::source::Vcs::Git {
+                let marker = if vcs == crate::source::Vcs::Jujutsu {
+                    ".jj"
+                } else {
+                    ".sl"
+                };
+                let root = crate::source::find_marker_root(&cwd, marker)?;
+                let text = if vcs == crate::source::Vcs::Jujutsu {
+                    crate::source::jj_show(&root, &rev)?
+                } else {
+                    crate::source::sl_show(&root, &rev)?
+                };
+                let settings = ViewSettings::from(&ResolvedConfig::resolve(
+                    &Config::load(&cwd),
+                    &CliFlags::default(),
+                ));
+                let server = spawn_session_listener(&root);
+                return open_review_from_text(
+                    &text,
+                    Some(make_vcs_show_reloader(root.clone(), rev.clone(), vcs)),
+                    settings,
+                    Some(root),
+                    ReviewOptions {
+                        session_mode: "show".into(),
+                        session_title: format!("show {rev}"),
+                        ..Default::default()
+                    },
+                    server,
+                );
+            }
             let repo = find_repo(&cwd)?;
             let text = git_show(&repo, &rev)?;
             // `show` is a one-shot snapshot (no watch), but honors the same
@@ -581,8 +696,21 @@ fn run() -> Result<()> {
             let text = if let Some(path) = path {
                 read_patch_input(&path)?
             } else {
-                let repo = find_repo(&std::env::current_dir()?)?;
-                git_diff(&repo, staged, &[], false)?
+                let cwd = std::env::current_dir()?;
+                match crate::source::detect(&cwd) {
+                    crate::source::Vcs::Jujutsu => {
+                        let root = crate::source::find_marker_root(&cwd, ".jj")?;
+                        crate::source::jj_diff(&root, None, &[])?
+                    }
+                    crate::source::Vcs::Sapling => {
+                        let root = crate::source::find_marker_root(&cwd, ".sl")?;
+                        crate::source::sl_diff(&root, None, &[])?
+                    }
+                    crate::source::Vcs::Git => {
+                        let repo = find_repo(&cwd)?;
+                        git_diff(&repo, staged, &[], false)?
+                    }
+                }
             };
             if text.trim().is_empty() {
                 println!("files=0 stream_rows=0 arena_bytes=0");
@@ -711,6 +839,40 @@ fn make_show_reloader(repo: PathBuf, rev: String) -> crate::tui::Reloader {
     Box::new(move || git_show(&repo, &rev).context("re-run git show for reload"))
 }
 
+/// Reloader for jj/sl `diff` sessions: re-run the same VCS diff (same
+/// revset, same pathspecs).
+fn make_vcs_diff_reloader(
+    root: PathBuf,
+    target: Option<String>,
+    pathspecs: Vec<String>,
+    jj: bool,
+) -> crate::tui::Reloader {
+    Box::new(move || {
+        let r = if jj {
+            crate::source::jj_diff(&root, target.as_deref(), &pathspecs)
+        } else {
+            crate::source::sl_diff(&root, target.as_deref(), &pathspecs)
+        };
+        r.context("re-run vcs diff for reload")
+    })
+}
+
+/// Reloader for jj/sl `show` sessions.
+fn make_vcs_show_reloader(
+    root: PathBuf,
+    rev: String,
+    vcs: crate::source::Vcs,
+) -> crate::tui::Reloader {
+    Box::new(move || {
+        let r = if vcs == crate::source::Vcs::Jujutsu {
+            crate::source::jj_show(&root, &rev)
+        } else {
+            crate::source::sl_show(&root, &rev)
+        };
+        r.context("re-run vcs show for reload")
+    })
+}
+
 /// `next-hunk serve`: a persistent TUI that also accepts pushes via a Unix
 /// socket. Mirrors the `diff` path (config layering, focus/note parsing,
 /// optional `--watch`) but unconditionally enables select mode (the whole
@@ -737,7 +899,11 @@ fn run_serve(
         .collect::<Result<Vec<_>>>()?;
 
     let cwd = std::env::current_dir()?;
-    let repo = find_repo(&cwd)?;
+    let repo = match crate::source::detect(&cwd) {
+        crate::source::Vcs::Jujutsu => crate::source::find_marker_root(&cwd, ".jj")?,
+        crate::source::Vcs::Sapling => crate::source::find_marker_root(&cwd, ".sl")?,
+        crate::source::Vcs::Git => find_repo(&cwd)?,
+    };
 
     let cfg = Config::load(&cwd);
     let resolved = ResolvedConfig::resolve(&cfg, &flags);
@@ -751,18 +917,45 @@ fn run_serve(
     // is fatal and leaves no half-open TUI.
     let server = spawn_serve_listener(&repo)?;
 
-    let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
-    let reloader = Some(make_diff_reloader(
-        repo.clone(),
-        resolved.staged,
-        None,
-        extra,
-        resolved.include_untracked,
-    ));
-    let session_title = if resolved.staged {
-        format!("{} staged (serve)", session_title_prefix(&repo))
-    } else {
-        format!("{} working tree (serve)", session_title_prefix(&repo))
+    // jj/sl workspaces: the diff text and reloader come from their CLIs.
+    let vcs = crate::source::detect(&cwd);
+    let (text, reloader, session_title) = match vcs {
+        crate::source::Vcs::Jujutsu | crate::source::Vcs::Sapling => {
+            let jj = vcs == crate::source::Vcs::Jujutsu;
+            let text = if jj {
+                crate::source::jj_diff(&repo, None, &extra)?
+            } else {
+                crate::source::sl_diff(&repo, None, &extra)?
+            };
+            let reloader = Some(make_vcs_diff_reloader(
+                repo.clone(),
+                None,
+                extra.clone(),
+                jj,
+            ));
+            let title = if jj {
+                format!("{} working copy (serve, jj)", session_title_prefix(&repo))
+            } else {
+                format!("{} working copy (serve, sl)", session_title_prefix(&repo))
+            };
+            (text, reloader, title)
+        }
+        crate::source::Vcs::Git => {
+            let text = git_diff(&repo, resolved.staged, &extra, resolved.include_untracked)?;
+            let reloader = Some(make_diff_reloader(
+                repo.clone(),
+                resolved.staged,
+                None,
+                extra,
+                resolved.include_untracked,
+            ));
+            let title = if resolved.staged {
+                format!("{} staged (serve)", session_title_prefix(&repo))
+            } else {
+                format!("{} working tree (serve)", session_title_prefix(&repo))
+            };
+            (text, reloader, title)
+        }
     };
     open_review_from_text(
         &text,
