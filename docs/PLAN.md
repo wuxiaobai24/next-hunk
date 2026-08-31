@@ -158,8 +158,10 @@
   attention mark 列重映射）、`sidebar`（含 hunk 式 `"auto"`）、
   `agent_notes` 开关；`show`/`patch`/`pager`/`filediff` 统一走分层配置
   （`ViewSettings` 替换 9 个位置布尔参数）
-- [ ] **`[keybindings]` 按键重映射**：命令名 → 键位，默认 = 现有键位；
-  未知命令/冲突告警（hunk 日常头号功能）
+- [x] **`[keybindings]` 按键重映射**：~36 个命名动作可重绑（含序列
+  `]h`/`zc`、`ctrl-x`、`f1-f12`、`false` 解绑）；覆盖即替换、抢键/冲突
+  stderr 告警、坏配置不破坏默认键；`?` 帮助页 + 提示行 + 启动状态
+  均从活 keymap 渲染（hunk 日常头号功能）
 - [x] **jj / Sapling revset**：`.jj`/`.sl` 探测（colocated 时 jj 优先），
   `diff`/`show`/`serve`/`inspect` 直通 `jj diff --git -r` / `sl diff`；
   会话标题带 jj 标识，`reload`/`--watch` 重跑同一 VCS 命令
