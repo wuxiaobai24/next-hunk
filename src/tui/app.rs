@@ -895,9 +895,19 @@ impl App {
         }
     }
 
-    /// The [`HunkId`] of the first hunk header within the current viewport, if
-    /// any. Used by `--select` keys to decide which hunk `a`/`r`/`?` act on.
+    /// The [`HunkId`] the `--select` keys (`a`/`r`/`?`) act on: the hunk
+    /// containing the review cursor. With two hunks on screen the old
+    /// viewport-first rule could mark a hunk the cursor wasn't near. Falls
+    /// back to the first hunk header in the viewport when the cursor sits
+    /// between hunks (file header / collapsed gap).
     fn current_hunk_id(&self) -> Option<HunkId> {
+        let cursor_row = self.cursor_stream_row();
+        if let Some((file_idx, hunk)) = ViewportQuery::hunk_containing(&self.review, cursor_row) {
+            return Some(HunkId {
+                file_idx,
+                hunk_idx: hunk - 1, // hunk_containing is 1-based
+            });
+        }
         let viewport = Viewport {
             start: self.scroll_y,
             height: self.viewport_height.max(1),
@@ -3858,6 +3868,32 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
+    fn select_keys_act_on_the_hunk_under_the_cursor() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        app.scroll_y = 1;
+        app.viewport_height = 8;
+        // The cursor rests inside a.rs hunk1 (its body starts at row 6) while
+        // the viewport's *first* hunk is still a.rs hunk0: the cursor wins.
+        app.set_cursor(6);
+        app.handle_key(char_key('a'));
+        assert_eq!(
+            app.decisions.get(&HunkId {
+                file_idx: 0,
+                hunk_idx: 1
+            }),
+            Some(&Decision::Accept)
+        );
+        assert!(
+            !app.decisions.contains_key(&HunkId {
+                file_idx: 0,
+                hunk_idx: 0
+            }),
+            "the viewport-first hunk must stay untouched"
+        );
+    }
+
+    #[test]
     fn current_hunk_id_finds_first_visible_hunk() {
         let mut app = multi_hunk_app();
         // At row 1 the first hunk header is file0 hunk0.
@@ -3937,7 +3973,8 @@ diff --git a/b.rs b/b.rs
             Some(&Decision::Accept)
         );
         // Jump back and mark it undecided — should overwrite to Undecided.
-        app.scroll_y = 1;
+        // (Cursor-anchored: move the cursor to the hunk, not just the view.)
+        app.set_cursor(1);
         app.handle_key(char_key('u'));
         // Undecided is the default, so it's not stored distinctly — but
         // selections() must now bucket it as undecided again.
