@@ -1208,25 +1208,25 @@ diff --git a/a.rs b/a.rs
     fn t_key_cycles_theme_mode_and_status() {
         use crate::tui::theme::ThemeMode;
         let mut app = sample_app();
-        // The default theme is now Light (Flexoki paper).
+        // The default theme is now Flexoki dark (the bare "flexoki" look).
+        assert_eq!(app.theme_mode, ThemeMode::Dark);
+        let dark_add = app.theme.add;
+
+        // Dark → Light
+        app.handle_key(key(KeyCode::Char('t')));
         assert_eq!(app.theme_mode, ThemeMode::Light);
-        let light_add = app.theme.add;
+        assert_ne!(app.theme.add, dark_add); // palette changed
+        assert!(app.status.contains("light"));
 
         // Light → Auto
         app.handle_key(key(KeyCode::Char('t')));
         assert_eq!(app.theme_mode, ThemeMode::Auto);
         assert!(app.status.contains("auto"));
 
-        // Auto → Dark
+        // Auto → Dark (COLORFGBG unset in tests → dark fallback)
         app.handle_key(key(KeyCode::Char('t')));
         assert_eq!(app.theme_mode, ThemeMode::Dark);
-        assert_ne!(app.theme.add, light_add); // palette changed
         assert!(app.status.contains("dark"));
-
-        // Dark → Light
-        app.handle_key(key(KeyCode::Char('t')));
-        assert_eq!(app.theme_mode, ThemeMode::Light);
-        assert!(app.status.contains("light"));
     }
 
     #[test]
