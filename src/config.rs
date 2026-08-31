@@ -407,11 +407,63 @@ pub struct CliFlags {
     pub tab_width: Option<u32>,
 }
 
+/// Collect warnings for stringly-typed config values that will silently fall
+/// back to a default below — a typo like `layout = "spilt"` otherwise quietly
+/// changes behavior. Keybinding overrides already warn; this extends the same
+/// courtesy to the rest of the config surface. The caller prints before the
+/// TUI takes over the screen, so stderr stays visible.
+fn config_warnings(cfg: &Config, cli_tab_width: Option<u32>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(l) = cfg.layout.as_deref() {
+        let l = l.trim().to_lowercase();
+        if !matches!(l.as_str(), "unified" | "stack" | "split" | "auto") {
+            out.push(format!(
+                "unknown layout {l:?} (valid: unified, stack, split, auto) — using unified"
+            ));
+        }
+    }
+    if let Some(e) = cfg.export_on_quit.as_deref() {
+        let e = e.trim().to_lowercase();
+        if !matches!(e.as_str(), "none" | "json" | "markdown" | "md" | "both") {
+            out.push(format!(
+                "unknown export_on_quit {e:?} (valid: none, json, markdown, both) — using none"
+            ));
+        }
+    }
+    if let Some(v) = &cfg.sidebar {
+        if coerce_sidebar(v).is_none() {
+            out.push(format!(
+                "invalid sidebar value {v:?} (valid: true, false, \"auto\") — using the default"
+            ));
+        }
+    }
+    if let Some(v) = cfg.cursor_line.as_deref() {
+        let v = v.trim().to_lowercase();
+        if !matches!(v.as_str(), "on" | "true" | "off" | "false") {
+            out.push(format!(
+                "invalid cursor_line {v:?} (valid: on/true, off/false) — treating as on"
+            ));
+        }
+    }
+    let tab = cli_tab_width.or(cfg.tab_width);
+    if let Some(n) = tab {
+        if !(1..=MAX_TAB_WIDTH).contains(&n) {
+            out.push(format!(
+                "tab_width {n} out of range (1–{MAX_TAB_WIDTH}) — using {DEFAULT_TAB_WIDTH}"
+            ));
+        }
+    }
+    out
+}
+
 impl ResolvedConfig {
     /// Resolve the final config.
     ///
     /// CLI `Some` wins; otherwise the merged config; otherwise defaults.
     pub fn resolve(cfg: &Config, cli: &CliFlags) -> Self {
+        for w in config_warnings(cfg, cli.tab_width) {
+            eprintln!("warning: {w}");
+        }
         let d = Self::default();
         Self {
             staged: cli.staged.or(cfg.staged).unwrap_or(d.staged),
@@ -433,7 +485,10 @@ impl ResolvedConfig {
             cursor_line: cfg
                 .cursor_line
                 .as_deref()
-                .map(|v| v != "off" && v != "false")
+                .map(|v| {
+                    let v = v.trim().to_lowercase();
+                    v != "off" && v != "false"
+                })
                 .unwrap_or(d.cursor_line),
             tab_width: clamp_tab_width(cli.tab_width.or(cfg.tab_width)),
             sidebar: cfg
@@ -597,6 +652,52 @@ mod tests {
         let upper = Config::default(); // all None
         let merged = lower.merge(upper);
         assert_eq!(merged.theme.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn config_warnings_flag_typos_and_range_violations() {
+        let cfg = Config {
+            layout: Some("spilt".into()),
+            export_on_quit: Some("jsoon".into()),
+            sidebar: Some(toml::Value::String("leftish".into())),
+            cursor_line: Some("of".into()),
+            tab_width: Some(99),
+            ..Config::default()
+        };
+        let ws = config_warnings(&cfg, None);
+        assert_eq!(ws.len(), 5, "{ws:?}");
+        assert!(ws[0].contains("layout"), "{ws:?}");
+        assert!(ws[1].contains("export_on_quit"), "{ws:?}");
+        assert!(ws[2].contains("sidebar"), "{ws:?}");
+        assert!(ws[3].contains("cursor_line"), "{ws:?}");
+        assert!(ws[4].contains("tab_width"), "{ws:?}");
+
+        // Valid values (any case) produce no warnings; CLI tab width counts.
+        let ok = Config {
+            layout: Some("Split".into()),
+            export_on_quit: Some("MD".into()),
+            sidebar: Some(toml::Value::String("Auto".into())),
+            cursor_line: Some("Off".into()),
+            tab_width: Some(8),
+            ..Config::default()
+        };
+        assert!(config_warnings(&ok, None).is_empty());
+        assert_eq!(
+            config_warnings(&Config::default(), Some(99)).len(),
+            1,
+            "out-of-range CLI tab width warns"
+        );
+        assert!(config_warnings(&Config::default(), Some(4)).is_empty());
+    }
+
+    #[test]
+    fn cursor_line_parse_is_case_insensitive() {
+        // "Off" used to be treated as on (case-sensitive compare).
+        let cfg = Config {
+            cursor_line: Some("Off".into()),
+            ..Config::default()
+        };
+        assert!(!ResolvedConfig::resolve(&cfg, &CliFlags::default()).cursor_line);
     }
 
     #[test]

@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — config typos now warn instead of silently falling back
+
+- Unknown `layout`, `export_on_quit`, `cursor_line`, and `theme` values, an
+  invalid `sidebar` value, and an out-of-range `tab_width` now print a
+  `warning: …` line at startup naming the valid values — a typo like
+  `layout = "spilt"` used to quietly change behavior while keybinding
+  typos already warned. `cursor_line` also parses case-insensitively now
+  (`Off` used to count as on).
+
 ### Added — runtime wrap toggle (`zw`)
 
 - **`zw` toggles line wrapping** at runtime (in the `zc`/`zo`/`zx` fold-key
