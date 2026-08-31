@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — real line editing in the prompts
+
+- The `/` search, `f` filter, and `c` note prompts now support cursor
+  motion and editing: `Left`/`Right` move the caret, `Home`/`End` jump to
+  the ends, `Delete` removes the char under it, inserts happen at the
+  caret, and `Ctrl-U`/`Ctrl-W` operate relative to it (readline
+  semantics). Editing used to be append/backspace-only.
+
 ### Changed — navigation jumps land centered (vim-style)
 
 - **New `jump_center` config (default `true`)**: `]h`/`[h`, search matches

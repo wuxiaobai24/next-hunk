@@ -33,6 +33,15 @@ fn focus_display(target: &FocusTarget) -> String {
 /// immediately before it. Mirrors the readline backward-kill-word gesture
 /// (Ctrl-W) used by shells and most TUI inputs. Operates on `char`s so it is
 /// correct for non-ASCII paths/queries.
+/// Byte offset of the `char_idx`-th char, clamped to the string end. Used by
+/// the prompt-line editing helpers so mid-string edits stay UTF-8-safe.
+fn byte_index_of_char(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
+}
+
 fn drop_last_word(s: &mut String) {
     // Operate on a char vec so slicing is O(1) and UTF-8-safe. Walk back from
     // the end: drop trailing whitespace, drop the word, then drop the
@@ -351,6 +360,11 @@ pub struct App {
     /// Draft text while composing a note (`c` … Enter). Kept on `App` like
     /// `search.query` so the prompt line can render it live.
     pub note_draft: String,
+    /// Cursor position (in chars from the start) inside the active prompt
+    /// draft — search query, path filter, or note note_draft. Only one
+    /// prompt is ever open, so one position serves all three. The arrow
+    /// keys, Home/End, and Delete edit the draft like a normal input line.
+    pub prompt_cursor: usize,
     /// Where the composed note will attach — resolved from the cursor row
     /// when `c` was pressed; `None` outside note-composition mode.
     pub note_pending: Option<NoteTarget>,
@@ -626,6 +640,7 @@ impl App {
             last_note_jump: None,
             last_hunk_jump: None,
             note_draft: String::new(),
+            prompt_cursor: 0,
             note_pending: None,
             user_note_seq: 0,
             user_notes: std::collections::HashMap::new(),
@@ -1354,6 +1369,7 @@ impl App {
             Action::Search => {
                 self.mode = InputMode::Search;
                 self.search.query.clear();
+                self.prompt_cursor = 0;
                 // Fresh search: drop any previous session's matches (they
                 // used to linger highlighted while the new query was typed)
                 // and anchor incsearch at the cursor row.
@@ -1366,6 +1382,7 @@ impl App {
             Action::FilterPaths => {
                 self.mode = InputMode::Filter;
                 self.path_filter.clear();
+                self.prompt_cursor = 0;
                 self.set_info("filter: ");
             }
             Action::ComposeNote => self.begin_note(),
@@ -1395,6 +1412,77 @@ impl App {
         }
     }
 
+    // ---- prompt line editing (shared by search / filter / note) ----------
+
+    /// The active prompt's draft text.
+    fn prompt_draft(&self) -> &str {
+        match self.mode {
+            InputMode::Search => &self.search.query,
+            InputMode::Filter => &self.path_filter,
+            InputMode::Note => &self.note_draft,
+            InputMode::Normal => "",
+        }
+    }
+
+    /// Mutable access to the active prompt's draft text.
+    fn prompt_draft_mut(&mut self) -> &mut String {
+        match self.mode {
+            InputMode::Search => &mut self.search.query,
+            InputMode::Filter => &mut self.path_filter,
+            InputMode::Note | InputMode::Normal => &mut self.note_draft,
+        }
+    }
+
+    /// Insert a char at the prompt cursor.
+    fn prompt_insert(&mut self, c: char) {
+        let byte = byte_index_of_char(self.prompt_draft(), self.prompt_cursor);
+        self.prompt_draft_mut().insert(byte, c);
+        self.prompt_cursor += 1;
+    }
+
+    /// Remove the char before the prompt cursor (Backspace).
+    fn prompt_backspace(&mut self) {
+        if self.prompt_cursor == 0 {
+            return;
+        }
+        self.prompt_cursor -= 1;
+        let byte = byte_index_of_char(self.prompt_draft(), self.prompt_cursor);
+        self.prompt_draft_mut().remove(byte);
+    }
+
+    /// Remove the char under the prompt cursor (Delete).
+    fn prompt_delete(&mut self) {
+        let byte = byte_index_of_char(self.prompt_draft(), self.prompt_cursor);
+        let draft = self.prompt_draft_mut();
+        if byte < draft.len() {
+            draft.remove(byte);
+        }
+    }
+
+    /// Move the prompt cursor by `delta` chars, clamped to the draft.
+    fn move_prompt_cursor(&mut self, delta: i64) {
+        let len = self.prompt_draft().chars().count() as i64;
+        self.prompt_cursor = (self.prompt_cursor as i64 + delta).clamp(0, len) as usize;
+    }
+
+    /// Kill everything before the prompt cursor (readline Ctrl-U semantics
+    /// for a mid-string cursor; the whole draft at end position).
+    fn prompt_clear_before(&mut self) {
+        let byte = byte_index_of_char(self.prompt_draft(), self.prompt_cursor);
+        self.prompt_draft_mut().drain(..byte);
+        self.prompt_cursor = 0;
+    }
+
+    /// Backward-kill-word at the prompt cursor (readline Ctrl-W semantics).
+    fn prompt_drop_word(&mut self) {
+        let byte = byte_index_of_char(self.prompt_draft(), self.prompt_cursor);
+        let mut head = self.prompt_draft()[..byte].to_string();
+        let tail = self.prompt_draft()[byte..].to_string();
+        drop_last_word(&mut head);
+        self.prompt_cursor = head.chars().count();
+        *self.prompt_draft_mut() = head + &tail;
+    }
+
     /// Handle keys while editing the search query.
     fn handle_search_input(&mut self, key: KeyEvent) {
         // Line-editing shortcuts honored before the Char catch-all (which
@@ -1402,13 +1490,13 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('u') => {
-                    self.search.query.clear();
+                    self.prompt_clear_before();
                     self.update_live_search();
-                    self.set_info("search: ");
+                    self.set_info(format!("search: {}", self.search.query));
                     return;
                 }
                 KeyCode::Char('w') => {
-                    drop_last_word(&mut self.search.query);
+                    self.prompt_drop_word();
                     self.update_live_search();
                     self.set_info(format!("search: {}", self.search.query));
                     return;
@@ -1427,12 +1515,21 @@ impl App {
                 self.set_info("search cancelled");
             }
             KeyCode::Backspace => {
-                self.search.query.pop();
+                self.prompt_backspace();
                 self.update_live_search();
                 self.set_info(format!("search: {}", self.search.query));
             }
+            KeyCode::Delete => {
+                self.prompt_delete();
+                self.update_live_search();
+                self.set_info(format!("search: {}", self.search.query));
+            }
+            KeyCode::Left => self.move_prompt_cursor(-1),
+            KeyCode::Right => self.move_prompt_cursor(1),
+            KeyCode::Home => self.prompt_cursor = 0,
+            KeyCode::End => self.prompt_cursor = self.search.query.chars().count(),
             KeyCode::Char(c) => {
-                self.search.query.push(c);
+                self.prompt_insert(c);
                 self.update_live_search();
                 self.set_info(format!("search: {}", self.search.query));
             }
@@ -1445,12 +1542,12 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('u') => {
-                    self.path_filter.clear();
-                    self.set_info("filter: ");
+                    self.prompt_clear_before();
+                    self.set_info(format!("filter: {}", self.path_filter));
                     return;
                 }
                 KeyCode::Char('w') => {
-                    drop_last_word(&mut self.path_filter);
+                    self.prompt_drop_word();
                     self.set_info(format!("filter: {}", self.path_filter));
                     return;
                 }
@@ -1468,11 +1565,19 @@ impl App {
                 self.set_success("filter cleared");
             }
             KeyCode::Backspace => {
-                self.path_filter.pop();
+                self.prompt_backspace();
                 self.set_info(format!("filter: {}", self.path_filter));
             }
+            KeyCode::Delete => {
+                self.prompt_delete();
+                self.set_info(format!("filter: {}", self.path_filter));
+            }
+            KeyCode::Left => self.move_prompt_cursor(-1),
+            KeyCode::Right => self.move_prompt_cursor(1),
+            KeyCode::Home => self.prompt_cursor = 0,
+            KeyCode::End => self.prompt_cursor = self.path_filter.chars().count(),
             KeyCode::Char(c) => {
-                self.path_filter.push(c);
+                self.prompt_insert(c);
                 self.set_info(format!("filter: {}", self.path_filter));
             }
             _ => {}
@@ -1982,6 +2087,7 @@ impl App {
             Some(target) => {
                 self.note_pending = Some(target);
                 self.note_draft.clear();
+                self.prompt_cursor = 0;
                 self.mode = InputMode::Note;
                 self.set_info("note: ");
             }
@@ -1996,12 +2102,12 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('u') => {
-                    self.note_draft.clear();
-                    self.set_info("note: ");
+                    self.prompt_clear_before();
+                    self.set_info(format!("note: {}", self.note_draft));
                     return;
                 }
                 KeyCode::Char('w') => {
-                    drop_last_word(&mut self.note_draft);
+                    self.prompt_drop_word();
                     self.set_info(format!("note: {}", self.note_draft));
                     return;
                 }
@@ -2020,11 +2126,19 @@ impl App {
                 self.set_info("note cancelled");
             }
             KeyCode::Backspace => {
-                self.note_draft.pop();
+                self.prompt_backspace();
                 self.set_info(format!("note: {}", self.note_draft));
             }
+            KeyCode::Delete => {
+                self.prompt_delete();
+                self.set_info(format!("note: {}", self.note_draft));
+            }
+            KeyCode::Left => self.move_prompt_cursor(-1),
+            KeyCode::Right => self.move_prompt_cursor(1),
+            KeyCode::Home => self.prompt_cursor = 0,
+            KeyCode::End => self.prompt_cursor = self.note_draft.chars().count(),
             KeyCode::Char(c) => {
-                self.note_draft.push(c);
+                self.prompt_insert(c);
                 self.set_info(format!("note: {}", self.note_draft));
             }
             _ => {}
@@ -3881,6 +3995,44 @@ diff --git a/b.rs b/b.rs
         assert_eq!(s.rejected, vec!["b.rs:h2".to_string()]);
         // The other 2 remain undecided.
         assert_eq!(s.undecided.len(), 2);
+    }
+
+    #[test]
+    fn prompt_line_editing_moves_and_inserts() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "ab".chars() {
+            app.handle_key(char_key(c));
+        }
+        // Cursor at the end: Left, then insert → "axb" with the caret
+        // between 'x' and 'b'.
+        app.handle_key(key(KeyCode::Left));
+        app.handle_key(char_key('x'));
+        assert_eq!(app.search.query, "axb");
+        assert_eq!(app.prompt_cursor, 2);
+        // Home, Right, insert 'y' → "ayxb"; Delete removes 'x'.
+        app.handle_key(key(KeyCode::Home));
+        app.handle_key(key(KeyCode::Right));
+        app.handle_key(char_key('y'));
+        assert_eq!(app.search.query, "ayxb");
+        app.handle_key(key(KeyCode::Delete));
+        assert_eq!(app.search.query, "ayb");
+    }
+
+    #[test]
+    fn note_draft_edits_with_cursor_keys() {
+        let mut app = two_file_app();
+        app.handle_key(char_key('c'));
+        for c in "hi".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(key(KeyCode::Left));
+        app.handle_key(char_key('!'));
+        assert_eq!(app.note_draft, "h!i");
+        // Ctrl-U kills everything before the cursor ("h").
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert_eq!(app.note_draft, "i");
+        assert_eq!(app.prompt_cursor, 0);
     }
 
     #[test]
