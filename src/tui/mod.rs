@@ -155,6 +155,15 @@ pub fn run_review_tui(
         }
     }
 
+    // A terminal this small can't fit the status bar + prompt line + one
+    // readable diff row: fail fast with a readable message instead of
+    // drawing an empty screen. Checked before raw mode, so no cleanup is
+    // needed on the bail path.
+    let (cols, rows) = crossterm::terminal::size().context("query terminal size")?;
+    if cols < 20 || rows < 4 {
+        anyhow::bail!("terminal too small: {cols}x{rows} (need at least 20 columns x 4 rows)");
+    }
+
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
     execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
