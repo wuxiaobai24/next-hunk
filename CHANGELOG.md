@@ -62,9 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — tiny terminals fail fast with a readable message
 
 - Starting a review in a terminal smaller than 20×4 (e.g. a popup pane)
-  used to render an empty screen with no explanation. It now exits with
-  `terminal too small: WxH (need at least 20 columns x 4 rows)` before the
-  TUI takes over.
+  used to render an empty screen with no explanation. It now fails with a
+  readable `terminal too small: WxH (need at least 20 columns x 4 rows)`
+  error before the TUI takes over — and the failure is a real non-zero
+  exit (an earlier cut degraded it to a `note:` + inspect dump with exit
+  0, hiding that no review ran; `--select`/`serve` callers could believe
+  the review happened).
 
 ### Fixed — a failing `$EDITOR` no longer reports success
 
