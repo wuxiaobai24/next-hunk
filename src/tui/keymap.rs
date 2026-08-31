@@ -32,6 +32,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Action {
     Quit,
+    Cancel,
     CursorDown,
     CursorUp,
     HalfPageDown,
@@ -75,6 +76,7 @@ impl Action {
     pub fn name(self) -> &'static str {
         match self {
             Action::Quit => "quit",
+            Action::Cancel => "cancel",
             Action::CursorDown => "cursor_down",
             Action::CursorUp => "cursor_up",
             Action::HalfPageDown => "half_page_down",
@@ -117,6 +119,7 @@ impl Action {
     pub fn describe(self) -> &'static str {
         match self {
             Action::Quit => "quit (clears an active search first)",
+            Action::Cancel => "clear the active search / pending key sequence",
             Action::CursorDown => "cursor down one row",
             Action::CursorUp => "cursor up one row",
             Action::HalfPageDown => "cursor half a page down",
@@ -158,7 +161,8 @@ impl Action {
     /// The default key specs, exactly the pre-config built-ins.
     fn default_specs(self) -> &'static [&'static str] {
         match self {
-            Action::Quit => &["q", "esc"],
+            Action::Quit => &["q"],
+            Action::Cancel => &["esc"],
             Action::CursorDown => &["j", "down"],
             Action::CursorUp => &["k", "up"],
             Action::HalfPageDown => &["J", "pagedown", "ctrl-d"],
@@ -553,6 +557,7 @@ pub fn all_actions() -> &'static [Action] {
         Action::PrevMatch,
         Action::Help,
         Action::Quit,
+        Action::Cancel,
         Action::AcceptHunk,
         Action::RejectHunk,
         Action::UndecideHunk,
@@ -580,7 +585,7 @@ mod tests {
         );
         assert_eq!(km.lookup(&key(KeyCode::Down)), Some(Action::CursorDown));
         assert_eq!(km.lookup(&key(KeyCode::Char('q'))), Some(Action::Quit));
-        assert_eq!(km.lookup(&key(KeyCode::Esc)), Some(Action::Quit));
+        assert_eq!(km.lookup(&key(KeyCode::Esc)), Some(Action::Cancel));
         assert_eq!(km.lookup(&key(KeyCode::Tab)), Some(Action::NextFile));
         assert_eq!(km.lookup(&key(KeyCode::Char(' '))), Some(Action::NextHunk));
         assert_eq!(km.lookup(&ctrl('d')), Some(Action::HalfPageDown));
