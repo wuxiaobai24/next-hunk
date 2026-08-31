@@ -62,6 +62,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] CI perf gate: huge-fixture parse/viewport ceilings run on every PR (`perf-gate` job)
 - [x] Async syntax highlight (background worker + gen-id stale rejection; miss renders plain)
 - [x] Public perf notes vs common tools (e.g. delta; design claims + bench numbers in `docs/PERF.md`)
+- [x] Measured head-to-head vs hunk 0.20: startup ~100× faster, TUI RSS 4.5–5.5× lower (`docs/PERF.md`)
 
 ## Performance
 
@@ -77,6 +78,11 @@ core; reproduce with `cargo bench`):
 | `parse/small` | 6 KB / 213-line diff | ~5 µs |
 | `viewport_huge_h40` | materialize a 40-row window over the huge diff | **~300 µs** |
 | `viewport_single_h40` | resolve a file span + clip to viewport | **~190 ns** |
+
+Measured head-to-head vs `hunk` 0.20.0 on the same machine (details in
+[docs/PERF.md](./docs/PERF.md)): process baseline **2 ms vs 203 ms**, TUI RSS
+on a 1.1 MB diff **25.8 MB vs 115.7 MB (4.5× less)**, on a 7.8k-line real
+diff **32.5 MB vs 177.8 MB (5.5× less)**.
 
 The key idea: navigation (`]h`/`[`h`, file rail) resolves against a
 binary-searched index in **nanoseconds**, independent of total diff size, and

@@ -6,6 +6,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — measured head-to-head perf vs hunk 0.20
+
+- `docs/PERF.md` / `PERF_zh.md` gain a measured table (same machine, same
+  200×50 tmux session, exact-process RSS attribution): process baseline
+  **2 ms vs 203 ms**; TUI RSS **25.8 MB vs 115.7 MB** on a 1.1 MB / 38k-line
+  diff (4.5× less) and **32.5 MB vs 177.8 MB** on a 7.8k-line real diff
+  (5.5× less); viewport materialization ~350 µs per 40-row window
+  (~0.35 µs/window amortized). Method notes explain why the smaller diff
+  shows the larger absolute gap (runtime baseline vs compact IR).
+
 ### Changed — UI polish: change chips, stat bars, note cards
 
 - **File headers carry a change chip and a stat bar**: `─── M src/a.rs

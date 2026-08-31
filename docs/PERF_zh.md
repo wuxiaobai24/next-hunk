@@ -202,6 +202,29 @@ ls -lh target/release/next-hunk
 
 ---
 
+## 7.5 与 hunk 0.20 同机实测（2026-08-31）
+
+同机（AMD Ryzen 7 5700X，Linux），hunk 0.20.0 预编译二进制 vs next-hunk
+release。TUI 数字取自完全相同的 tmux 200×50 会话，启动后 `sleep 3`，
+RSS 从精确二进制进程的 `/proc/<pid>/status` 读取（按 cmdline 核对归属）。
+
+| 测量项 | next-hunk (release) | hunk 0.20.0 | 比值 |
+|---|---|---|---|
+| 进程基线（`--version`） | **2 ms** | 203 ms | ~100× |
+| 无头摘要，1.1 MB / 38k 行（`nh inspect`） | **6 ms** | 无（需要 tty） | — |
+| TUI RSS，1.1 MB / 38k 行（200×50） | **25.8 MB** | 115.7 MB | **省 4.5×** |
+| TUI RSS，191 KB / 7.8k 行真实 diff（200×50） | **32.5 MB** | 177.8 MB | **省 5.5×** |
+| 视口物化（huge diff 上 40 行窗口） | **~350 µs**（`viewport_huge_h40`） | 未公布 | — |
+
+方法说明：RSS 为启动 3 秒后的单次采样（两工具均已首帧渲染完成，无输入
+即不再增长）。hunk 的 Node/OpenTUI 运行时自带 ~100 MB 解释器基线，与
+diff 大小无关 —— 这也是小 diff 反而差距更大的原因：next-hunk 的 RSS
+主要由 diff 本身（紧凑 IR）构成，hunk 主要由运行时构成。滚动流畅度由
+视口 bench + 虚拟行滚动模型推出；hunk 未公布等价数字，我们也未对它的
+渲染器插桩。
+
+---
+
 ## 8. PR 汇报模板
 
 ```markdown
