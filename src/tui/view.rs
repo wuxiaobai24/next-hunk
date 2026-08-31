@@ -1501,6 +1501,8 @@ fn highlight_current_match_line(
 }
 
 fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
+    use unicode_width::UnicodeWidthStr;
+    let width = area.width as usize;
     let pos = if app.collapse.virtual_len() == 0 {
         "0/0".to_string()
     } else {
@@ -1513,10 +1515,6 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         Some(f) => format!("+{}/−{}", f.inserts, f.deletes),
         None => String::new(),
     };
-    // Cap the path's display width so a long path can't push the totals,
-    // banner, and status text off the right edge of a narrow terminal.
-    // Budget: reserve ~half the width for the path; the rest is for the
-    // suffix (file index, position, stats) plus the right-side spans.
     let non_path_suffix = format!(
         "  [{}]  {}  {}{} ",
         app.selected_file + 1,
@@ -1524,9 +1522,6 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         file_stats,
         hl
     );
-    let path_budget = (area.width as usize / 2).max(12);
-    let shown_path = status_path(app.current_path(), path_budget);
-    let left = format!(" {}{}", shown_path, non_path_suffix);
     let totals = format!(" Σ +{}/−{} ", app.review.inserts, app.review.deletes);
     let right = format!(" {} ", app.status);
     // A banner note (`--note banner=text`) is surfaced in the status bar so the
@@ -1536,10 +1531,9 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         .iter()
         .find(|n| matches!(n.target, crate::tui::app::NoteTarget::Banner))
         .map(|n| format!(" 💬 {} ", n.text));
-    let mut spans = vec![
-        Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
-        Span::styled(totals, Style::default().fg(app.theme.dim)),
-    ];
+    // Everything between the totals and the toast: search indicator, toggle
+    // badges, run-mode badges, banner.
+    let mut mid: Vec<Span> = Vec::new();
     // Persistent search indicator: which match is on screen and how many
     // there are. The one-shot "match 3/17" toast is gone the moment anything
     // else writes a status message; this stays for the whole search session
@@ -1552,7 +1546,7 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
             app.search.current + 1,
             app.search.matches.len()
         );
-        spans.push(Span::styled(
+        mid.push(Span::styled(
             indicator,
             Style::default()
                 .fg(app.theme.match_active_fg)
@@ -1567,17 +1561,17 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     // side-by-side/stacked layout; `HL` keeps its long-standing on-badge.
     let badge = Style::default().fg(app.theme.edit_mode_fg);
     if app.ignore_ws {
-        spans.push(Span::styled(" WS", badge));
+        mid.push(Span::styled(" WS", badge));
     }
     if !app.word_diff_on {
-        spans.push(Span::styled(" wd−", badge));
+        mid.push(Span::styled(" wd−", badge));
     }
     if !app.collapse_on {
-        spans.push(Span::styled(" zx−", badge));
+        mid.push(Span::styled(" zx−", badge));
     }
     match app.effective_layout() {
-        crate::config::LayoutMode::Split => spans.push(Span::styled(" split", badge)),
-        crate::config::LayoutMode::Stack => spans.push(Span::styled(" stack", badge)),
+        crate::config::LayoutMode::Split => mid.push(Span::styled(" split", badge)),
+        crate::config::LayoutMode::Stack => mid.push(Span::styled(" stack", badge)),
         crate::config::LayoutMode::Unified | crate::config::LayoutMode::Auto => {}
     }
     // Run-mode badges: make the active mode discoverable. SELECT uses the
@@ -1585,7 +1579,7 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     // share the cyan note color. Kept short (≤8 chars) so they don't crowd a
     // narrow status bar.
     if app.select_mode {
-        spans.push(Span::styled(
+        mid.push(Span::styled(
             " SELECT ",
             Style::default()
                 .fg(app.theme.edit_mode_fg)
@@ -1593,13 +1587,54 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         ));
     }
     if app.watch_mode {
-        spans.push(Span::styled(" WATCH ", Style::default().fg(app.theme.note)));
+        mid.push(Span::styled(" WATCH ", Style::default().fg(app.theme.note)));
     }
     if app.serve_mode {
-        spans.push(Span::styled(" SERVE ", Style::default().fg(app.theme.note)));
+        mid.push(Span::styled(" SERVE ", Style::default().fg(app.theme.note)));
     }
     if let Some(b) = banner {
-        spans.push(Span::styled(b, Style::default().fg(app.theme.note)));
+        mid.push(Span::styled(b, Style::default().fg(app.theme.note)));
+    }
+    let mid_w: usize = mid.iter().map(|s| s.content.width()).sum();
+    // Transient toasts (errors, confirmations — the thing a user most needs
+    // to read) own the right edge: the path's budget shrinks to make room,
+    // and the left side truncates only as a last resort. The sticky startup
+    // hint and an empty status keep the old flow layout instead — a
+    // 100-column hint must not push the path and tallies off the line.
+    let transient = app.status.set_at.is_some() && !app.status.is_empty();
+    let toast_w = if transient { right.width() } else { 0 };
+    // The path absorbs squeeze first, down to a 4-column sliver.
+    let room = width.saturating_sub(mid_w + toast_w + totals.width() + 1);
+    let path_budget = (width / 2)
+        .max(12)
+        .min(room.saturating_sub(non_path_suffix.width()).max(4));
+    let shown_path = status_path(app.current_path(), path_budget);
+    let mut left = format!(" {}{}", shown_path, non_path_suffix);
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let dim_style = Style::default().fg(app.theme.dim);
+    let build = |left: &str| -> Vec<Span<'static>> {
+        let mut v = Vec::with_capacity(mid.len() + 2);
+        v.push(Span::styled(left.to_string(), bold));
+        v.push(Span::styled(totals.clone(), dim_style));
+        v.extend(mid.iter().cloned());
+        v
+    };
+    let mut spans = build(&left);
+    if transient {
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        if used + toast_w > width {
+            // Even a 4-column path sliver didn't save the line: shed the
+            // whole left side down to what the furniture + toast leave.
+            let keep = width
+                .saturating_sub(mid_w + totals.width() + toast_w)
+                .max(1);
+            left = truncate_to_width(&left, keep);
+            spans = build(&left);
+        }
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        if used + toast_w <= width {
+            spans.push(Span::raw(" ".repeat(width - used - toast_w)));
+        }
     }
     // Color the status message by severity so errors (red) and confirmations
     // (green) stand out from the dim default.
@@ -2817,6 +2852,39 @@ diff --git a/b.rs b/b.rs
         assert!(
             rendered.contains(" stack"),
             "stack layout badge: {rendered}"
+        );
+    }
+
+    #[test]
+    fn transient_toast_right_aligns_on_narrow_terminals() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.set_error("save failed — try again later");
+        let backend = ratatui::backend::TestBackend::new(60, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        // Status line is the second-to-last row (y = height - 2).
+        let row: String = (0..60u16)
+            .map(|x| buf[(x, 8u16)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            row.contains("try again later"),
+            "transient toast must render in full: {row}"
+        );
+        assert!(
+            row.trim_end().ends_with("later"),
+            "toast should sit flush right: {row}"
         );
     }
 

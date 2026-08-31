@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — transient toasts sit flush right (no more clipping)
+
+- The status message (errors, confirmations) is rendered **right-aligned**
+  with the path's budget shrinking to make room, so a narrow terminal can
+  no longer clip away the one thing a user most needs to read. When even a
+  4-column path sliver can't save the line, the left side truncates and the
+  toast stays whole. The sticky startup hint keeps the old flow layout — a
+  100-column hint must not evict the path and tallies.
+
 ### Added — persistent toggle badges in the status bar
 
 - View transforms now leave a badge in the status bar, so a toggle's effect
