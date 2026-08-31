@@ -1673,19 +1673,30 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
 }
 
 /// Truncate `s` to fit within `width` display columns, appending a single
-/// trailing `…` when it would overflow. Widths are measured in `char` count
-/// (a close-enough approximation for the ASCII-heavy hint/prompt text and
-/// avoids pulling in a unicode-width dependency). `width == 0` yields empty.
+/// trailing `…` when it would overflow. Widths are measured in display
+/// columns (unicode-width, like the rail/status truncation helpers): a CJK
+/// hint or search query otherwise paints past its budget. `width == 0`
+/// yields empty.
 fn truncate_to_width(s: &str, width: usize) -> String {
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= width {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if s.width() <= width {
         return s.to_string();
     }
     if width == 0 {
         return String::new();
     }
-    let take = width.saturating_sub(1);
-    let mut out: String = chars.iter().take(take).collect();
+    // Reserve one column for the ellipsis.
+    let budget = width.saturating_sub(1);
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in s.chars() {
+        let w = ch.width().unwrap_or(0);
+        if used + w > budget {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
     out.push('…');
     out
 }
@@ -2847,6 +2858,21 @@ diff --git a/very/deeply/nested/module/path/file_with_long_name.rs b/very/deeply
     #[test]
     fn truncate_to_width_zero_width_returns_empty() {
         assert_eq!(truncate_to_width("abc", 0), "");
+    }
+
+    #[test]
+    fn truncate_to_width_measures_display_columns_not_chars() {
+        use unicode_width::UnicodeWidthStr;
+        // CJK chars are 2 columns each: 4 chars = 8 columns. A width-6
+        // budget fits only 2 of them plus the ellipsis.
+        let out = truncate_to_width("你好世界", 6);
+        assert_eq!(out, "你好…");
+        assert!(out.width() <= 6, "truncated text must fit its budget");
+        // Exactly-fitting CJK text passes through unchanged.
+        assert_eq!(truncate_to_width("你好", 4), "你好");
+        // Zero-width chars (combining marks) never overflow the budget.
+        let out = truncate_to_width("e\u{301}xample", 3);
+        assert!(out.width() <= 3);
     }
 
     // ---- mode badge + context-aware hint (render) --------------------------
