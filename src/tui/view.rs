@@ -1582,6 +1582,11 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
     if app.wrap_on {
         mid.push(Span::styled(" wrap", badge));
     }
+    // A two-key sequence is armed (`]`/`[`/`z`): show which one, persistently
+    // — the arming toast expires after 4 seconds but the prefix waits forever.
+    if let Some(p) = app.pending_prefix {
+        mid.push(Span::styled(format!(" {p}…"), badge));
+    }
     match app.effective_layout() {
         crate::config::LayoutMode::Split => mid.push(Span::styled(" split", badge)),
         crate::config::LayoutMode::Stack => mid.push(Span::styled(" stack", badge)),
@@ -2871,6 +2876,36 @@ diff --git a/b.rs b/b.rs
         };
         assert!(row(1).contains('▸'), "folded a.rs marked ▸: {}", row(1));
         assert!(row(2).contains('▾'), "open b.rs marked ▾: {}", row(2));
+    }
+
+    #[test]
+    fn status_bar_shows_armed_two_key_prefix() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.pending_prefix = Some(']');
+        let backend = ratatui::backend::TestBackend::new(80, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // The arming toast expires after 4s; the badge persists while the
+        // prefix waits for its second key.
+        assert!(rendered.contains(" ]…"), "armed-prefix badge: {rendered}");
     }
 
     #[test]

@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — status-bar badge while a two-key sequence is armed
+
+- Pressing `]`, `[`, or `z` (the two-key prefixes) now shows a persistent
+  `{prefix}…` badge in the status bar until the sequence completes or
+  `Esc` cancels — the arming toast used to expire after 4 seconds while
+  the prefix itself stayed armed indefinitely, and its doc comment
+  promised an idle timeout that never existed (doc fixed too).
+
 ### Fixed — `--watch` reloads no longer yank the view mid-review
 
 - A filesystem reload used to fire even while a prompt (`/`, `f`, `c`) was
