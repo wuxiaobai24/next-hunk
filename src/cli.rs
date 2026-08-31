@@ -1853,21 +1853,18 @@ fn open_review_from_text(
         print_inspect(&review);
         return Ok(());
     }
-    match run_review_tui(review.clone(), reloader, settings, workdir, options, server) {
-        Ok(report) => {
-            // Quit report: the full review report (decisions + comments +
-            // banner) when exporting is on; the legacy decisions-only JSON in
-            // `--select` mode otherwise. run_review_tui has restored the
-            // terminal by the time it returns, so stdout is clean to print.
-            crate::tui::emit_report(&report, export_mode, select_mode, export_file.as_deref())?;
-            Ok(())
-        }
-        Err(err) => {
-            eprintln!("note: {err}");
-            print_inspect(&review);
-            Ok(())
-        }
-    }
+    // A TUI failure on an interactive terminal (too-small guard, terminal
+    // init error) must propagate: main prints `error: …` and exits
+    // non-zero. Degrading to an inspect dump with exit 0 would hide the
+    // fact that no review ever ran — for `--select`/`serve` an agent would
+    // believe the review happened.
+    let report = run_review_tui(review.clone(), reloader, settings, workdir, options, server)?;
+    // Quit report: the full review report (decisions + comments + banner)
+    // when exporting is on; the legacy decisions-only JSON in `--select`
+    // mode otherwise. run_review_tui has restored the terminal by the time
+    // it returns, so stdout is clean to print.
+    crate::tui::emit_report(&report, export_mode, select_mode, export_file.as_deref())?;
+    Ok(())
 }
 
 fn parse_review(text: &str) -> Result<Review> {
