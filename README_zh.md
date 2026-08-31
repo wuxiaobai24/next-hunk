@@ -40,6 +40,7 @@
 - [x] 状态栏 diff 统计（per-file + 全局 `+ins/−del`）
 - [x] 忽略空白开关（`W`，折叠仅空白变化）
 - [x] Agent 桥梁：`--focus` 启动定位、`--note` 注解、`--select` 逐 hunk 审批闸门
+- [x] 审查报告导出：`--export json|markdown|both` / `--export-file` / `export_on_quit` —— 退出时把决策与人的批注汇总为一份 agent 可读的产物
 - [x] Server 模式：`next-hunk serve` + `push`/`decision`，支持 agent→human 实时流式推送常驻 TUI
 - [x] `line_numbers` 配置生效（非 silent no-op）
 - [x] `include_untracked` 配置 + `--include-untracked` 参数（默认关闭）
@@ -126,6 +127,7 @@ nh diff --watch             # 文件变化时实时重载
 nh diff --include-untracked # 包含未跟踪文件
 nh show HEAD~3              # 某个提交（或范围）
 nh filediff old.rs new.rs   # 对比磁盘上两个文件
+nh diff --select --export json --export-file review.json  # 给 agent 的审查报告
 git diff | nh pager         # review git 管道输入的内容
 nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 ```
@@ -189,6 +191,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
 | `context_collapse` | int | `8` | 未变上下文折叠：≥ N 行的连续未变内容折叠为一行 `··· N unchanged lines ···` 标记（`0` 关闭；运行时 `zx` 切换） |
 | `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`，或预设：`"flexoki"` / `"flexoki-light"`、`"catppuccin-mocha"` / `"catppuccin-latte"`、`"gruvbox-dark"`、`"nord"`、`"tokyonight"`。`t` 循环模式，`T` 循环调色板。 |
+| `export_on_quit` | string | `"none"` | `diff` / `serve` 退出时输出什么：`"json"` / `"markdown"`（`"md"`）/ `"both"` —— 给 agent 的审查报告（决策 + 批注）；`--export` / `--export-file` 可覆盖 |
 
 示例 `~/.config/next-hunk/config.toml`:
 
@@ -225,6 +228,35 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 ```
 
 `--select` 模式下,人按 `a`(接受)/ `r`(拒绝)/ `u`(未决)逐 hunk 决策;退出时把决策以 JSON 输出供 agent 解析。`--select` 需要交互式终端,否则报错。
+
+**拿回完整审查反馈(`--export`):**
+
+`--select` 回答「人接受了我的 hunk 吗」;审查报告回答「人**说了什么**」。退出时输出一份 JSON、Markdown 摘要或两者兼有 —— 决策数组之外,还带上人在 TUI 里用 `c` 写下的全部批注和 banner 注记。闭环由此完成:人审查完,agent 读一份产物即可照办。
+
+```bash
+next-hunk diff --export json --export-file review.json   # 决策 + 批注 → 文件
+next-hunk diff --export markdown                          # 人类可读摘要打到 stdout
+next-hunk diff --export both --select                     # 用报告替代裸决策 JSON
+```
+
+- `--export json|markdown|both|none` —— 报告格式(覆盖 `export_on_quit` 配置)。
+- `--export-file <path>` —— 写文件而非 stdout;未显式给格式时默认 `json`,`both` 写同名的 `.json`/`.md` 两个文件。
+
+JSON 形状(`--select` 输出的超集):
+
+```json
+{
+  "accepted": ["src/auth.rs:h1"],
+  "rejected": [],
+  "undecided": ["src/auth.rs:h2"],
+  "comments": [
+    {"id": "user:1", "file": "src/auth.rs", "text": "rename this var", "line": 42, "hunk": null}
+  ],
+  "banner": "fine apart from the naming"
+}
+```
+
+`comments` 携带人的 `c` 批注(`user:N`)与会话评论,以及 agent 自己的 `--note` 注解(`note-N`)。仅 `diff` / `serve` 支持;显式未给格式时 `--export-file` 默认 `json`。
 
 ### Agent skill
 

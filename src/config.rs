@@ -74,6 +74,58 @@ impl LayoutMode {
     }
 }
 
+/// What a review TUI emits when the human quits (`export_on_quit` config,
+/// `--export` CLI). The emitted report is a compatible extension of the
+/// `--select` decisions JSON: the same three decision buckets plus the
+/// session's comments and banner notes — the structured feedback loop
+/// back to the agent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExportOnQuit {
+    /// Emit nothing. `--select` still prints the legacy decisions-only JSON.
+    #[default]
+    None,
+    /// One JSON object on stdout (or a `.json` file with `--export-file`).
+    Json,
+    /// A Markdown report (or a `.md` file with `--export-file`).
+    Markdown,
+    /// Both formats: JSON then Markdown on stdout, or sibling files.
+    Both,
+}
+
+impl ExportOnQuit {
+    /// Parse a config/CLI value. Unknown tokens fall back to [`ExportOnQuit::None`]
+    /// (config); the CLI validates its own values before calling this.
+    pub fn parse_str(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "json" => ExportOnQuit::Json,
+            "markdown" | "md" => ExportOnQuit::Markdown,
+            "both" => ExportOnQuit::Both,
+            _ => ExportOnQuit::None,
+        }
+    }
+
+    /// Parse a `--export` CLI value, rejecting unknown tokens (a typo on the
+    /// command line should fail fast, not silently disable the export).
+    pub fn parse_cli(s: &str) -> Option<Self> {
+        match s.trim().to_lowercase().as_str() {
+            "none" => Some(ExportOnQuit::None),
+            "json" => Some(ExportOnQuit::Json),
+            "markdown" | "md" => Some(ExportOnQuit::Markdown),
+            "both" => Some(ExportOnQuit::Both),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExportOnQuit::None => "none",
+            ExportOnQuit::Json => "json",
+            ExportOnQuit::Markdown => "markdown",
+            ExportOnQuit::Both => "both",
+        }
+    }
+}
+
 /// Raw user-configurable options. Every field optional: `None` = "not set".
 /// Default `context_collapse` threshold: runs/gaps of ≥ this many unchanged
 /// lines collapse to a `··· N unchanged lines ···` marker row.
@@ -115,6 +167,10 @@ pub struct Config {
     /// Render agent/human notes (💬 rows, inline annotations, rail badges).
     /// `false` = plain diff, no notes. Default `true`.
     pub agent_notes: Option<bool>,
+    /// What the review TUI emits on quit: `"none"` (default), `"json"`,
+    /// `"markdown"`/`"md"`, or `"both"`. Honored by `diff` and `serve`;
+    /// the `--export` flag overrides it there.
+    pub export_on_quit: Option<String>,
     /// Keybinding overrides: action name → key list (or `false` to unbind).
     /// See `tui::keymap` for the spec grammar. The whole table replaces the
     /// lower layer's (per-action merge is not meaningful for key claims).
@@ -163,6 +219,9 @@ impl Config {
         }
         if other.agent_notes.is_some() {
             self.agent_notes = other.agent_notes;
+        }
+        if other.export_on_quit.is_some() {
+            self.export_on_quit = other.export_on_quit;
         }
         if other.keybindings.is_some() {
             self.keybindings = other.keybindings;
@@ -221,6 +280,9 @@ pub struct ResolvedConfig {
     pub sidebar: bool,
     /// Render 💬 notes (agent + human). `false` = plain diff view.
     pub agent_notes: bool,
+    /// What `diff` / `serve` emit on TUI quit. Default off (plain `--select`
+    /// JSON still applies). See [`ExportOnQuit`].
+    pub export_on_quit: ExportOnQuit,
     /// Resolved keybindings (defaults when no `[keybindings]` table).
     pub keymap: crate::tui::keymap::Keymap,
 }
@@ -242,6 +304,7 @@ impl Default for ResolvedConfig {
             tab_width: DEFAULT_TAB_WIDTH,
             sidebar: true,
             agent_notes: true,
+            export_on_quit: ExportOnQuit::None,
             keymap: crate::tui::keymap::Keymap::default_map(),
         }
     }
@@ -379,6 +442,11 @@ impl ResolvedConfig {
                 .and_then(coerce_sidebar)
                 .unwrap_or(d.sidebar),
             agent_notes: cfg.agent_notes.unwrap_or(d.agent_notes),
+            export_on_quit: cfg
+                .export_on_quit
+                .as_deref()
+                .map(ExportOnQuit::parse_str)
+                .unwrap_or(d.export_on_quit),
             keymap: match &cfg.keybindings {
                 Some(overrides) => {
                     let (km, warnings) = crate::tui::keymap::Keymap::with_overrides(overrides);
@@ -827,6 +895,31 @@ theme = \"dark\"
         let cfg = Config::load_project(&dir.0);
         let r = ResolvedConfig::resolve(&cfg, &test_flags());
         assert!(r.sidebar);
+    }
+
+    #[test]
+    fn export_on_quit_resolves_from_config() {
+        use ExportOnQuit as E;
+        // default: off
+        let r = ResolvedConfig::resolve(&Config::default(), &test_flags());
+        assert_eq!(r.export_on_quit, E::None);
+        for (toml_val, expect) in [
+            ("\"json\"", E::Json),
+            ("\"markdown\"", E::Markdown),
+            ("\"md\"", E::Markdown),
+            ("\"both\"", E::Both),
+            ("\"none\"", E::None),
+        ] {
+            let (dir, _path) = write_tmp_config(&format!("export_on_quit = {toml_val}\n"));
+            let cfg = Config::load_project(&dir.0);
+            let r = ResolvedConfig::resolve(&cfg, &test_flags());
+            assert_eq!(r.export_on_quit, expect, "export_on_quit = {toml_val}");
+        }
+        // unknown value falls back to off (not a crash, not a surprise format)
+        let (dir, _path) = write_tmp_config("export_on_quit = \"yaml\"\n");
+        let cfg = Config::load_project(&dir.0);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        assert_eq!(r.export_on_quit, E::None);
     }
 
     #[test]

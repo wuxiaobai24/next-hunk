@@ -611,3 +611,17 @@ fn agent_context_flag_prints_the_workflow_doc() {
         "skill doc printed: {stdout}"
     );
 }
+
+#[test]
+fn diff_rejects_unknown_export_format() {
+    let out = Command::new(bin())
+        .args(["diff", "--export", "yaml"])
+        .output()
+        .expect("run next-hunk");
+    assert!(!out.status.success(), "--export yaml must fail fast");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown format"),
+        "stderr should name the problem: {stderr}"
+    );
+}
