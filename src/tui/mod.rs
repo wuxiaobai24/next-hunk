@@ -259,8 +259,11 @@ fn run_loop(
             // from the frame area the same way view::draw does.
             let area = f.area();
             let main_height = area.height.saturating_sub(2);
-            // main area splits horizontally; stream height == main_height
-            app.viewport_height = main_height as usize;
+            // The stream pane renders a one-row title inside the main area, so
+            // only main_height - 1 rows are actual diff rows. Clamping against
+            // the full main height left the last diff row below the fold (G
+            // could never bring it on screen).
+            app.viewport_height = main_height.saturating_sub(1) as usize;
         })?;
 
         // --- watch: drain events and apply debounce -----------------------
@@ -1590,6 +1593,36 @@ diff --git a/a.rs b/a.rs
         // And a non-cursor code row does not.
         let other = &buf[(16u16, 3u16)];
         assert_ne!(other.style().bg, Some(app.theme.cursor_bg));
+    }
+
+    #[test]
+    fn goto_bottom_brings_the_last_diff_row_onto_screen() {
+        // Regression: the stream pane's one-row title was not accounted for
+        // when the run loop synced viewport_height, so max_scroll stopped one
+        // row short and `G` left the final diff row below the fold.
+        let mut app = sample_app();
+        // What the run loop syncs for a 10-row terminal: main = 8 rows, of
+        // which the pane title consumes one → 7 diff rows.
+        app.viewport_height = 7;
+        app.handle_key(key(KeyCode::Char('G')));
+        assert_eq!(app.scroll_y, 1, "scrolled to the last valid top row");
+        let backend = TestBackend::new(60, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| view::draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..8u16)
+            .map(|y| {
+                (0..60u16)
+                    .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                    .collect()
+            })
+            .collect();
+        // The stream's last virtual row (+bar) must be painted inside the
+        // main area (y < 8), not clipped off its bottom edge.
+        assert!(
+            rows.iter().any(|r| r.contains("+bar")),
+            "last diff row should be on screen after G; rows: {rows:?}"
+        );
     }
 
     #[test]

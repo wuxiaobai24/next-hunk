@@ -87,13 +87,10 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(rail_w), Constraint::Min(0)])
             .split(content_area);
-        app.rail_rect = Some(cols[0]);
-        app.stream_rect = Some(cols[1]);
         draw_rail(app, frame, cols[0]);
         draw_stream(app, frame, cols[1]);
     } else {
         app.rail_rect = None;
-        app.stream_rect = Some(content_area);
         draw_stream(app, frame, content_area);
     }
 
@@ -106,11 +103,10 @@ fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
 /// thumb sized to the visible share of the virtual rows. The travel range is
 /// the number of distinct top-row positions, matching how `scroll_y` clamps.
 fn draw_scrollbar(app: &App, frame: &mut Frame, area: Rect) {
-    let travel = app
-        .collapse
-        .virtual_len()
-        .saturating_sub(area.height as usize)
-        .max(1);
+    // Travel counts distinct top-row positions over the *content* rows — the
+    // pane title consumes one row of the main area, so it is not a diff row.
+    let visible = area.height.saturating_sub(1) as usize;
+    let travel = app.collapse.virtual_len().saturating_sub(visible).max(1);
     let mut state = ScrollbarState::new(travel).position(app.scroll_y.min(travel));
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .begin_symbol(None)
@@ -122,7 +118,7 @@ fn draw_scrollbar(app: &App, frame: &mut Frame, area: Rect) {
     frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
-fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
+fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
     use unicode_width::UnicodeWidthStr;
     let visible = app.visible_files();
     let note_counts = if app.show_notes {
@@ -196,16 +192,30 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
     } else {
         format!("Files ({}/{})", visible.len(), app.review.file_count())
     };
-    let list = List::new(items).block(Block::default().borders(Borders::RIGHT).title(title));
+    let block = Block::default().borders(Borders::RIGHT).title(title);
+    // Hit-test rect: the list's *content* rows (the block strips the title
+    // row and the right border), so a click's `row - rect.y` indexes the
+    // rendered items directly.
+    app.rail_rect = Some(block.inner(area));
 
     // Map selected_file to its position in the visible list for the ListState.
     let selected_pos = visible.iter().position(|&i| i == app.selected_file);
     let mut state = ListState::default();
     state.select(selected_pos);
-    frame.render_stateful_widget(list, area, &mut state);
+    frame.render_stateful_widget(List::new(items).block(block), area, &mut state);
+    // Record where the (possibly scrolled) list starts so mouse clicks can
+    // map rows back to items when there are more files than rows.
+    app.rail_list_offset = state.offset();
 }
 
 fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
+    // All three pane renderers draw a one-row title inside this area, so
+    // mouse hit-testing must target the content rows below it.
+    app.stream_rect = Some(Rect {
+        y: area.y + 1,
+        height: area.height.saturating_sub(1),
+        ..area
+    });
     // Keep the virtual index in sync with the layout this width resolves to
     // (auto switches split/stack/unified across thresholds; the index must
     // match what is drawn).
@@ -225,7 +235,11 @@ fn draw_stream(app: &mut App, frame: &mut Frame, area: Rect) {
 /// working unchanged. Full-width rows (file/hunk headers, collapse markers,
 /// notes) span both columns.
 fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
-    let height = area.height as usize;
+    // The pane title occupies the area's first row, so only the rows below
+    // it are diff rows — materialize exactly what fits. Keeping this in step
+    // with the viewport_height the run loop syncs is what lets max_scroll
+    // reach the last diff line.
+    let height = area.height.saturating_sub(1) as usize;
     let scroll_y = app.scroll_y;
     let viewport = Viewport {
         start: scroll_y,
@@ -449,7 +463,11 @@ fn split_side_spans(
 }
 
 fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
-    let height = area.height as usize;
+    // The pane title occupies the area's first row, so only the rows below
+    // it are diff rows — materialize exactly what fits. Keeping this in step
+    // with the viewport_height the run loop syncs is what lets max_scroll
+    // reach the last diff line.
+    let height = area.height.saturating_sub(1) as usize;
     let scroll_y = app.scroll_y;
     let viewport = Viewport {
         start: scroll_y,
@@ -539,7 +557,11 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
 /// divider. Preserves viewport-only materialization — works on the same
 /// [`ViewportQuery::rows`] output without touching the IR.
 fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
-    let height = area.height as usize;
+    // The pane title occupies the area's first row, so only the rows below
+    // it are diff rows — materialize exactly what fits. Keeping this in step
+    // with the viewport_height the run loop syncs is what lets max_scroll
+    // reach the last diff line.
+    let height = area.height.saturating_sub(1) as usize;
     let scroll_y = app.scroll_y;
     let viewport = Viewport {
         start: scroll_y,

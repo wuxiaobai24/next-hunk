@@ -236,10 +236,17 @@ pub struct App {
     pub show_notes: bool,
     /// Tab-stop width (columns) for render-time tab expansion (1–16).
     pub tab_width: usize,
-    /// Last drawn rail area (None when the rail is hidden). Set by draw_main.
+    /// Last drawn rail *content* area — the list rows below the pane title,
+    /// excluding the right border (`None` when the rail is hidden). Set by
+    /// `draw_rail`; mouse hit-testing maps rows against it.
     pub rail_rect: Option<ratatui::layout::Rect>,
-    /// Last drawn stream area. Set by draw_main.
+    /// Last drawn stream *content* area — the diff rows below the pane title.
+    /// Set by `draw_stream`; mouse hit-testing maps rows against it.
     pub stream_rect: Option<ratatui::layout::Rect>,
+    /// Index of the first rail item rendered on screen (the `List` scrolls
+    /// when there are more files than rows). Set by `draw_rail`; click
+    /// mapping adds it so clicks stay correct on long file lists.
+    pub rail_list_offset: usize,
 
     /// Show the full-screen keybinding help overlay (toggle with `?`).
     pub show_help: bool,
@@ -576,6 +583,7 @@ impl App {
             tab_width: crate::config::DEFAULT_TAB_WIDTH as usize,
             rail_rect: None,
             stream_rect: None,
+            rail_list_offset: 0,
             show_help: false,
             help_scroll: 0,
             keymap: crate::tui::keymap::Keymap::default_map(),
@@ -1050,7 +1058,8 @@ impl App {
                     if let Some(r) = self.rail_rect {
                         if Self::point_in_rect(ev.column, ev.row, r) {
                             let visible = self.visible_files();
-                            let idx_in_visible = (ev.row.saturating_sub(r.y)) as usize;
+                            let idx_in_visible =
+                                (ev.row.saturating_sub(r.y)) as usize + self.rail_list_offset;
                             if let Some(&fidx) = visible.get(idx_in_visible) {
                                 let row =
                                     crate::ir::ViewportQuery::file_start_row(&self.review, fidx)
@@ -3664,23 +3673,26 @@ diff --git a/b.rs b/b.rs
 
         let mut app = two_file_app();
         app.scroll_y = 0;
+        // The stored rail rect covers the *content* rows: the pane's title
+        // occupies the row above it, so the list starts at y=1.
         app.rail_rect = Some(Rect {
             x: 0,
-            y: 0,
+            y: 1,
             width: 20,
-            height: 10,
+            height: 9,
         });
         app.stream_rect = Some(Rect {
             x: 20,
-            y: 0,
+            y: 1,
             width: 60,
-            height: 10,
+            height: 9,
         });
-        // Click on the 2nd visible file entry in the rail (row 1, col 0).
+        // Click on the 2nd visible file entry in the rail (first content row
+        // is y=1, so the 2nd entry sits at y=2).
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 0,
-            row: 1,
+            row: 2,
             modifiers: KeyModifiers::NONE,
         });
         // The 2nd visible file is b.rs (index 1). It starts at row 4.
@@ -3690,23 +3702,49 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
+    fn mouse_click_on_scrolled_rail_maps_through_list_offset() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        // When the rail list scrolls (more files than rows), clicks map
+        // through the first-rendered index the view records at draw time.
+        let mut app = three_file_app();
+        app.rail_rect = Some(Rect {
+            x: 0,
+            y: 1,
+            width: 20,
+            height: 9,
+        });
+        app.rail_list_offset = 1; // the first rendered entry is file #2 (b.rs)
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 1, // first content row
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.selected_file, 1);
+    }
+
+    #[test]
     fn mouse_click_in_stream_positions_viewport() {
         use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
         use ratatui::layout::Rect;
 
         let mut app = two_file_app();
         app.scroll_y = 0;
+        // Content rows start below the pane's title row (y=0 is the title).
         app.stream_rect = Some(Rect {
             x: 0,
-            y: 0,
+            y: 2,
             width: 80,
             height: 5,
         });
-        // Click on stream row 3 → the cursor moves there; the viewport stays.
+        // Click on stream row 3 (screen row 5) → the cursor moves there; the
+        // viewport stays.
         app.handle_mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: 10,
-            row: 3,
+            row: 5,
             modifiers: KeyModifiers::NONE,
         });
         assert_eq!(app.cursor_v, 3);

@@ -6,6 +6,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — mouse/scroll geometry off-by-ones (pane title row)
+
+- **Mouse clicks landed one row low.** Both panes render a one-row title
+  inside their area, but click hit-testing treated the pane's top row as the
+  first content row — clicking a file in the rail selected the file *below*
+  it, and clicking a diff line put the review cursor one line down. The view
+  now stores the *content* rect (below the title), and clicks map against it.
+- **Rail clicks missed once the file list scrolled.** With more files than
+  rail rows, the `List` scrolls but the click math assumed item *k* sits at
+  pane row *k*. The view now records the first rendered item index
+  (`rail_list_offset`) and clicks map through it.
+- **The last diff row was unreachable.** `viewport_height` was synced to the
+  full main-area height, but the pane title consumes one of those rows — so
+  `max_scroll` stopped one row short and `G`/`end` could never bring the
+  final diff line on screen (the scrollbar travel was one row off too).
+  Both now count only the rows that actually fit under the title.
+
 ### Added — review report export on quit (the human→agent feedback loop)
 
 - **`--export json|markdown|both`** (on `diff` / `serve`) — when the human
