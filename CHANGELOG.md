@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — `zc`/`zo` fold the file the cursor is in, not the rail's
+
+- After a pure scroll (mouse wheel), the rail selection trails the viewport
+  *top* while the review cursor clamps to the viewport edge — the two can
+  name different files, and `zc` used to fold whichever one the rail named,
+  sometimes not the file being read. Fold/unfold now anchor to the file the
+  cursor sits in (matching `o` and `c`, which were already cursor-anchored).
+
 ### Changed — config typos now warn instead of silently falling back
 
 - Unknown `layout`, `export_on_quit`, `cursor_line`, and `theme` values, an

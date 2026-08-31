@@ -2034,25 +2034,37 @@ impl App {
         self.set_success("💬 note added");
     }
 
-    /// Fold (collapse) the currently selected file so only its header is visible.
+    /// The file the review cursor sits in — the file being read. Fold and
+    /// unfold anchor here rather than `selected_file`, which trails the
+    /// viewport top after a pure scroll (wheel) and can still name the
+    /// previous file while the cursor already sits in the next one.
+    fn cursor_file(&self) -> Option<usize> {
+        ViewportQuery::file_at_row(&self.review, self.cursor_stream_row())
+    }
+
+    /// Fold (collapse) the file the cursor is in so only its header shows.
     fn fold_current(&mut self) {
-        if self.folded.insert(self.selected_file) {
-            self.set_info(format!("▼ {} (folded)", self.current_path()));
+        let idx = self.cursor_file().unwrap_or(self.selected_file);
+        let path = self.review.display_path(idx).to_string();
+        if self.folded.insert(idx) {
+            self.set_info(format!("▼ {path} (folded)"));
             // Folded files drop their virtual rows; re-anchor the view on
             // the stream row we were looking at.
             self.rebuild_collapse();
         } else {
-            self.set_error(format!("already folded: {}", self.current_path()));
+            self.set_error(format!("already folded: {path}"));
         }
     }
 
-    /// Unfold (expand) the currently selected file, revealing its body.
+    /// Unfold (expand) the file the cursor is in, revealing its body.
     fn unfold_current(&mut self) {
-        if self.folded.remove(&self.selected_file) {
-            self.set_success(format!("▶ {} (unfolded)", self.current_path()));
+        let idx = self.cursor_file().unwrap_or(self.selected_file);
+        let path = self.review.display_path(idx).to_string();
+        if self.folded.remove(&idx) {
+            self.set_success(format!("▶ {path} (unfolded)"));
             self.rebuild_collapse();
         } else {
-            self.set_error(format!("not folded: {}", self.current_path()));
+            self.set_error(format!("not folded: {path}"));
         }
     }
 
@@ -2355,6 +2367,31 @@ diff --git a/b.rs b/b.rs
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.should_quit, "Esc must not quit in normal mode");
         assert_eq!(app.pending_prefix, None, "Esc clears the armed prefix");
+    }
+
+    #[test]
+    fn fold_targets_the_cursor_file_not_the_viewport_top() {
+        // Pure scrolls sync the rail to the viewport *top* while the cursor
+        // clamps to the edge — the two can name different files. `zc` must
+        // fold the file being read (the cursor's), not the rail's.
+        let mut app = two_file_app(); // a.rs rows 0-3, b.rs rows 4-7
+        app.set_cursor(6); // b.rs; viewport follows (rows 3..7)
+        app.scroll_by(-2); // viewport rows 1..5; cursor clamps to row 4 (b.rs)
+        assert_eq!(app.cursor_stream_row(), 4);
+        assert_eq!(app.selected_file, 0, "rail synced to the viewport top");
+        app.handle_key(key(KeyCode::Char('z')));
+        app.handle_key(key(KeyCode::Char('c')));
+        assert!(app.folded.contains(&1), "zc folds the cursor's file");
+        assert!(!app.folded.contains(&0), "the viewport-top file stays open");
+        assert!(
+            app.status.contains("b.rs"),
+            "status: {}",
+            app.status.message
+        );
+        // And zo re-opens the same file.
+        app.handle_key(key(KeyCode::Char('z')));
+        app.handle_key(key(KeyCode::Char('o')));
+        assert!(!app.folded.contains(&1));
     }
 
     #[test]
