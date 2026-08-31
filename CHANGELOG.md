@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — the path filter is live while typing
+
+- The `f` file-rail filter now narrows the rail and re-anchors the
+  selection on every keystroke (matching the incremental search) instead
+  of waiting for `Enter`; `Enter` just confirms and reports the narrowed
+  count, `Esc` still clears.
+
 ### Added — `mouse` config (turn off mouse capture)
 
 - **`mouse = false`** (default `true`) stops the TUI from capturing the
