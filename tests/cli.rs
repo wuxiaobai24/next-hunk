@@ -532,3 +532,82 @@ fn diff_target_rev_renders_and_path_falls_back() {
         "fallback pathspec should filter to src only: {stdout}"
     );
 }
+
+#[test]
+fn difftool_invocation_reviews_the_two_temp_files() {
+    // git difftool calls: <cmd> <path> <old> <old-hex> <old-mode> <new> <new-hex> <new-mode>
+    let tmp = std::env::temp_dir();
+    let old = tmp.join("nh-dt-old.rs");
+    let new = tmp.join("nh-dt-new.rs");
+    std::fs::write(&old, "fn main() {\n    println!(\"old\");\n}\n").unwrap();
+    std::fs::write(&new, "fn main() {\n    println!(\"new\");\n}\n").unwrap();
+    let out = Command::new(bin())
+        .args([
+            "src/demo.rs",
+            old.to_str().unwrap(),
+            "0123456789abcdef0123456789abcdef01234567",
+            "100644",
+            new.to_str().unwrap(),
+            "fedcba9876543210fedcba9876543210fedcba98",
+            "100644",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run next-hunk difftool");
+    assert!(
+        out.status.success(),
+        "exit non-zero: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Non-tty stdout → the inspect fallback; the file must carry the REAL
+    // path label, not the temp-file names.
+    assert!(stdout.contains("src/demo.rs"), "label relabeled: {stdout}");
+    assert!(
+        !stdout.contains("nh-dt-old"),
+        "temp name must not leak: {stdout}"
+    );
+
+    // Not a difftool shape: normal CLI parse must still run (this errors as
+    // an unknown subcommand-ish path rather than crashing).
+    let out = Command::new(bin())
+        .args(["a", "b", "not-hex", "100644", "e", "f", "g"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run next-hunk");
+    assert!(
+        !out.status.success(),
+        "garbage argv is a clap error, not a difftool review"
+    );
+}
+
+#[test]
+fn skill_path_prints_a_loadable_document() {
+    let out = Command::new(bin())
+        .args(["skill", "path"])
+        .env("XDG_DATA_HOME", std::env::temp_dir().join("nh-skill-xdg"))
+        .output()
+        .expect("run next-hunk skill path");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let path = PathBuf::from(stdout.trim_end());
+    assert!(path.is_file(), "skill file exists at {path:?}");
+    let doc = std::fs::read_to_string(&path).unwrap();
+    assert!(doc.starts_with("---"), "frontmatter intact");
+    assert!(doc.contains("next-hunk"));
+}
+
+#[test]
+fn agent_context_flag_prints_the_workflow_doc() {
+    let out = Command::new(bin())
+        .args(["diff", "--agent-context"])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run next-hunk --agent-context");
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("# next-hunk"),
+        "skill doc printed: {stdout}"
+    );
+}

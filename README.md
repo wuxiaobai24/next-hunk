@@ -46,6 +46,8 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] `tab_width` config + `--tab-width` (render-time tab expansion; keeps split columns aligned)
 - [x] `sidebar` config (hunk-style `true`/`false`/`"auto"`) and `agent_notes` toggle
 - [x] `[keybindings]` remapping — every action name → key list, `?` overlay and hints list the live bindings
+- [x] `nh skill path` + `--agent-context` (embedded agent workflow doc), git-difftool invocation compat, `nh update [--check]`
+- [x] jj & Sapling: workspace auto-detection (`.jj` beats colocated `.git`), revset-native `diff`/`show`/`serve`/`inspect`, jj-titled sessions, agent `reload` re-runs the VCS
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
@@ -169,9 +171,43 @@ nh show HEAD~3              # a commit (or range)
 nh filediff old.rs new.rs   # diff two arbitrary files on disk
 git diff | nh pager         # review whatever git pipes in
 nh inspect path/to.patch    # IR summary, no TUI (scripting)
+nh skill path               # print the agent skill path (materialized on first use)
+nh diff --agent-context     # print the agent workflow doc, exit
+nh update [--check]         # compare against the latest GitHub release
+```
+
+#### As git's difftool
+
+`nh` recognizes git's difftool invocation shape and reviews the two temp
+files under the real path label:
+
+```bash
+git config difftool.nh.cmd nh        # or the full path to the binary
+git config difftool.prompt false
+git difftool --tool nh               # opens the review TUI
+git difftool -t nh --staged
 ```
 
 All forms accept the full binary name too (`next-hunk diff …`).
+
+### Jujutsu & Sapling
+
+`nh` detects the workspace VCS by walking up from the cwd (`.jj` wins over
+`.git` in colocated repos — the jj view is the source of truth). In a jj or
+Sapling workspace the same commands speak revsets natively:
+
+```bash
+nh diff              # working-copy change (@ for jj)
+nh diff 'main..@'    # any revset — jj parses it, errors read like jj's own
+nh show '@-'         # the change of a revision
+nh serve             # select-mode review of the jj working copy (agent bridge)
+nh list              # sessions title as "jj working copy (@)" / "sl …"
+```
+
+`--staged` / `--include-untracked` are git-only and print a note (ignored) in
+jj/sl workspaces — jj always shows the working copy as `@`. Live reload
+(`--watch` and agent `reload`) re-runs the same jj/sl command. `filediff`
+still requires a git object store (any colocated repo has one).
 
 ### Keybindings
 

@@ -165,8 +165,9 @@
 - [x] **jj / Sapling revset**：`.jj`/`.sl` 探测（colocated 时 jj 优先），
   `diff`/`show`/`serve`/`inspect` 直通 `jj diff --git -r` / `sl diff`；
   会话标题带 jj 标识，`reload`/`--watch` 重跑同一 VCS 命令
-- [ ] **CLI 细节**：`skill path`、`--agent-context`、difftool 兼容调用、
-  `update --check`
+- [x] **CLI 细节**：`skill path`（首用时物化到 XDG data）、
+  `--agent-context`（内嵌 agent 工作流文档）、difftool 七参调用兼容
+  （临时文件重标为真实路径）、`update [--check]`（GitHub release 比对）
 - [ ] **UI 打磨**：文件头 A/M/D/R 徽章 + 增删比例条、文件栏/注释卡片/
   帮助页分组（对标 hunk 并超越）
 - [ ] **性能证据**：同机同 diff 实测启动/RSS/滚动 vs hunk 0.20，写入
