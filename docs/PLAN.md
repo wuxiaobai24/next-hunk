@@ -162,8 +162,9 @@
   `]h`/`zc`、`ctrl-x`、`f1-f12`、`false` 解绑）；覆盖即替换、抢键/冲突
   stderr 告警、坏配置不破坏默认键；`?` 帮助页 + 提示行 + 启动状态
   均从活 keymap 渲染（hunk 日常头号功能）
-- [ ] **jj / Sapling revset**：`.jj`/`.sl` 探测，`diff`/`show` 直通
-  `jj diff --git` / `sl diff`
+- [x] **jj / Sapling revset**：`.jj`/`.sl` 探测（colocated 时 jj 优先），
+  `diff`/`show`/`serve`/`inspect` 直通 `jj diff --git -r` / `sl diff`；
+  会话标题带 jj 标识，`reload`/`--watch` 重跑同一 VCS 命令
 - [ ] **CLI 细节**：`skill path`、`--agent-context`、difftool 兼容调用、
   `update --check`
 - [ ] **UI 打磨**：文件头 A/M/D/R 徽章 + 增删比例条、文件栏/注释卡片/

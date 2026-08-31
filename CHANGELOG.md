@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lookup plus one `run_action` match. Modifier keys no longer leak into
   plain-char bindings (Ctrl+J used to move the cursor down as `j`).
 
+### Added — Jujutsu & Sapling support (revsets)
+
+- **Workspace VCS auto-detection**: walking up from the cwd, a `.jj` directory
+  selects Jujutsu (winning over `.git` in colocated repos — the jj view is
+  the source of truth), `.sl` selects Sapling, `.git` stays on the in-process
+  gix path. Nothing found keeps the existing git error.
+- **`diff` / `show` / `serve` / `inspect` speak revsets** in jj/sl workspaces:
+  `nh diff` reviews the working copy (`@`), `nh diff 'main..@'` passes the
+  revset to `jj diff --git -r`, `nh show '@-'` to `jj show --git -r`. Bad
+  revsets surface the VCS's own error text. `--staged`/`--include-untracked`
+  are git-only and print a note (ignored).
+- **Sessions & reload work the same**: jj/sl reviews bind the agent session
+  socket (titles like `jj working copy (@)`), and `reload`/`--watch` re-run
+  the same jj/sl command with the same revset and pathspecs.
+- Adapter commands run with `--no-pager` (jj) from the workspace root, so
+  paths and revsets resolve exactly like the user's own shell.
+
 ### Added — config parity: tab_width, sidebar, agent_notes
 
 - **`tab_width`** (1–16, default 4, `--tab-width` flag) — tabs in diff lines
