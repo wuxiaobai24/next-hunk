@@ -389,7 +389,9 @@ fn launch_editor(target: &app::OpenTarget, workdir: Option<&std::path::Path>) ->
     if status.success() {
         Ok(format!("opened {}:{}", target.path, target.line))
     } else {
-        Ok(format!("editor exited {status}"))
+        // A non-zero editor exit is a failure: surface it as an error toast,
+        // not the green "opened …" success the caller paints for `Ok`.
+        Err(anyhow::anyhow!("editor exited with {status}"))
     }
 }
 
