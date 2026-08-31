@@ -185,6 +185,10 @@ pub fn run_review_tui(
     app.focus_target = options.focus;
     app.notes = options.notes;
     app.select_mode = options.select_mode;
+    // Quit-with-unsaved-notes guard: only when quitting would drop notes —
+    // no export configured, and not `--select` (that always emits decisions).
+    app.confirm_quit_on_notes =
+        options.export_on_quit == ExportOnQuit::None && !options.select_mode;
     app.repo_root = workdir.as_ref().map(|p| p.display().to_string());
     app.session_mode = options.session_mode.clone();
     app.session_title = options.session_title.clone();

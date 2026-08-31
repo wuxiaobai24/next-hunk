@@ -207,6 +207,13 @@ pub struct App {
     pub viewport_height: usize,
     /// Set when the user requests to quit.
     pub should_quit: bool,
+    /// When true (no `--export` / `export_on_quit`, not `--select`), quitting
+    /// with unsaved human notes asks for confirmation first — the notes live
+    /// only in this session, so a stray `q`/Ctrl+C would silently drop them.
+    pub confirm_quit_on_notes: bool,
+    /// Armed by the first quit attempt of the confirmation above; the next
+    /// quit request goes through.
+    pub quit_armed: bool,
     /// Transient status/help message for the status line. Carries a severity
     /// ([`ToastKind`]) and timestamp so the view can color it and the run loop
     /// can auto-expire it.
@@ -570,6 +577,8 @@ impl App {
             selected_file: 0,
             viewport_height: 24,
             should_quit: false,
+            confirm_quit_on_notes: false,
+            quit_armed: false,
             status,
             highlight_on: true,
             cache: HighlightCache::new(),
@@ -961,11 +970,29 @@ impl App {
         )
     }
 
+    /// Route a quit request (`q`, Ctrl+C) through the unsaved-notes guard.
+    /// Without an export target (`--export` / `export_on_quit`, or `--select`)
+    /// session notes exist only here — a stray quit would silently drop them,
+    /// so the first request warns and arms, and the next one quits.
+    pub fn request_quit(&mut self) {
+        if self.confirm_quit_on_notes && !self.quit_armed && !self.comments.is_empty() {
+            self.quit_armed = true;
+            let n = self.comments.len();
+            self.set_error(format!(
+                "{n} note{} would be discarded — quit again to confirm, or set --export / export_on_quit to keep them",
+                if n == 1 { "" } else { "s" }
+            ));
+            return;
+        }
+        self.should_quit = true;
+    }
+
     /// Handle a single key event. Pure: mutates state only, no I/O.
     pub fn handle_key(&mut self, key: KeyEvent) {
-        // Ctrl+C always quits, regardless of mode.
+        // Ctrl+C quits from any mode, through the same unsaved-notes guard
+        // as `q` (a second press confirms).
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
-            self.should_quit = true;
+            self.request_quit();
             return;
         }
 
@@ -1155,7 +1182,7 @@ impl App {
                     self.search.clear();
                     self.set_success("search cleared");
                 } else {
-                    self.should_quit = true;
+                    self.request_quit();
                 }
             }
             Action::Cancel => {
@@ -2262,6 +2289,54 @@ diff --git a/b.rs b/b.rs
         app.handle_key(key(KeyCode::Esc));
         assert!(!app.should_quit, "Esc must not quit in normal mode");
         assert_eq!(app.pending_prefix, None, "Esc clears the armed prefix");
+    }
+
+    #[test]
+    fn quit_with_unsaved_notes_asks_for_confirmation_once() {
+        let mut app = two_file_app();
+        app.confirm_quit_on_notes = true;
+        app.comments.push(CommentEntry {
+            id: "user:1".into(),
+            file: "a.rs".into(),
+            text: "needs a test".into(),
+            line: Some(1),
+            hunk: None,
+        });
+        // The first quit request warns and arms instead of quitting — the
+        // notes exist only in this session and would be silently dropped.
+        app.handle_key(char_key('q'));
+        assert!(!app.should_quit, "first quit should ask for confirmation");
+        assert!(
+            app.status.message.contains("discarded"),
+            "status: {}",
+            app.status.message
+        );
+        assert!(app.quit_armed);
+        // The next request — Ctrl+C here — confirms and quits.
+        app.handle_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn quit_without_notes_or_export_skips_confirmation() {
+        // With an export target configured the notes land in the report, so
+        // quitting stays immediate; likewise with no notes at all.
+        let mut app = two_file_app();
+        app.confirm_quit_on_notes = true;
+        app.handle_key(char_key('q'));
+        assert!(app.should_quit, "no notes → no confirmation");
+
+        let mut app = two_file_app();
+        app.confirm_quit_on_notes = false;
+        app.comments.push(CommentEntry {
+            id: "user:1".into(),
+            file: "a.rs".into(),
+            text: "kept in the report".into(),
+            line: Some(1),
+            hunk: None,
+        });
+        app.handle_key(char_key('q'));
+        assert!(app.should_quit, "export configured → no confirmation");
     }
 
     #[test]
