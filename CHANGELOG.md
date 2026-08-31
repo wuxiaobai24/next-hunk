@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — `--watch` reloads no longer yank the view mid-review
+
+- A filesystem reload used to fire even while a prompt (`/`, `f`, `c`) was
+  open, swapping the review under the draft; it now waits for the prompt
+  to close (the drained event fires on the first idle tick after).
+- After a reload, an active search re-anchors to the nearest match
+  at/after the viewport instead of jumping back to match 1 — the viewport
+  stays put when the reloaded diff still contains the matches.
+
 ### Changed — the path filter is live while typing
 
 - The `f` file-rail filter now narrows the rail and re-anchors the
