@@ -170,6 +170,10 @@ pub struct Config {
     /// Render agent/human notes (💬 rows, inline annotations, rail badges).
     /// `false` = plain diff, no notes. Default `true`.
     pub agent_notes: Option<bool>,
+    /// Capture the mouse for TUI scrolling/clicks (default `true`). Set
+    /// `false` to keep the terminal's native click-drag text selection; the
+    /// keyboard still works fully.
+    pub mouse: Option<bool>,
     /// What the review TUI emits on quit: `"none"` (default), `"json"`,
     /// `"markdown"`/`"md"`, or `"both"`. Honored by `diff` and `serve`;
     /// the `--export` flag overrides it there.
@@ -225,6 +229,9 @@ impl Config {
         }
         if other.agent_notes.is_some() {
             self.agent_notes = other.agent_notes;
+        }
+        if other.mouse.is_some() {
+            self.mouse = other.mouse;
         }
         if other.export_on_quit.is_some() {
             self.export_on_quit = other.export_on_quit;
@@ -289,6 +296,9 @@ pub struct ResolvedConfig {
     pub sidebar: bool,
     /// Render 💬 notes (agent + human). `false` = plain diff view.
     pub agent_notes: bool,
+    /// Capture the mouse in the TUI. Default on; `mouse = false` keeps the
+    /// terminal's native text selection.
+    pub mouse: bool,
     /// What `diff` / `serve` emit on TUI quit. Default off (plain `--select`
     /// JSON still applies). See [`ExportOnQuit`].
     pub export_on_quit: ExportOnQuit,
@@ -314,6 +324,7 @@ impl Default for ResolvedConfig {
             tab_width: DEFAULT_TAB_WIDTH,
             sidebar: true,
             agent_notes: true,
+            mouse: true,
             export_on_quit: ExportOnQuit::None,
             keymap: crate::tui::keymap::Keymap::default_map(),
         }
@@ -353,6 +364,7 @@ pub struct ViewSettings {
     pub wrap: bool,
     pub context_collapse: usize,
     pub jump_center: bool,
+    pub mouse: bool,
     pub theme: Option<String>,
     pub layout: LayoutMode,
     pub cursor_line: bool,
@@ -370,6 +382,7 @@ impl Default for ViewSettings {
             wrap: false,
             context_collapse: DEFAULT_CONTEXT_COLLAPSE,
             jump_center: true,
+            mouse: true,
             theme: None,
             layout: LayoutMode::Unified,
             cursor_line: true,
@@ -389,6 +402,7 @@ impl From<&ResolvedConfig> for ViewSettings {
             wrap: r.wrap,
             context_collapse: r.context_collapse,
             jump_center: r.jump_center,
+            mouse: r.mouse,
             theme: r.theme.clone(),
             layout: r.layout,
             cursor_line: r.cursor_line,
@@ -511,6 +525,7 @@ impl ResolvedConfig {
                 .and_then(coerce_sidebar)
                 .unwrap_or(d.sidebar),
             agent_notes: cfg.agent_notes.unwrap_or(d.agent_notes),
+            mouse: cfg.mouse.unwrap_or(d.mouse),
             export_on_quit: cfg
                 .export_on_quit
                 .as_deref()
@@ -702,6 +717,19 @@ mod tests {
             "out-of-range CLI tab width warns"
         );
         assert!(config_warnings(&Config::default(), Some(4)).is_empty());
+    }
+
+    #[test]
+    fn mouse_capture_is_on_by_default_and_configurable() {
+        assert!(ResolvedConfig::default().mouse);
+        let cfg = Config {
+            mouse: Some(false),
+            ..Config::default()
+        };
+        assert!(!ResolvedConfig::resolve(&cfg, &CliFlags::default()).mouse);
+        // A `mouse = false` typo'd layer (Some) wins over defaults; nothing
+        // else changes.
+        assert!(ResolvedConfig::resolve(&Config::default(), &CliFlags::default()).mouse);
     }
 
     #[test]

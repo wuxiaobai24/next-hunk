@@ -305,6 +305,7 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side columns), or `"auto"` (pick split/stack/unified from the live stream width) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `jump_center` | bool | `true` | center the row a navigation jump lands on (`]h`, search, file jumps); `false` pins it to the viewport top |
+| `mouse` | bool | `true` | capture the mouse for scrolling/clicks; `false` keeps the terminal's native click-drag text selection |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
 | `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
 | `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
