@@ -427,7 +427,14 @@ pub fn send_command(socket_path: &Path, command: &ServerCommand) -> Result<Serve
 
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
-    reader.read_line(&mut line).context("read reply")?;
+    let n = reader.read_line(&mut line).context("read reply")?;
+    if n == 0 || line.trim().is_empty() {
+        // The server hung up without replying — the TUI quit between send
+        // and reply. A raw serde EOF error would be noise; say what happened.
+        return Ok(ServerReply::Error {
+            message: "serve shutting down".into(),
+        });
+    }
     let reply: ServerReply =
         serde_json::from_str(line.trim()).map_err(|e| anyhow::anyhow!("parse reply: {e}"))?;
     Ok(reply)

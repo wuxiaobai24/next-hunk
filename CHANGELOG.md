@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — CLI messaging cleanups
+
+- The "`--watch` requires the `watch` feature" note now also prints in
+  jj/Sapling workspaces (it was git-only, so the reason only appeared as
+  an in-TUI toast after the screen was taken over) and prints once per
+  `diff` instead of twice on the git path.
+- `push`/`decision` against a server that quit between send and reply now
+  report `serve shutting down` instead of a raw serde EOF parse error.
+- Doc-comment cleanup in `app.rs` (a helper's doc had drifted onto its
+  neighbor after the prompt-editing change).
+
 ### Fixed — markdown export robustness
 
 - Comment bodies in the Markdown report are now blockquoted (`> …`): a

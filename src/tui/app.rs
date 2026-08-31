@@ -29,10 +29,6 @@ pub fn focus_display(target: &FocusTarget) -> String {
     }
 }
 
-/// Remove the trailing whitespace-separated word from `s`, plus any whitespace
-/// immediately before it. Mirrors the readline backward-kill-word gesture
-/// (Ctrl-W) used by shells and most TUI inputs. Operates on `char`s so it is
-/// correct for non-ASCII paths/queries.
 /// Byte offset of the `char_idx`-th char, clamped to the string end. Used by
 /// the prompt-line editing helpers so mid-string edits stay UTF-8-safe.
 fn byte_index_of_char(s: &str, char_idx: usize) -> usize {
@@ -42,6 +38,10 @@ fn byte_index_of_char(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
+/// Remove the trailing whitespace-separated word from `s`, plus any whitespace
+/// immediately before it. Mirrors the readline backward-kill-word gesture
+/// (Ctrl-W) used by shells and most TUI inputs. Operates on `char`s so it is
+/// correct for non-ASCII paths/queries.
 fn drop_last_word(s: &mut String) {
     // Operate on a char vec so slicing is O(1) and UTF-8-safe. Walk back from
     // the end: drop trailing whitespace, drop the word, then drop the
