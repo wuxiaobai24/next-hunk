@@ -538,13 +538,16 @@ mod tests {
 
     impl TempDir {
         fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            // pid + a process-unique counter. The timestamp alone is not
+            // unique: macOS SystemTime::now() has ~1µs granularity, so two
+            // parallel tests can stamp the same "nanos", share a directory,
+            // and one's Drop deletes the other's config mid-test.
+            static SEQ: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "next-hunk-cfg-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos()
+                SEQ.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&dir).unwrap();
             TempDir(dir)
