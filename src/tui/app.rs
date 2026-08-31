@@ -519,10 +519,28 @@ fn first_key(keymap: &crate::tui::keymap::Keymap, action: crate::tui::keymap::Ac
 /// The default keymap, materialized once for the constructor's startup hint.
 static KEYMAP_DEFAULT: std::sync::OnceLock<crate::tui::keymap::Keymap> = std::sync::OnceLock::new();
 
-fn self_key(action: crate::tui::keymap::Action) -> String {
-    first_key(
-        KEYMAP_DEFAULT.get_or_init(crate::tui::keymap::Keymap::default_map),
-        action,
+/// The sticky opening hint: file count (plus a `watching` marker in
+/// `--watch` mode) and the live first-keys of the core actions. One builder
+/// for both the constructor path (default keymap) and
+/// [`App::refresh_startup_status`] (live keymap), so the two copies of this
+/// format string can't drift apart.
+fn startup_hint(file_count: usize, watch: bool, keymap: &crate::tui::keymap::Keymap) -> String {
+    use crate::tui::keymap::Action;
+    let k = |a: Action| first_key(keymap, a);
+    let watching = if watch { "watching — " } else { "" };
+    format!(
+        "{watching}{} file(s) — {} scroll · {}/{} hunk · {}/{} fold · {} context · {} search · {} filter · {} highlight · {} quit",
+        file_count,
+        k(Action::CursorDown),
+        k(Action::NextHunk),
+        k(Action::PrevHunk),
+        k(Action::FoldFile),
+        k(Action::UnfoldFile),
+        k(Action::ToggleContextCollapse),
+        k(Action::Search),
+        k(Action::FilterPaths),
+        k(Action::ToggleHighlight),
+        k(Action::Quit),
     )
 }
 
@@ -549,19 +567,10 @@ impl App {
         if self.review.is_empty() {
             return;
         }
-        self.status = Toast::sticky(format!(
-            "{} file(s) — {} scroll · {}/{} hunk · {}/{} fold · {} context · {} search · {} filter · {} highlight · {} quit",
+        self.status = Toast::sticky(startup_hint(
             self.review.file_count(),
-            first_key(&self.keymap, crate::tui::keymap::Action::CursorDown),
-            first_key(&self.keymap, crate::tui::keymap::Action::NextHunk),
-            first_key(&self.keymap, crate::tui::keymap::Action::PrevHunk),
-            first_key(&self.keymap, crate::tui::keymap::Action::FoldFile),
-            first_key(&self.keymap, crate::tui::keymap::Action::UnfoldFile),
-            first_key(&self.keymap, crate::tui::keymap::Action::ToggleContextCollapse),
-            first_key(&self.keymap, crate::tui::keymap::Action::Search),
-            first_key(&self.keymap, crate::tui::keymap::Action::FilterPaths),
-            first_key(&self.keymap, crate::tui::keymap::Action::ToggleHighlight),
-            first_key(&self.keymap, crate::tui::keymap::Action::Quit),
+            self.watch_mode,
+            &self.keymap,
         ));
     }
 
@@ -575,19 +584,10 @@ impl App {
         let status = if review.is_empty() {
             Toast::sticky("empty diff")
         } else {
-            Toast::sticky(format!(
-                "{} file(s) — {} scroll · {}/{} hunk · {}/{} fold · {} context · {} search · {} filter · {} highlight · {} quit",
+            Toast::sticky(startup_hint(
                 review.file_count(),
-                self_key(crate::tui::keymap::Action::CursorDown),
-                self_key(crate::tui::keymap::Action::NextHunk),
-                self_key(crate::tui::keymap::Action::PrevHunk),
-                self_key(crate::tui::keymap::Action::FoldFile),
-                self_key(crate::tui::keymap::Action::UnfoldFile),
-                self_key(crate::tui::keymap::Action::ToggleContextCollapse),
-                self_key(crate::tui::keymap::Action::Search),
-                self_key(crate::tui::keymap::Action::FilterPaths),
-                self_key(crate::tui::keymap::Action::ToggleHighlight),
-                self_key(crate::tui::keymap::Action::Quit),
+                false,
+                KEYMAP_DEFAULT.get_or_init(crate::tui::keymap::Keymap::default_map),
             ))
         };
         let theme = theme_mode.to_theme();
@@ -4082,6 +4082,23 @@ diff --git a/b.rs b/b.rs
         assert_eq!(app.visible_files(), vec![2]);
         app.handle_key(key(KeyCode::Esc));
         assert_eq!(app.visible_files().len(), 3, "Esc clears the filter");
+    }
+
+    #[test]
+    fn startup_hint_marks_watch_mode_and_survives_watch_start() {
+        let mut app = two_file_app();
+        app.refresh_startup_status();
+        assert!(app.status.contains("2 file(s)"));
+        assert!(!app.status.contains("watching"));
+        // Watch start re-renders the hint with a watching marker instead of
+        // replacing it with a 4-second toast.
+        app.watch_mode = true;
+        app.refresh_startup_status();
+        assert!(
+            app.status.contains("watching — 2 file(s)"),
+            "status: {}",
+            app.status.message
+        );
     }
 
     #[test]

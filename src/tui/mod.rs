@@ -261,7 +261,10 @@ fn run_loop(
         match Watcher::spawn(&std::env::current_dir().unwrap_or_default()) {
             Ok(w) => {
                 app.watch_mode = true;
-                app.set_info("watching for changes…");
+                // Re-render the sticky startup hint (now prefixed
+                // "watching —") instead of replacing it with a toast that
+                // vanishes after 4 seconds.
+                app.refresh_startup_status();
                 Some(w)
             }
             Err(e) => {
