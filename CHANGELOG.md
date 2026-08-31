@@ -30,6 +30,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent skill (`skill/next-hunk/SKILL.md`, also the `--agent-context` body)
   gains a "The review report" section and a decision-guide row.
 
+### Changed — UI polish round 2: scrollbar, search indicator, help scroll, safe paths
+
+- **Stream scrollbar**: when the review out-scrolls the viewport (the norm
+  on huge diffs) a one-column scrollbar rides the stream's right edge —
+  dim track, theme-accented thumb sized to the visible share of rows. The
+  stream truncates one column earlier, so the bar never paints over
+  content; it disappears entirely when everything fits.
+- **Persistent search indicator**: while a search is active the status bar
+  carries ` /query n/N ` painted in the active-match colors, so the match
+  position survives any number of status toasts (the old one-shot
+  "match 3/17" message was overwritten by the next action).
+- **Help overlay scrolls**: the `?` panel is sized to its content (no dead
+  space on tall terminals) and, when the terminal is too short, scrolls
+  with `j`/`k` or the wheel instead of silently clipping the Session /
+  Agent sections near the bottom; reopening the panel resets to the top.
+- **Width-aware path truncation**: rail and status-bar path truncation now
+  measure display columns (CJK chars cost 2) and cut at char boundaries.
+  This fixes a panic on long non-ASCII filenames — the old rail cut sliced
+  a raw byte index mid-char — and keeps the rail's right-aligned
+  `+ins/−del` tally aligned for CJK paths.
+
 ## [0.5.0] - 2026-08-31
 
 ### Added — measured head-to-head perf vs hunk 0.20
