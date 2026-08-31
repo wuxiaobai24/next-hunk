@@ -133,7 +133,35 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|&i| {
             let f = &app.review.files[i];
-            let path = short_path(&f.display_path, 22);
+            let head = format!(" {}. ", i + 1);
+            let kind = ChangeKind::from_file(f);
+            // Compact per-file change tally: `+ins` (green) next to `−del`
+            // (red), zero sides omitted (e.g. an add-only file shows `+12`,
+            // a pure delete `−3`). Colored so a glance at the rail shows
+            // where the change mass sits.
+            let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
+            // Note badge: how many agent notes/comments target this file
+            // (jump between them with `}`/`{`).
+            // No leading space: 💬 is double-width and the pad span (when
+            // there is room) provides the separation — at tight rail widths
+            // the spare column keeps the count from clipping.
+            let badge = match note_counts.get(&i) {
+                Some(&n) if n > 0 => format!("💬{n}"),
+                _ => String::new(),
+            };
+            // Path budget: whatever the row leaves after the fixed furniture
+            // (index, chip, chevron) and the right-aligned tally/badge, so
+            // the tally stays on-screen instead of clipping away on narrow
+            // rails. Floors at 4 columns (a degenerate 12-column rail can
+            // still clip); caps at 22 to keep path lengths uniform.
+            let tail_w = plus.width() + minus.width();
+            let badge_w = badge.width();
+            let need_pad = tail_w > 0 || badge_w > 0;
+            let sep = if need_pad { 2 } else { 0 };
+            let path_budget = rail_inner_w
+                .saturating_sub(head.width() + 4 + sep + tail_w + badge_w)
+                .clamp(4, 22);
+            let path = short_path(&f.display_path, path_budget);
             let folded = app.folded.contains(&i);
             let mut style = if i == app.selected_file {
                 Style::default()
@@ -150,20 +178,13 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
             if folded {
                 style = style.fg(app.theme.dim).add_modifier(Modifier::DIM);
             }
-            // Compact per-file change tally: `+ins` (green) next to `−del`
-            // (red), zero sides omitted (e.g. an add-only file shows `+12`,
-            // a pure delete `−3`). Colored so a glance at the rail shows
-            // where the change mass sits.
-            let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
-            let head = format!(" {}. ", i + 1);
-            let kind = ChangeKind::from_file(f);
+            // The chip and chevron sit on the selected row's highlight too,
+            // or the selection bar shows a hole at their columns.
             let chip_color = match kind {
                 ChangeKind::Added => app.theme.add,
                 ChangeKind::Deleted => app.theme.delete,
                 ChangeKind::Renamed | ChangeKind::Modified => app.theme.dim,
             };
-            // The chip and chevron sit on the selected row's highlight too,
-            // or the selection bar shows a hole at their columns.
             let chip_style = if i == app.selected_file {
                 Style::default().fg(chip_color).bg(app.theme.selection_bg)
             } else {
@@ -176,21 +197,10 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default().fg(app.theme.dim)
             };
-            // Note badge: how many agent notes/comments target this file
-            // (jump between them with `}`/`{`).
-            // No leading space: 💬 is double-width and the pad span (when
-            // there is room) provides the separation — at tight rail widths
-            // the spare column keeps the count from clipping.
-            let badge = match note_counts.get(&i) {
-                Some(&n) if n > 0 => format!("💬{n}"),
-                _ => String::new(),
-            };
             // Pad the path so the tally right-aligns within the row. Widths
             // (not char counts) keep the alignment on double-width CJK
             // paths; the badge is measured the same way (💬 is 2 columns).
-            let tail = format!("  {}{}", plus, minus);
-            let need_pad = !plus.is_empty() || !minus.is_empty() || !badge.is_empty();
-            let used = head.width() + 2 + 2 + path.width();
+            let used = head.width() + 4 + path.width();
             let mut spans: Vec<Span> = vec![
                 Span::styled(head, style),
                 Span::styled(format!("{} ", kind.letter()), chip_style),
@@ -198,7 +208,7 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
                 Span::styled(path, style),
             ];
             if need_pad {
-                let pad = rail_inner_w.saturating_sub(used + tail.chars().count() + badge.width());
+                let pad = rail_inner_w.saturating_sub(used + sep + tail_w + badge_w);
                 spans.push(Span::raw(" ".repeat(pad)));
                 spans.push(Span::styled(plus, Style::default().fg(app.theme.add)));
                 spans.push(Span::styled(minus, Style::default().fg(app.theme.delete)));
@@ -2802,25 +2812,29 @@ diff --git a/b.rs b/b.rs
         )
         .unwrap();
         let mut app = App::with_highlighter(review, highlighter());
-        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let backend = ratatui::backend::TestBackend::new(80, 10);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(&mut app, f)).unwrap();
 
         let buf = terminal.backend().buffer();
-        let rendered: String = buf
-            .content()
-            .iter()
-            .map(|c| c.symbol().chars().next().unwrap_or(' '))
-            .collect();
-        // a.rs has +1/−1, b.rs has +1/−1. Both "+1" and the Unicode minus "−1"
-        // should appear in the rendered rail area.
+        // Assert inside the rail area only (x < 19 = rail inner width): the
+        // stream pane's own file-header stats would otherwise mask a missing
+        // rail tally (this test once passed for exactly that wrong reason).
+        // The path budget reserves room for the tally, so it must render.
+        let rail_row = |y: u16| -> String {
+            (0..19u16)
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect()
+        };
         assert!(
-            rendered.contains("+1"),
-            "rail should show +1 tally: {rendered}"
+            rail_row(1).contains("+1") && rail_row(1).contains("−1"),
+            "rail should show a.rs's +1/−1 tally: {}",
+            rail_row(1)
         );
         assert!(
-            rendered.contains("−1"),
-            "rail should show −1 tally: {rendered}"
+            rail_row(2).contains("+1") && rail_row(2).contains("−1"),
+            "rail should show b.rs's +1/−1 tally: {}",
+            rail_row(2)
         );
     }
 
