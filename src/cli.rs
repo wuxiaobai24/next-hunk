@@ -48,6 +48,10 @@ enum Commands {
         /// 1-16 (default 4, or `tab_width` in config.toml).
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=16))]
         tab_width: Option<u32>,
+        /// Print the agent workflow document (the skill) to stdout and exit.
+        /// Agents use this to discover the live-session commands.
+        #[arg(long)]
+        agent_context: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal). Agent-bridge: point the human
         /// at what matters.
@@ -129,6 +133,9 @@ enum Commands {
         /// 1-16 (default 4, or `tab_width` in config.toml).
         #[arg(long, value_parser = clap::value_parser!(u32).range(1..=16))]
         tab_width: Option<u32>,
+        /// Print the agent workflow document (the skill) to stdout and exit.
+        #[arg(long)]
+        agent_context: bool,
         /// Scroll to this location on startup: `<path>` / `<path>:<line>` /
         /// `<path>:h<n>` (1-based hunk ordinal).
         #[arg(long)]
@@ -246,6 +253,26 @@ enum Commands {
         #[arg(long)]
         hash: Option<String>,
     },
+    /// Print the path of the bundled agent skill document (materializes it
+    /// on first use under $XDG_DATA_HOME/next-hunk/skill/). Agents load the
+    /// file from this path — same contract as `hunk skill path`.
+    Skill {
+        #[command(subcommand)]
+        action: Option<SkillAction>,
+    },
+    /// Check for a newer release on GitHub. `--check` only reports; without
+    /// it, the install routes are printed too. Never self-overwrites — the
+    /// installer owns the binary.
+    Update {
+        #[arg(long)]
+        check: bool,
+    },
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum SkillAction {
+    /// Print (and materialize) the skill file path.
+    Path,
 }
 
 #[derive(Debug, clap::Subcommand)]
@@ -376,6 +403,51 @@ pub fn main() -> ExitCode {
 
 /// Parse the CLI, naming the command after argv[0] so the short `nh` binary
 /// shows `nh` (not `next-hunk`) in usage and error output.
+/// Recognize git-difftool's 7/8-argument invocation and turn it into a
+/// filediff review. `None` = not a difftool call (normal CLI parsing).
+fn intercept_difftool() -> Option<Result<()>> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if !(args.len() == 7 || args.len() == 8) {
+        return None;
+    }
+    let is_hex = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_hexdigit());
+    let is_mode = |s: &str| s == "0" || (s.len() == 6 && s.bytes().all(|b| b.is_ascii_digit()));
+    if !(is_hex(&args[2]) && is_mode(&args[3]) && is_hex(&args[5]) && is_mode(&args[6])) {
+        return None;
+    }
+    let label = args[0].replace('\\', "/");
+    let old = std::path::PathBuf::from(&args[1]);
+    let new = std::path::PathBuf::from(&args[4]);
+    Some((|| {
+        let cwd = std::env::current_dir()?;
+        let repo = open_repo(&cwd)?;
+        let mut text = git_file_diff(&repo, &old, &new)?;
+        // Relabel the temp files to the real path so file headers, the rail,
+        // and agent notes address the file the human actually changed.
+        let old_l = args[1].replace('\\', "/");
+        let new_l = args[4].replace('\\', "/");
+        text = text
+            .replace(&format!("a/{old_l}"), &format!("a/{label}"))
+            .replace(&format!("b/{new_l}"), &format!("b/{label}"));
+        let settings = ViewSettings::from(&ResolvedConfig::resolve(
+            &Config::load(&cwd),
+            &CliFlags::default(),
+        ));
+        open_review_from_text(
+            &text,
+            None,
+            settings,
+            repo.workdir().map(|p| p.to_owned()),
+            ReviewOptions {
+                session_mode: "difftool".into(),
+                session_title: format!("difftool {label}"),
+                ..Default::default()
+            },
+            None,
+        )
+    })())
+}
+
 fn parse_cli() -> Cli {
     let mut cmd = Cli::command();
     if let Some(arg0) = std::env::args_os().next() {
@@ -391,6 +463,15 @@ fn parse_cli() -> Cli {
 }
 
 fn run() -> Result<()> {
+    // `git difftool` invokes its tool as:
+    //   <cmd> <path> <old-file> <old-hex> <old-mode> <new-file> <new-hex> <new-mode> [rename-to]
+    // Detect that argv shape before clap (which would reject it) and review
+    // the two temp files under the real path label. Configure with:
+    //   git config difftool.nh.cmd nh
+    //   git difftool --tool nh
+    if let Some(res) = intercept_difftool() {
+        return res;
+    }
     let cli = parse_cli();
     match cli.command.unwrap_or(Commands::Diff {
         staged: false,
@@ -398,6 +479,7 @@ fn run() -> Result<()> {
         no_highlight: false,
         include_untracked: false,
         tab_width: None,
+        agent_context: false,
         focus: None,
         note: Vec::new(),
         select: false,
@@ -410,12 +492,17 @@ fn run() -> Result<()> {
             no_highlight,
             include_untracked,
             tab_width,
+            agent_context,
             focus,
             note,
             select,
             target,
             extra,
         } => {
+            if agent_context {
+                crate::agent_docs::print_agent_context();
+                return Ok(());
+            }
             // Parse the agent-bridge specs and check the --select tty
             // requirement BEFORE touching the repo, so a bad spec or a
             // non-interactive --select fails fast with a clear message (an
@@ -753,21 +840,28 @@ fn run() -> Result<()> {
             no_highlight,
             include_untracked,
             tab_width,
+            agent_context,
             focus,
             note,
             extra,
-        } => run_serve(
-            CliFlags {
-                staged: if staged { Some(true) } else { None },
-                watch: if watch { Some(true) } else { None },
-                highlight: if no_highlight { Some(false) } else { None },
-                include_untracked: if include_untracked { Some(true) } else { None },
-                tab_width,
-            },
-            focus,
-            note,
-            extra,
-        ),
+        } => {
+            if agent_context {
+                crate::agent_docs::print_agent_context();
+                return Ok(());
+            }
+            run_serve(
+                CliFlags {
+                    staged: if staged { Some(true) } else { None },
+                    watch: if watch { Some(true) } else { None },
+                    highlight: if no_highlight { Some(false) } else { None },
+                    include_untracked: if include_untracked { Some(true) } else { None },
+                    tab_width,
+                },
+                focus,
+                note,
+                extra,
+            )
+        }
         Commands::Push { focus, note, hash } => run_push(focus, note, hash),
         Commands::Decision { hash } => run_decision(hash),
         Commands::List => run_list(),
@@ -783,6 +877,14 @@ fn run() -> Result<()> {
         Commands::Highlight { action } => run_highlight(action),
         Commands::Comment { action } => run_comment(action),
         Commands::Reload { hash } => run_reload(hash),
+        Commands::Skill { action } => match action.unwrap_or(SkillAction::Path) {
+            SkillAction::Path => {
+                let path = crate::agent_docs::skill_path()?;
+                println!("{}", path.display());
+                Ok(())
+            }
+        },
+        Commands::Update { check } => crate::agent_docs::update(check),
     }
 }
 

@@ -6,6 +6,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — CLI parity: skill path, agent-context, difftool, update
+
+- **`nh skill path`** — prints (and on first use materializes under
+  `$XDG_DATA_HOME/next-hunk/skill/`) the bundled agent skill document, so
+  agents can load it without a source checkout. Same contract as hunk's
+  `hunk skill path`.
+- **`--agent-context`** (on `diff` / `serve`) — prints the agent workflow
+  document to stdout and exits; the doc is embedded in the binary.
+- **git difftool compatibility** — `nh` recognizes difftool's
+  `<path> <old> <old-hex> <old-mode> <new> <new-hex> <new-mode>` invocation,
+  reviews the two temp files, and relabels them to the real path (headers,
+  rail, and agent notes address the file the human changed). Configure with
+  `git config difftool.nh.cmd nh`.
+- **`nh update [--check]`** — probes the latest GitHub release and reports
+  (or prints the install routes). Never self-overwrites: the installer owns
+  the binary.
+- Restores the Jujutsu & Sapling README section lost in #95's squash.
+
 ### Added — `[keybindings]` remapping
 
 - **Every interactive command is a named, remappable action.** A

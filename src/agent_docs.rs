@@ -88,9 +88,8 @@ pub fn newer_release_tag(tag: &str, current: &str) -> Option<String> {
 /// (we never overwrite our own binary — the installer owns that).
 pub fn update(check_only: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
-    let tag = fetch_latest_tag().context(
-        "could not reach GitHub to check for updates (offline? rate-limited?)",
-    )?;
+    let tag = fetch_latest_tag()
+        .context("could not reach GitHub to check for updates (offline? rate-limited?)")?;
     match newer_release_tag(&tag, current) {
         Some(newer) => {
             println!("update available: v{newer} (installed: v{current})");
@@ -104,7 +103,10 @@ pub fn update(check_only: bool) -> Result<()> {
             Ok(())
         }
         None => {
-            println!("up to date (v{current}, latest release: v{})", tag.trim_start_matches('v'));
+            println!(
+                "up to date (v{current}, latest release: v{})",
+                tag.trim_start_matches('v')
+            );
             Ok(())
         }
     }
@@ -125,12 +127,18 @@ fn fetch_latest_tag() -> Result<String> {
     // Minimal JSON scrape: "tag_name": "v0.5.0" — avoids a serde_json
     // dependency for one field.
     let key = "\"tag_name\"";
-    let idx = body
-        .find(key)
-        .with_context(|| format!("no tag_name in release payload: {}", &body[..body.len().min(120)]))?;
+    let idx = body.find(key).with_context(|| {
+        format!(
+            "no tag_name in release payload: {}",
+            &body[..body.len().min(120)]
+        )
+    })?;
     let rest = &body[idx + key.len()..];
     let start = rest.find('"').with_context(|| "malformed tag_name")? + 1;
-    let end = rest[start..].find('"').with_context(|| "malformed tag_name")? + start;
+    let end = rest[start..]
+        .find('"')
+        .with_context(|| "malformed tag_name")?
+        + start;
     Ok(rest[start..end].to_string())
 }
 
@@ -147,7 +155,10 @@ mod tests {
         assert_eq!(newer_release_tag("v0.4.0", "0.4.0"), None);
         assert_eq!(newer_release_tag("v0.3.9", "0.4.0"), None);
         // pre-release-ish tags compare on the numeric prefix
-        assert_eq!(newer_release_tag("v0.5.0-rc.1", "0.4.0"), Some("0.5.0-rc.1".into()));
+        assert_eq!(
+            newer_release_tag("v0.5.0-rc.1", "0.4.0"),
+            Some("0.5.0-rc.1".into())
+        );
     }
 
     #[test]
