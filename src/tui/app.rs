@@ -243,6 +243,10 @@ pub struct App {
 
     /// Show the full-screen keybinding help overlay (toggle with `?`).
     pub show_help: bool,
+    /// Scroll offset inside the help overlay. Only meaningful while
+    /// `show_help` is set; the view clamps it to the content height at draw
+    /// time so a terminal resize can't strand the scroll past the end.
+    pub help_scroll: u16,
     /// Remappable keybindings (`[keybindings]` in config.toml). The default
     /// map reproduces the built-in keys exactly.
     pub keymap: crate::tui::keymap::Keymap,
@@ -573,6 +577,7 @@ impl App {
             rail_rect: None,
             stream_rect: None,
             show_help: false,
+            help_scroll: 0,
             keymap: crate::tui::keymap::Keymap::default_map(),
             theme_mode,
             palette: crate::tui::theme::Palette::default(),
@@ -957,8 +962,9 @@ impl App {
         }
 
         // When the help overlay is up, every key is intercepted: `?`, Esc, q,
-        // Enter, or Space dismiss it; anything else is swallowed so the user
-        // can't navigate behind the overlay.
+        // Enter, or Space dismiss it; j/k (and arrows) scroll the panel when
+        // the terminal is too short for the whole cheat sheet; anything else
+        // is swallowed so the user can't navigate behind the overlay.
         if self.show_help {
             match key.code {
                 KeyCode::Char('?')
@@ -967,6 +973,12 @@ impl App {
                 | KeyCode::Enter
                 | KeyCode::Char(' ') => {
                     self.show_help = false;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    self.help_scroll = self.help_scroll.saturating_add(1);
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
                 }
                 _ => {}
             }
@@ -1003,6 +1015,20 @@ impl App {
     /// behavior is exercisable headlessly, the same as keys.
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
         let half = (self.viewport_height.max(1) / 2) as i64;
+        // With the help overlay up the wheel scrolls the panel, not the
+        // review hidden behind it.
+        if self.show_help {
+            match ev.kind {
+                MouseEventKind::ScrollDown => {
+                    self.help_scroll = self.help_scroll.saturating_add(1);
+                }
+                MouseEventKind::ScrollUp => {
+                    self.help_scroll = self.help_scroll.saturating_sub(1);
+                }
+                _ => {}
+            }
+            return;
+        }
         match ev.kind {
             MouseEventKind::ScrollDown => {
                 if ev.modifiers.contains(KeyModifiers::SHIFT) {
@@ -1256,7 +1282,12 @@ impl App {
             },
             Action::NextMatch => self.advance_match(true),
             Action::PrevMatch => self.advance_match(false),
-            Action::Help => self.show_help = !self.show_help,
+            Action::Help => {
+                self.show_help = !self.show_help;
+                // A fresh open starts at the top, not wherever the last
+                // session left off.
+                self.help_scroll = 0;
+            }
             // --select decisions: inert outside select mode, matching the
             // pre-keymap guards on a/r/u.
             Action::AcceptHunk if self.select_mode => self.decide_current(Decision::Accept),

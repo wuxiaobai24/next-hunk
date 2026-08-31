@@ -19,7 +19,10 @@ use std::sync::Arc;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap};
+use ratatui::widgets::{
+    Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar, ScrollbarOrientation,
+    ScrollbarState, Wrap,
+};
 use ratatui::Frame;
 
 use crate::ir::{
@@ -58,21 +61,65 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
 }
 
 fn draw_main(app: &mut App, frame: &mut Frame, area: Rect) {
+    // A one-column scrollbar rides the right edge whenever the review
+    // out-scrolls the viewport (the norm on huge diffs): position at a
+    // glance. The stream truncates one column earlier to make room, so the
+    // bar never paints over diff content.
+    let overflows = app.collapse.virtual_len() > area.height as usize;
+    let mut scrollbar_area: Option<Rect> = None;
+    let content_area = if overflows && area.width > 12 {
+        scrollbar_area = Some(Rect {
+            x: area.x + area.width - 1,
+            width: 1,
+            ..area
+        });
+        Rect {
+            width: area.width - 1,
+            ..area
+        }
+    } else {
+        area
+    };
+
     if app.show_rail {
-        let rail_w = RAIL_MAX_WIDTH.min(area.width / 4).max(12);
+        let rail_w = RAIL_MAX_WIDTH.min(content_area.width / 4).max(12);
         let cols = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(rail_w), Constraint::Min(0)])
-            .split(area);
+            .split(content_area);
         app.rail_rect = Some(cols[0]);
         app.stream_rect = Some(cols[1]);
         draw_rail(app, frame, cols[0]);
         draw_stream(app, frame, cols[1]);
     } else {
         app.rail_rect = None;
-        app.stream_rect = Some(area);
-        draw_stream(app, frame, area);
+        app.stream_rect = Some(content_area);
+        draw_stream(app, frame, content_area);
     }
+
+    if let Some(sb_area) = scrollbar_area {
+        draw_scrollbar(app, frame, sb_area);
+    }
+}
+
+/// Render the stream's vertical scrollbar: a dim track with a theme-accented
+/// thumb sized to the visible share of the virtual rows. The travel range is
+/// the number of distinct top-row positions, matching how `scroll_y` clamps.
+fn draw_scrollbar(app: &App, frame: &mut Frame, area: Rect) {
+    let travel = app
+        .collapse
+        .virtual_len()
+        .saturating_sub(area.height as usize)
+        .max(1);
+    let mut state = ScrollbarState::new(travel).position(app.scroll_y.min(travel));
+    let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+        .begin_symbol(None)
+        .end_symbol(None)
+        .track_symbol(Some("│"))
+        .track_style(Style::default().fg(app.theme.dim))
+        .thumb_symbol("█")
+        .thumb_style(Style::default().fg(app.theme.hunk_header));
+    frame.render_stateful_widget(scrollbar, area, &mut state);
 }
 
 fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
@@ -90,7 +137,7 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|&i| {
             let f = &app.review.files[i];
-            let path = short_path(&f.display_path);
+            let path = short_path(&f.display_path, 24);
             let style = if i == app.selected_file {
                 Style::default()
                     .fg(app.theme.selection_fg)
@@ -117,12 +164,12 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
                 Some(&n) if n > 0 => format!(" 💬{n}"),
                 _ => String::new(),
             };
-            // Pad the path so the tally right-aligns within the row. Count
-            // widths before moving the strings into Spans below. The badge
-            // is measured with unicode-width (💬 is double-width).
+            // Pad the path so the tally right-aligns within the row. Widths
+            // (not char counts) keep the alignment on double-width CJK
+            // paths; the badge is measured the same way (💬 is 2 columns).
             let tail = format!("  {}{}", plus, minus);
             let need_pad = !plus.is_empty() || !minus.is_empty() || !badge.is_empty();
-            let used = head.chars().count() + 2 + path.chars().count();
+            let used = head.width() + 2 + path.width();
             let mut spans: Vec<Span> = vec![
                 Span::styled(head, style),
                 Span::styled(
@@ -1448,6 +1495,26 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
         Span::styled(left, Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(totals, Style::default().fg(app.theme.dim)),
     ];
+    // Persistent search indicator: which match is on screen and how many
+    // there are. The one-shot "match 3/17" toast is gone the moment anything
+    // else writes a status message; this stays for the whole search session
+    // and paints in the active-match colors so it reads as "you are here".
+    if app.search.active && !app.search.matches.is_empty() {
+        let query = truncate_to_width(app.search.query.as_str(), 12);
+        let indicator = format!(
+            " /{} {}/{} ",
+            query,
+            app.search.current + 1,
+            app.search.matches.len()
+        );
+        spans.push(Span::styled(
+            indicator,
+            Style::default()
+                .fg(app.theme.match_active_fg)
+                .bg(app.theme.match_active_bg)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
     // Run-mode badges: make the active mode discoverable. SELECT uses the
     // orange edit color (it's an action mode where a/r/u matter); WATCH/SERVE
     // share the cyan note color. Kept short (≤8 chars) so they don't crowd a
@@ -1602,20 +1669,13 @@ fn truncate_to_width(s: &str, width: usize) -> String {
 }
 
 /// Full-screen keybinding reference, drawn on top of the review when the user
-/// presses `?`. Rendered as a centered, bordered panel with the bindings grouped
-/// by category; section headers use the hunk-header color so they stand out
-/// without fighting the Flexoki chrome.
-fn draw_help_overlay(app: &App, frame: &mut Frame) {
+/// presses `?`. Rendered as a centered, bordered panel sized to its content
+/// (clamped to the terminal); when the terminal is too short the panel
+/// scrolls with `j`/`k` (or the wheel) instead of silently clipping the
+/// sections near the bottom. Section headers use the hunk-header color so
+/// they stand out without fighting the Flexoki chrome.
+fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
     let area = frame.area();
-
-    // A centered panel: up to 64 cols wide and as tall as the content needs,
-    // clamped to the terminal with a 1-row margin.
-    let width = 64u16.min(area.width.saturating_sub(2));
-    let height = 38u16.min(area.height.saturating_sub(2));
-    let popup = centered_rect(width, height, area);
-
-    // Clear the underlying cells so the overlay reads as a floating panel.
-    frame.render_widget(Clear, popup);
 
     let key = Style::default()
         .fg(app.theme.hunk_header)
@@ -1738,9 +1798,24 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     );
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " any help key · Esc · Enter  dismiss this help",
+        " j/k scroll · any help key · Esc · Enter  dismiss this help",
         Style::default().fg(app.theme.edit_mode_fg),
     )));
+
+    // Size the panel to its content, clamped to the terminal with a 1-row
+    // margin. When the content still doesn't fit, the panel scrolls (the
+    // scroll is clamped here so a terminal resize can't strand the view
+    // past the end).
+    let width = 64u16.min(area.width.saturating_sub(2));
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let popup = centered_rect(width, height, area);
+
+    // Clear the underlying cells so the overlay reads as a floating panel.
+    frame.render_widget(Clear, popup);
+
+    let inner_h = popup.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_h).min(u16::MAX as usize) as u16;
+    app.help_scroll = app.help_scroll.min(max_scroll);
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -1755,6 +1830,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
         .style(Style::default().bg(app.theme.status_bg));
     let para = Paragraph::new(lines)
         .block(block)
+        .scroll((app.help_scroll, 0))
         .alignment(Alignment::Left);
     frame.render_widget(para, popup);
 }
@@ -2053,19 +2129,44 @@ fn apply_highlight_marks(
     runs
 }
 
-/// Truncate a path for the rail display.
-fn short_path(path: &str) -> String {
-    if path.len() <= 24 {
+/// Truncate a path for the rail display: at most `max_cols` display columns
+/// (CJK chars count double), biased toward the trailing filename — that's
+/// what identifies the file to the reviewer. Cutting walks char boundaries,
+/// so a long non-ASCII path truncates instead of panicking on a byte-index
+/// slice.
+fn short_path(path: &str, max_cols: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if max_cols == 0 || path.width() <= max_cols {
         return path.to_string();
     }
     if let Some(idx) = path.rfind('/') {
         let last = &path[idx + 1..];
-        if last.len() <= 22 {
+        if last.width() + 2 <= max_cols {
+            // "…/" + basename fits: prefer the natural form.
             return format!("…/{}", last);
         }
-        return format!("…{}", &last[last.len() - 22..]);
+        return truncate_tail_width(last, max_cols);
     }
-    format!("…{}", &path[path.len() - 22..])
+    truncate_tail_width(path, max_cols)
+}
+
+/// Keep the trailing `max_cols - 1` display columns of `s` behind a leading
+/// ellipsis, cutting only at char boundaries. `max_cols <= 1` yields just the
+/// ellipsis.
+fn truncate_tail_width(s: &str, max_cols: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let budget = max_cols.saturating_sub(1);
+    let mut taken = 0usize;
+    let mut start = s.len();
+    for (i, c) in s.char_indices().rev() {
+        let w = c.to_string().width();
+        if taken + w > budget {
+            break;
+        }
+        taken += w;
+        start = i;
+    }
+    format!("…{}", &s[start..])
 }
 
 /// Build the two halves of a file's per-file change tally for the rail.
@@ -2086,29 +2187,26 @@ fn file_stats_tail(inserts: u64, deletes: u64) -> (String, String) {
     (plus, minus)
 }
 
-/// Truncate a path for the status bar, capped at `max_chars` display columns
+/// Truncate a path for the status bar, capped at `max_cols` display columns
 /// and biased toward keeping the trailing filename (that's what identifies the
 /// file to the reviewer). When the path fits, it's returned unchanged. When it
-/// doesn't, we keep the last `max_chars - 1` chars and prefix an ellipsis —
-/// unless there's a directory separator, in which case we prefer `…/<basename>`
-/// so the truncation reads naturally. Operates on chars (UTF-8 safe).
-fn status_path(path: &str, max_chars: usize) -> String {
-    let chars: Vec<char> = path.chars().collect();
-    if chars.len() <= max_chars || max_chars == 0 {
+/// doesn't, we prefer `…/<basename>` (reads naturally) and fall back to a
+/// leading ellipsis + the trailing columns. Measured in display width — a CJK
+/// path costs two columns per char — and cut at char boundaries, so long
+/// non-ASCII paths truncate instead of overflowing the budget or panicking.
+fn status_path(path: &str, max_cols: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if max_cols == 0 || path.width() <= max_cols {
         return path.to_string();
     }
-    // Try to keep the basename (last segment after '/') intact under the cap.
-    if let Some(slash) = chars.iter().rposition(|&c| c == '/') {
-        let basename: String = chars[slash + 1..].iter().collect();
+    if let Some(slash) = path.rfind('/') {
+        let basename = &path[slash + 1..];
         // "…/" + basename
-        if basename.chars().count() + 2 <= max_chars {
+        if basename.width() + 2 <= max_cols {
             return format!("…/{}", basename);
         }
     }
-    // Fall back: keep the trailing (max_chars - 1) chars with a leading ellipsis.
-    let keep = max_chars.saturating_sub(1);
-    let tail: String = chars[chars.len() - keep..].iter().collect();
-    format!("…{}", tail)
+    truncate_tail_width(path, max_cols)
 }
 
 #[cfg(test)]
@@ -2959,5 +3057,176 @@ diff --git a/a.rs b/a.rs
             painted_red,
             "expected the error toast text to be painted in the delete color"
         );
+    }
+
+    // ---- UI polish round 2: scrollbar, search indicator, width-safe paths --
+
+    #[test]
+    fn overflowing_stream_shows_scrollbar() {
+        // More virtual rows than viewport rows → a scrollbar rides the right
+        // edge of the main area (track + thumb in the reserved column).
+        let mut patch =
+            String::from("diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1,4 +1,4 @@\n");
+        for i in 0..14 {
+            patch.push_str(&format!("+line {i}\n"));
+        }
+        let review = parse_unified_diff(&patch).unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        // Main area spans rows 0..6 (8 - status - help). The scrollbar lives
+        // in the rightmost column (x = 39).
+        let marked = (0..6u16)
+            .filter(|&y| {
+                let c = buf[(39, y)].symbol();
+                c == "│" || c == "█"
+            })
+            .count();
+        assert!(marked > 0, "expected scrollbar cells on the right edge");
+    }
+
+    #[test]
+    fn no_scrollbar_when_content_fits() {
+        // Content shorter than the viewport → no reserved column, no glyphs
+        // in the rightmost column of the main area.
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let marked = (0..6u16).filter(|&y| buf[(39, y)].symbol() == "│").count();
+        assert_eq!(marked, 0, "no scrollbar when everything fits");
+    }
+
+    #[test]
+    fn active_search_shows_persistent_match_indicator() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old value here
++new value here
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        app.handle_key(KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE));
+        for c in "value".chars() {
+            app.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(app.search.active && app.search.matches.len() == 2);
+
+        // Overwrite the one-shot toast so the indicator is the only place
+        // the match position lives — then render and read the status row.
+        app.set_info("something else entirely");
+        let backend = ratatui::backend::TestBackend::new(80, 6);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let status = row_text(terminal.backend().buffer(), 4, 80);
+        assert!(
+            status.contains("/value") && status.contains("1/2"),
+            "status bar should carry a persistent n/N search indicator, got: {status:?}"
+        );
+    }
+
+    #[test]
+    fn short_path_prefers_basename_and_stays_in_budget() {
+        assert_eq!(short_path("a/b/c/some_file.rs", 16), "…/some_file.rs");
+        use unicode_width::UnicodeWidthStr;
+        // Basename wider than the budget: tail-truncate, still within budget.
+        let out = short_path("a/b/c/功能测试功能测试功能测试.rs", 10);
+        assert!(out.width() <= 10, "{out:?}");
+        assert!(out.starts_with('…'), "{out:?}");
+    }
+
+    #[test]
+    fn short_path_is_char_boundary_safe_on_non_ascii() {
+        // 30+ bytes of CJK with no separator: the old byte-index cut
+        // (`&path[len-22..]`) landed mid-char and panicked. It must truncate
+        // to the display budget instead.
+        use unicode_width::UnicodeWidthStr;
+        let p = "功能测试文件名非常长的中文文件名";
+        let out = short_path(p, 24);
+        assert!(out.width() <= 24, "{out:?}");
+        assert!(out.starts_with('…'), "{out:?}");
+    }
+
+    #[test]
+    fn status_path_is_width_aware_for_cjk() {
+        use unicode_width::UnicodeWidthStr;
+        // 12 CJK chars (24 columns) + ".rs": chars-based truncation would
+        // overflow a 16-column budget; width-based must fit.
+        let p = "功能测试文件名超长超长超长.rs";
+        let out = status_path(p, 16);
+        assert!(out.width() <= 16, "{out:?}");
+    }
+
+    #[test]
+    fn help_overlay_scrolls_with_jk_and_clamps_on_resize() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs\n--- a/a.rs\n+++ b/a.rs\n@@ -1 +1 @@\n-old\n+new\n",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 6;
+        app.show_help = true;
+
+        // Short terminal: the panel can't show everything; j/k scroll it.
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 20)).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        for _ in 0..3 {
+            app.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('k'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert_eq!(app.help_scroll, 2, "3 × j then 1 × k → scroll 2");
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        assert_eq!(app.help_scroll, 2, "in-range scroll survives a redraw");
+
+        // Tall terminal: the whole sheet fits, so the draw clamps to 0.
+        let mut tall = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 60)).unwrap();
+        tall.draw(|f| draw(&mut app, f)).unwrap();
+        assert_eq!(app.help_scroll, 0, "everything fits → scroll clamps to 0");
+
+        // Reopening the overlay resets to the top, not to the old offset.
+        for _ in 0..2 {
+            app.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Char('j'),
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('?'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(!app.show_help, "? dismisses the overlay");
+        app.handle_key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char('?'),
+            crossterm::event::KeyModifiers::NONE,
+        ));
+        assert!(app.show_help, "? reopens the overlay");
+        assert_eq!(app.help_scroll, 0, "reopen starts at the top");
     }
 }
