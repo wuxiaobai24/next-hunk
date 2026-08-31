@@ -73,8 +73,13 @@ pub struct Search {
     pub matches: Vec<usize>,
     /// Index into `matches` of the current focus.
     pub current: usize,
-    /// True once a search has been finalized (Enter) and is active.
+    /// True while a search is live (incrementally while typing, and after
+    /// Enter confirms it).
     pub active: bool,
+    /// Stream row the search started from (`/` captures the cursor row).
+    /// Each incremental update lands on the first match at/after it, so
+    /// longer queries refine in place instead of drifting forward.
+    pub anchor: usize,
 }
 
 impl Search {
@@ -83,6 +88,7 @@ impl Search {
         self.matches.clear();
         self.current = 0;
         self.active = false;
+        self.anchor = 0;
     }
 }
 
@@ -1310,6 +1316,13 @@ impl App {
             Action::Search => {
                 self.mode = InputMode::Search;
                 self.search.query.clear();
+                // Fresh search: drop any previous session's matches (they
+                // used to linger highlighted while the new query was typed)
+                // and anchor incsearch at the cursor row.
+                self.search.matches.clear();
+                self.search.active = false;
+                self.search.current = 0;
+                self.search.anchor = self.cursor_stream_row();
                 self.set_info("search: ");
             }
             Action::FilterPaths => {
@@ -1352,11 +1365,13 @@ impl App {
             match key.code {
                 KeyCode::Char('u') => {
                     self.search.query.clear();
+                    self.update_live_search();
                     self.set_info("search: ");
                     return;
                 }
                 KeyCode::Char('w') => {
                     drop_last_word(&mut self.search.query);
+                    self.update_live_search();
                     self.set_info(format!("search: {}", self.search.query));
                     return;
                 }
@@ -1375,10 +1390,12 @@ impl App {
             }
             KeyCode::Backspace => {
                 self.search.query.pop();
+                self.update_live_search();
                 self.set_info(format!("search: {}", self.search.query));
             }
             KeyCode::Char(c) => {
                 self.search.query.push(c);
+                self.update_live_search();
                 self.set_info(format!("search: {}", self.search.query));
             }
             _ => {}
@@ -1424,30 +1441,63 @@ impl App {
         }
     }
 
-    /// Run the search: scan the whole stream for the query (case-insensitive).
+    /// Scan the whole stream for `needle` (case-insensitive). Cheap enough
+    /// (viewport-era IR) to run on every keystroke of the search prompt.
+    fn compute_matches(&self, needle: &str) -> Vec<usize> {
+        let mut matches = Vec::new();
+        for row in 0..self.review.stream_len {
+            if let Some(text) = ViewportQuery::row_text(&self.review, row) {
+                if text.to_lowercase().contains(needle) {
+                    matches.push(row);
+                }
+            }
+        }
+        matches
+    }
+
+    /// Incremental search: recompute matches for the current query and land
+    /// on the first one at/after the anchor (where `/` was pressed, wrapping).
+    /// Runs on every query edit, so matches, highlights, and the position
+    /// indicator update live while typing — Enter just confirms.
+    fn update_live_search(&mut self) {
+        if self.search.query.trim().is_empty() {
+            self.search.matches.clear();
+            self.search.current = 0;
+            self.search.active = false;
+            return;
+        }
+        let needle = self.search.query.to_lowercase();
+        self.search.matches = self.compute_matches(&needle);
+        self.search.active = true;
+        if self.search.matches.is_empty() {
+            self.search.current = 0;
+            return;
+        }
+        let anchor = self.search.anchor;
+        let idx = self
+            .search
+            .matches
+            .iter()
+            .position(|&r| r >= anchor)
+            .unwrap_or(0);
+        self.search.current = idx;
+        let row = self.search.matches[idx];
+        self.jump_to_stream(row);
+    }
+
+    /// Confirm the live search (Enter): the incremental update already
+    /// computed matches and positioned the viewport, so this closes the
+    /// prompt and reports where you ended up.
     fn finalize_search(&mut self) {
         if self.search.query.trim().is_empty() {
             self.search.clear();
             self.set_error("search empty");
             return;
         }
-        let needle = self.search.query.to_lowercase();
-        let mut matches = Vec::new();
-        for row in 0..self.review.stream_len {
-            if let Some(text) = ViewportQuery::row_text(&self.review, row) {
-                if text.to_lowercase().contains(&needle) {
-                    matches.push(row);
-                }
-            }
-        }
-        self.search.matches = matches;
-        self.search.current = 0;
         self.search.active = true;
         if self.search.matches.is_empty() {
             self.set_error(format!("no matches for {:?}", self.search.query));
         } else {
-            let row = self.search.matches[0];
-            self.jump_to_stream(row);
             self.set_info(format!(
                 "match {}/{}: {:?}",
                 self.search.current + 1,
@@ -1470,19 +1520,32 @@ impl App {
             return;
         }
         let n = self.search.matches.len();
-        self.search.current = if forward {
-            (self.search.current + 1) % n
+        let (next, wrapped) = if forward {
+            if self.search.current + 1 >= n {
+                (0, true)
+            } else {
+                (self.search.current + 1, false)
+            }
+        } else if self.search.current == 0 {
+            (n - 1, true)
         } else {
-            self.search.current.checked_sub(1).unwrap_or(n - 1)
+            (self.search.current - 1, false)
         };
-        let row = self.search.matches[self.search.current];
+        self.search.current = next;
+        let row = self.search.matches[next];
         self.jump_to_stream(row);
-        self.set_info(format!(
-            "match {}/{}: {:?}",
-            self.search.current + 1,
-            self.search.matches.len(),
-            self.search.query
-        ));
+        // Say when the jump wrapped past the end/start — a plain "match 1/17"
+        // after 17/17 is indistinguishable from a short match list.
+        if wrapped {
+            self.set_info(format!(
+                "search wrapped — match {}/{}: {:?}",
+                next + 1,
+                n,
+                self.search.query
+            ));
+        } else {
+            self.set_info(format!("match {}/{}: {:?}", next + 1, n, self.search.query));
+        }
     }
 
     /// Apply the path filter: clamp selected_file into the visible set.
@@ -1655,16 +1718,11 @@ impl App {
     /// Run the search without jumping/overwriting a caller-set status prefix.
     /// Mirrors `finalize_search` but is quiet about the status message.
     fn finalize_search_silent(&mut self) {
-        let needle = self.search.query.to_lowercase();
-        let mut matches = Vec::new();
-        for row in 0..self.review.stream_len {
-            if let Some(text) = ViewportQuery::row_text(&self.review, row) {
-                if text.to_lowercase().contains(&needle) {
-                    matches.push(row);
-                }
-            }
+        if self.search.query.trim().is_empty() {
+            return;
         }
-        self.search.matches = matches;
+        let needle = self.search.query.to_lowercase();
+        self.search.matches = self.compute_matches(&needle);
         self.search.current = 0;
         self.search.active = true;
         if !self.search.matches.is_empty() {
@@ -2654,6 +2712,72 @@ diff --git a/a.rs b/a.rs
         app.handle_key(key(KeyCode::Enter));
         assert!(app.search.active);
         assert!(app.search.matches.is_empty());
+    }
+
+    #[test]
+    fn search_is_live_while_typing_before_enter() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        app.handle_key(char_key('v'));
+        // The first keystroke already computes matches and lands on one —
+        // no Enter needed.
+        assert!(app.search.active, "search is live while typing");
+        assert_eq!(app.search.matches.len(), 2);
+        // Completing the query refines in place; Enter just closes the prompt.
+        for c in "alue".chars() {
+            app.handle_key(char_key(c));
+        }
+        assert_eq!(app.mode, InputMode::Search);
+        assert_eq!(app.search.matches.len(), 2);
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.mode, InputMode::Normal);
+        assert_eq!(app.search.matches.len(), 2);
+    }
+
+    #[test]
+    fn incremental_search_lands_at_or_after_the_cursor() {
+        // The anchor is where `/` was pressed: with the cursor already below
+        // the first match, the live search lands on the *next* one (row 7),
+        // not on the stream-top hit (row 3).
+        let mut app = two_file_app();
+        app.set_cursor(7);
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "value".chars() {
+            app.handle_key(char_key(c));
+        }
+        assert_eq!(app.search.current, 1, "landed on the row-7 match");
+        app.handle_key(key(KeyCode::Enter));
+        assert_eq!(app.search.current, 1, "Enter keeps the live match");
+    }
+
+    #[test]
+    fn backspace_recomputes_live_matches() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "valuex".chars() {
+            app.handle_key(char_key(c));
+        }
+        assert!(app.search.matches.is_empty(), "no match for the typo");
+        app.handle_key(key(KeyCode::Backspace));
+        assert_eq!(app.search.matches.len(), 2, "backspace re-runs the scan");
+    }
+
+    #[test]
+    fn search_wrap_says_so() {
+        let mut app = two_file_app();
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "value".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('n'))); // match 2/2
+        assert!(!app.status.message.contains("wrapped"));
+        app.handle_key(key(KeyCode::Char('n'))); // wraps to match 1/2
+        assert!(
+            app.status.message.contains("wrapped"),
+            "status: {}",
+            app.status.message
+        );
     }
 
     #[test]

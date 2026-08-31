@@ -1577,9 +1577,22 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
 fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
     let content = match app.mode {
         InputMode::Search => {
+            // Live feedback from the incremental search: where you are in
+            // the match list (or that there's nothing) while still typing.
+            let live = if app.search.query.trim().is_empty() {
+                String::new()
+            } else if app.search.matches.is_empty() {
+                " · no match".to_string()
+            } else {
+                format!(
+                    " · match {}/{}",
+                    app.search.current + 1,
+                    app.search.matches.len()
+                )
+            };
             format!(
-                "/{}▌  (Enter search · Enter confirm · Esc cancel)",
-                app.search.query
+                "/{}▌  (Enter confirm · Esc cancel{})",
+                app.search.query, live
             )
         }
         InputMode::Filter => {

@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — incremental search (live matches while typing)
+
+- **Search is now incremental.** Typing in the `/` prompt computes matches
+  on every keystroke and lands on the first one at/after where you pressed
+  `/` (like vim's `incsearch`) — highlights, the status-bar
+  ` /query n/N ` indicator, and the prompt's live `match i/N` / `no match`
+  feedback all update while typing. `Enter` just confirms and closes the
+  prompt; `Esc` still cancels and clears.
+- Starting a new search clears the previous one's matches (they used to
+  stay highlighted while you typed a different query).
+- **`n`/`N` now say when they wrapped** (`search wrapped — match 1/17`)
+  instead of showing a plain `match 1/17` that reads like a short list.
+
 ### Changed — quitting with unsaved notes asks for confirmation
 
 - **A stray `q`/Ctrl+C no longer silently discards your notes.** In a plain
