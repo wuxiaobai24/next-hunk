@@ -24,16 +24,21 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
 use crate::ir::Review;
-use crate::tui::app::{App, Selections};
+use crate::tui::app::App;
+use crate::tui::export::ReviewReport;
 use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
+pub mod export;
 pub mod input;
 pub mod keymap;
 pub mod server;
 pub mod theme;
 pub mod view;
 pub mod watch;
+
+pub use crate::config::ExportOnQuit;
+pub use export::emit_report;
 
 type Tui = Terminal<CrosstermBackend<Stdout>>;
 
@@ -64,6 +69,13 @@ pub struct ReviewOptions {
     /// the presence of a reloader — every session keeps a reloader so
     /// `next-hunk reload` works, but only `--watch` polls the filesystem.
     pub watch: bool,
+    /// What to emit on quit: the full review report (`json` / `markdown` /
+    /// `both`) or the legacy `--select` decisions JSON (`none`). Resolved
+    /// from `export_on_quit` config + `--export` flag by `diff` / `serve`.
+    pub export_on_quit: ExportOnQuit,
+    /// `--export-file <PATH>`: write the report to file(s) instead of stdout.
+    /// With no explicit format, implies `json`.
+    pub export_file: Option<PathBuf>,
 }
 
 /// The server-listener handle threaded into the run loop, or `()` on builds
@@ -113,10 +125,12 @@ fn resume_tui(terminal: &mut Tui) -> Result<()> {
 /// started), the loop hot-reloads the review on filesystem changes, preserving
 /// scroll / selection as described in [`App::reload_review`].
 ///
-/// Returns the [`Selections`] (always present; empty buckets when not in
-/// `--select` mode) on clean quit. Errors only on fatal terminal I/O. If the
-/// process's stdout is not a tty, crossterm will typically still enter raw
-/// mode and the caller may choose to fall back to a non-interactive summary.
+/// Returns the full review [`ReviewReport`] (decisions + comments + banner
+/// notes; decisions-only when nothing was annotated) on clean quit — the
+/// caller decides what to emit via `options.export_on_quit`. Errors only on
+/// fatal terminal I/O. If the process's stdout is not a tty, crossterm will
+/// typically still enter raw mode and the caller may choose to fall back to a
+/// non-interactive summary.
 #[allow(clippy::too_many_arguments)]
 pub fn run_review_tui(
     review: Review,
@@ -125,7 +139,7 @@ pub fn run_review_tui(
     workdir: Option<PathBuf>,
     options: ReviewOptions,
     server: Option<ServerArg>,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     if review.is_empty() {
         anyhow::bail!("nothing to review (empty diff)");
     }
@@ -197,7 +211,7 @@ fn run_loop(
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
     watch_enabled: bool,
-) -> Result<Selections> {
+) -> Result<ReviewReport> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
     // that case we keep running without live reload and surface a status note.
@@ -285,8 +299,10 @@ fn run_loop(
         if let Event::Key(key) = event {
             app.handle_key(key);
             if app.should_quit {
-                // Emit the per-hunk decisions (empty buckets outside --select).
-                return Ok(app.selections());
+                // Full report: decisions + comments + banner notes. The caller
+                // emits it per `export_on_quit` / `--export` (legacy decisions
+                // JSON when exporting is off but `--select` ran).
+                return Ok(app.review_report());
             }
             // `o` requested opening a file in the editor. Suspend the TUI
             // (leave alt screen + raw mode so the editor gets a clean terminal),

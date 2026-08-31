@@ -4,6 +4,32 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added — review report export on quit (the human→agent feedback loop)
+
+- **`--export json|markdown|both`** (on `diff` / `serve`) — when the human
+  quits, emit a structured review report: the `--select` decision arrays
+  (`accepted` / `rejected` / `undecided`, same shape as before) plus the
+  session's `comments` (the human's `c` notes as `user:N`, session comments,
+  and the agent's `--note` annotations as `note-N`) and the joined `banner`
+  text. hunk has no counterpart — this is the structured half of the review
+  bridge: the human reviews, the agent reads one artifact and acts on it.
+- **`--export-file <path>`** — write the report to file(s) instead of stdout.
+  With no explicit format it implies `json`; `both` writes sibling
+  `.json` / `.md` files (extensions replace/append sensibly).
+- **`export_on_quit`** config (`"none"` default, `"json"` / `"markdown"` /
+  `"both"`) — make every review emit the report without the flag; unknown
+  values fall back to off.
+- **Backward compatible by construction**: without `--export` / config,
+  behavior is byte-identical to 0.5.0 — `--select` still prints the legacy
+  decisions-only JSON, and `next-hunk decision` output is unchanged.
+- A Markdown report (`# next-hunk review report` with Banner / Decisions /
+  Comments sections) renders for `markdown` / `both`, suitable for pasting
+  into an agent prompt or a PR description.
+- Agent skill (`skill/next-hunk/SKILL.md`, also the `--agent-context` body)
+  gains a "The review report" section and a decision-guide row.
+
 ## [0.5.0] - 2026-08-31
 
 ### Added — measured head-to-head perf vs hunk 0.20

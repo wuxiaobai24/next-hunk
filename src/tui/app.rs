@@ -935,6 +935,19 @@ impl App {
         }
     }
 
+    /// Build the full quit-time [`ReviewReport`]: decisions, session comments,
+    /// `--note` annotations, and the banner. Human notes composed with `c` are
+    /// already mirrored into `comments` as `user:N` and are not duplicated.
+    /// Pure function — safe to unit-test headlessly.
+    pub fn review_report(&self) -> crate::tui::export::ReviewReport {
+        crate::tui::export::build_report(
+            &self.selections(),
+            &self.comments,
+            &self.notes,
+            &self.user_notes,
+        )
+    }
+
     /// Handle a single key event. Pure: mutates state only, no I/O.
     pub fn handle_key(&mut self, key: KeyEvent) {
         // Ctrl+C always quits, regardless of mode.
@@ -4012,5 +4025,72 @@ diff --git a/a.rs b/a.rs
             "initial status should mention fold keys: {}",
             app.status
         );
+    }
+
+    #[test]
+    fn review_report_includes_comments_and_banner_without_select() {
+        // Non-`--select` sessions still export comments + banner notes; the
+        // human's `c` note arrives once (via `comments`), not duplicated as a
+        // synthetic note entry.
+        let mut app = multi_hunk_app();
+        app.select_mode = false;
+        app.notes.push(Note {
+            target: NoteTarget::Banner,
+            text: "banner summary".into(),
+        });
+        app.notes.push(Note {
+            target: NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 7,
+            },
+            text: "agent line note".into(),
+        });
+        app.note_pending = Some(NoteTarget::Line {
+            path: "a.rs".into(),
+            line: 3,
+        });
+        app.note_draft = "human note".into();
+        app.save_note();
+        let report = app.review_report();
+        assert!(report.accepted.is_empty());
+        assert!(
+            !report.undecided.is_empty(),
+            "all hunks undecided without select"
+        );
+        assert_eq!(report.banner.as_deref(), Some("banner summary"));
+        let ids: Vec<&str> = report.comments.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["user:1", "note-0"], "human note first, no dup");
+        assert_eq!(report.comments[0].text, "human note");
+        assert_eq!(report.comments[0].line, Some(3));
+        assert_eq!(report.comments[1].text, "agent line note");
+    }
+
+    #[test]
+    fn review_report_carries_decisions() {
+        let mut app = multi_hunk_app();
+        app.select_mode = true;
+        // Decide the first hunk of a.rs (cursor starts at the file header).
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 0,
+            },
+            Decision::Accept,
+        );
+        app.decisions.insert(
+            HunkId {
+                file_idx: 0,
+                hunk_idx: 1,
+            },
+            Decision::Reject,
+        );
+        let report = app.review_report();
+        assert_eq!(report.accepted, vec!["a.rs:h1".to_string()]);
+        assert_eq!(report.rejected, vec!["a.rs:h2".to_string()]);
+        assert!(report.undecided.contains(&"b.rs:h1".to_string()));
+        // Projection back to the legacy `--select` shape.
+        let sels = report.as_selections();
+        assert_eq!(sels.accepted, report.accepted);
+        assert!(sels.undecided.contains(&"b.rs:h2".to_string()));
     }
 }

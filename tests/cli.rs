@@ -388,14 +388,12 @@ struct TempRepo {
 
 impl TempRepo {
     fn new() -> TempRepo {
-        let dir = std::env::temp_dir().join(format!(
-            "nh-cli-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        // Process-unique name: SystemTime nanos alone can repeat on coarse
+        // clocks (macOS ~1µs), making parallel tests share one directory.
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let uniq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("nh-cli-{}-{}", std::process::id(), uniq));
         std::fs::create_dir_all(&dir).unwrap();
         let git = |args: &[&str]| {
             let out = Command::new("git")
@@ -609,5 +607,19 @@ fn agent_context_flag_prints_the_workflow_doc() {
     assert!(
         stdout.contains("# next-hunk"),
         "skill doc printed: {stdout}"
+    );
+}
+
+#[test]
+fn diff_rejects_unknown_export_format() {
+    let out = Command::new(bin())
+        .args(["diff", "--export", "yaml"])
+        .output()
+        .expect("run next-hunk");
+    assert!(!out.status.success(), "--export yaml must fail fast");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("unknown format"),
+        "stderr should name the problem: {stderr}"
     );
 }

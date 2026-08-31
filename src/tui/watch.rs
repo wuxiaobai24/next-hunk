@@ -113,6 +113,15 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    /// Process-unique temp dir name: SystemTime nanos alone can repeat on
+    /// coarse clocks (macOS ~1µs), making parallel tests share one directory.
+    fn unique_test_dir(prefix: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let uniq = SEQ.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("{prefix}-{}-{}", std::process::id(), uniq))
+    }
+
     /// Wait up to ~2s for `cond` to become true, polling every 25ms.
     fn wait_for(cond: impl Fn() -> bool) -> bool {
         let deadline = Instant::now() + Duration::from_secs(2);
@@ -127,14 +136,7 @@ mod tests {
 
     #[test]
     fn spawn_and_detect_write() {
-        let dir = std::env::temp_dir().join(format!(
-            "next-hunk-watch-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = unique_test_dir("next-hunk-watch");
         fs::create_dir_all(&dir).unwrap();
         let w = Watcher::spawn(&dir).expect("spawn watcher");
         // Drain any initial event the watcher may fire for the freshly-watched
@@ -152,14 +154,7 @@ mod tests {
 
     #[test]
     fn drain_coalesces_multiple_events() {
-        let dir = std::env::temp_dir().join(format!(
-            "next-hunk-watch2-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = unique_test_dir("next-hunk-watch2");
         fs::create_dir_all(&dir).unwrap();
         let w = Watcher::spawn(&dir).expect("spawn watcher");
         // several rapid writes

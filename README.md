@@ -41,6 +41,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] Diff stats in the status bar (per-file + total `+ins/−del`)
 - [x] Ignore-whitespace toggle (`W`, collapses whitespace-only changes)
 - [x] Agent bridge: `--focus` startup location, `--note` annotations, `--select` per-hunk approval gate
+- [x] Review report export: `--export json|markdown|both` / `--export-file` / `export_on_quit` — decisions plus the human's written feedback in one quit-time artifact for the agent
 - [x] Sessions: every review TUI (`diff`/`show`/`serve`) is agent-addressable — `list` / `get` / `review` / `navigate` / `push` / `reload` / `decision` work on a live session
 - [x] `line_numbers` config (no silent no-op)
 - [x] `tab_width` config + `--tab-width` (render-time tab expansion; keeps split columns aligned)
@@ -176,6 +177,7 @@ nh diff --watch             # live-reload on file changes
 nh diff --include-untracked # include untracked files
 nh show HEAD~3              # a commit (or range)
 nh filediff old.rs new.rs   # diff two arbitrary files on disk
+nh diff --select --export json --export-file review.json  # review report for the agent
 git diff | nh pager         # review whatever git pipes in
 nh inspect path/to.patch    # IR summary, no TUI (scripting)
 nh skill path               # print the agent skill path (materialized on first use)
@@ -305,6 +307,7 @@ Fields:
 | `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
 | `sidebar` | bool/string | `true` | show the file rail at startup; accepts hunk-style `"auto"` (treated as `true` — the rail already adapts to the terminal width). `b` toggles at runtime |
 | `agent_notes` | bool | `true` | render 💬 notes (inline annotations, note rows, rail badges); `false` = plain diff view — `}`/`{` and `c` report "notes hidden" instead |
+| `export_on_quit` | string | `"none"` | what `diff` / `serve` emit on quit: `"json"` / `"markdown"` (`"md"`) / `"both"` — the review report (decisions + comments) for the agent; `--export` / `--export-file` override |
 | `[keybindings]` | table | — | remap any action's keys; see [Remapping keys](#remapping-keys) |
 
 Example `~/.config/next-hunk/config.toml`:
@@ -350,6 +353,44 @@ next-hunk diff --select --focus src/db/migrate.rs:140 \
 In `--select` mode the human presses `a` (accept) / `r` (reject) / `u`
 (undecided) per hunk; on quit the decisions are emitted as JSON for the agent
 to parse. `--select` requires an interactive terminal and errors out otherwise.
+
+**Get the full review back (`--export`):**
+
+`--select` answers "did the human accept my hunks?"; the review report answers
+"what did the human *say*?". On quit it emits one JSON object, a Markdown
+digest, or both — the decision arrays plus every comment the human wrote (`c`
+in the TUI) and banner notes. This closes the loop: the human reviews, the
+agent reads one artifact and acts on the feedback.
+
+```bash
+next-hunk diff --export json --export-file review.json   # verdicts + comments → file
+next-hunk diff --export markdown                          # human-readable digest on stdout
+next-hunk diff --export both --select                     # report instead of bare decisions
+```
+
+- `--export json|markdown|both|none` — report format (overrides the
+  `export_on_quit` config).
+- `--export-file <path>` — write to file(s) instead of stdout; with no
+  explicit format it implies `json`, and `both` writes sibling
+  `.json`/`.md` files.
+
+JSON shape (a superset of the `--select` output):
+
+```json
+{
+  "accepted": ["src/auth.rs:h1"],
+  "rejected": [],
+  "undecided": ["src/auth.rs:h2"],
+  "comments": [
+    {"id": "user:1", "file": "src/auth.rs", "text": "rename this var", "line": 42, "hunk": null}
+  ],
+  "banner": "fine apart from the naming"
+}
+```
+
+`comments` carries the human's `c` notes (`user:N` ids) and session comments,
+plus the agent's own `--note` annotations (`note-N` ids). Available on `diff`
+and `serve`; without an explicit format, `--export-file` implies `json`.
 
 ### Agent skill
 

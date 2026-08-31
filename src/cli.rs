@@ -7,7 +7,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use crate::config::{CliFlags, Config, ResolvedConfig, ViewSettings};
+use crate::config::{CliFlags, Config, ExportOnQuit, ResolvedConfig, ViewSettings};
 use crate::ir::{parse_unified_diff, Review};
 use crate::source::{
     find_repo, git_diff, git_diff_target, git_file_diff, git_show, open_repo, rev_resolves,
@@ -67,6 +67,17 @@ enum Commands {
         /// agent to parse. Requires an interactive terminal.
         #[arg(long)]
         select: bool,
+        /// What to emit on quit — the structured review report for the agent:
+        /// `json` / `markdown` (`md`) / `both`, or `none` to disable.
+        /// Overrides `export_on_quit` in config.toml. The report extends the
+        /// `--select` decisions JSON with the session's comments and notes.
+        #[arg(long)]
+        export: Option<String>,
+        /// Write the quit report to file(s) instead of stdout. Implies
+        /// `--export json` when no format is given; `both` writes sibling
+        /// `.json` / `.md` files.
+        #[arg(long, value_name = "PATH")]
+        export_file: Option<PathBuf>,
         /// Optional target to diff against, git-style: a revision (`main`,
         /// `HEAD~3` — that tree vs the worktree) or a range (`main..feat`,
         /// `main...feat` — a two-tree diff). Without a target, review the
@@ -144,6 +155,17 @@ enum Commands {
         /// `<path>:h<n>=<text>` / `banner=<text>`.
         #[arg(long, action = clap::ArgAction::Append)]
         note: Vec<String>,
+        /// What to emit on quit — the structured review report for the agent:
+        /// `json` / `markdown` (`md`) / `both`, or `none` to disable.
+        /// Overrides `export_on_quit` in config.toml. The report extends the
+        /// `--select` decisions JSON with the session's comments and notes.
+        #[arg(long)]
+        export: Option<String>,
+        /// Write the quit report to file(s) instead of stdout. Implies
+        /// `--export json` when no format is given; `both` writes sibling
+        /// `.json` / `.md` files.
+        #[arg(long, value_name = "PATH")]
+        export_file: Option<PathBuf>,
         /// Optional pathspecs to limit the review.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         extra: Vec<String>,
@@ -483,6 +505,8 @@ fn run() -> Result<()> {
         focus: None,
         note: Vec::new(),
         select: false,
+        export: None,
+        export_file: None,
         target: None,
         extra: Vec::new(),
     }) {
@@ -496,6 +520,8 @@ fn run() -> Result<()> {
             focus,
             note,
             select,
+            export,
+            export_file,
             target,
             extra,
         } => {
@@ -519,6 +545,16 @@ fn run() -> Result<()> {
             // a real terminal.
             if select && !std::io::stdout().is_terminal() {
                 bail!("--select requires an interactive terminal (stdout is not a tty)");
+            }
+
+            // Fail fast on a bad --export value before touching the repo (the
+            // per-arm resolved config feeds the effective mode below).
+            if let Some(s) = export.as_deref() {
+                if ExportOnQuit::parse_cli(s).is_none() {
+                    bail!(
+                        "--export: unknown format `{s}` (expected none, json, markdown, or both)"
+                    );
+                }
             }
 
             let cwd = std::env::current_dir()?;
@@ -598,6 +634,12 @@ fn run() -> Result<()> {
                             session_mode: "diff".into(),
                             session_title,
                             watch: resolved.watch,
+                            export_on_quit: effective_export_mode(
+                                export.as_deref(),
+                                resolved.export_on_quit,
+                                export_file.is_some(),
+                            ),
+                            export_file: export_file.clone(),
                         },
                         server,
                     );
@@ -688,6 +730,12 @@ fn run() -> Result<()> {
                     session_mode: "diff".into(),
                     session_title,
                     watch: resolved.watch,
+                    export_on_quit: effective_export_mode(
+                        export.as_deref(),
+                        resolved.export_on_quit,
+                        export_file.is_some(),
+                    ),
+                    export_file: export_file.clone(),
                 },
                 server,
             )
@@ -843,6 +891,8 @@ fn run() -> Result<()> {
             agent_context,
             focus,
             note,
+            export,
+            export_file,
             extra,
         } => {
             if agent_context {
@@ -859,6 +909,8 @@ fn run() -> Result<()> {
                 },
                 focus,
                 note,
+                export,
+                export_file,
                 extra,
             )
         }
@@ -985,11 +1037,19 @@ fn run_serve(
     flags: CliFlags,
     focus: Option<String>,
     note: Vec<String>,
+    export: Option<String>,
+    export_file: Option<PathBuf>,
     extra: Vec<String>,
 ) -> Result<()> {
     // serve is interactive (it owns a TUI); require a real terminal up front.
     if !std::io::stdout().is_terminal() {
         bail!("serve requires an interactive terminal (stdout is not a tty)");
+    }
+    // Fail fast on a bad --export value before touching the repo.
+    if let Some(s) = export.as_deref() {
+        if ExportOnQuit::parse_cli(s).is_none() {
+            bail!("--export: unknown format `{s}` (expected none, json, markdown, or both)");
+        }
     }
 
     let focus_target = focus
@@ -1072,6 +1132,12 @@ fn run_serve(
             session_mode: "serve".into(),
             session_title,
             watch: resolved.watch,
+            export_on_quit: effective_export_mode(
+                export.as_deref(),
+                resolved.export_on_quit,
+                export_file.is_some(),
+            ),
+            export_file: export_file.clone(),
         },
         Some(server),
     )
@@ -1674,6 +1740,8 @@ fn run_serve(
     _flags: CliFlags,
     _focus: Option<String>,
     _note: Vec<String>,
+    _export: Option<String>,
+    _export_file: Option<PathBuf>,
     _extra: Vec<String>,
 ) -> Result<()> {
     bail!("`serve` requires the `serve` feature on a Unix OS (rebuild with --features serve)");
@@ -1729,6 +1797,27 @@ fn run_reload(_hash: Option<String>) -> Result<()> {
     bail!("`reload` requires the `serve` feature on a Unix OS (rebuild with --features serve)")
 }
 
+/// Effective quit-report format for a `diff` / `serve` launch: the `--export`
+/// flag wins over the `export_on_quit` config layer, and `--export-file` with
+/// no format given anywhere implies JSON (an explicit `--export none` is
+/// respected). Callers must have validated the flag value already.
+fn effective_export_mode(
+    flag: Option<&str>,
+    config: ExportOnQuit,
+    export_file_given: bool,
+) -> ExportOnQuit {
+    let mode = match flag {
+        // Unknown values fall back to config here; the Diff/Serve arms
+        // validate the flag and fail fast before this can matter.
+        Some(s) => ExportOnQuit::parse_cli(s).unwrap_or(config),
+        None => config,
+    };
+    if mode == ExportOnQuit::None && export_file_given && flag.is_none() {
+        return ExportOnQuit::Json;
+    }
+    mode
+}
+
 fn open_review_from_text(
     text: &str,
     reloader: Option<crate::tui::Reloader>,
@@ -1743,6 +1832,8 @@ fn open_review_from_text(
     }
     let review = parse_review(text)?;
     let select_mode = options.select_mode;
+    let export_mode = options.export_on_quit;
+    let export_file = options.export_file.clone();
     // Interactive TUI (Phase 2). If stdout is not a terminal (piped, e.g. when
     // used as git's pager in a pipeline or scripted in CI), or if opening the
     // TUI fails for any other reason, fall back to a short inspect summary so
@@ -1754,17 +1845,21 @@ fn open_review_from_text(
     // hang the process (observed: `pager`/`patch -` deadlocked indefinitely in
     // piped integration tests). The upfront check is portable and avoids that.
     if !std::io::stdout().is_terminal() {
+        // An agent piping our stdout expected a quit report; tell them why
+        // there isn't one (no TUI ran, so nothing was reviewed to export).
+        if export_mode != ExportOnQuit::None || export_file.is_some() {
+            eprintln!("note: --export/--export-file require an interactive TUI; no report emitted");
+        }
         print_inspect(&review);
         return Ok(());
     }
     match run_review_tui(review.clone(), reloader, settings, workdir, options, server) {
-        Ok(selections) => {
-            // In --select mode the human's per-hunk decisions go to stdout as
-            // JSON for the agent to parse. Outside --select, silently drop the
-            // (empty) selections.
-            if select_mode {
-                println!("{}", serde_json::to_string(&selections)?);
-            }
+        Ok(report) => {
+            // Quit report: the full review report (decisions + comments +
+            // banner) when exporting is on; the legacy decisions-only JSON in
+            // `--select` mode otherwise. run_review_tui has restored the
+            // terminal by the time it returns, so stdout is clean to print.
+            crate::tui::emit_report(&report, export_mode, select_mode, export_file.as_deref())?;
             Ok(())
         }
         Err(err) => {
@@ -1809,4 +1904,28 @@ fn read_patch_input(path: &std::path::Path) -> Result<String> {
         bail!("patch file not found: {}", path.display());
     }
     std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_export_mode_precedence() {
+        use crate::config::ExportOnQuit as E;
+        // The flag wins over the config layer.
+        assert_eq!(
+            effective_export_mode(Some("markdown"), E::Json, false),
+            E::Markdown
+        );
+        // Config applies when the flag is absent.
+        assert_eq!(effective_export_mode(None, E::Both, false), E::Both);
+        // --export-file implies json only when no format is given anywhere.
+        assert_eq!(effective_export_mode(None, E::None, true), E::Json);
+        assert_eq!(effective_export_mode(None, E::None, false), E::None);
+        // An explicit `--export none` is respected even with a file path.
+        assert_eq!(effective_export_mode(Some("none"), E::Json, true), E::None);
+        // Unknown flag values fall back to config (validated upstream).
+        assert_eq!(effective_export_mode(Some("yaml"), E::Json, false), E::Json);
+    }
 }

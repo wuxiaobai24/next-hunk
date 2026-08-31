@@ -68,6 +68,45 @@ Hunk keys are `"<path>:h<n>"` (1-based ordinal within each file). **Parse stdout
 and apply only the `accepted` hunks.** Treat `undecided` as "not approved" — do
 not apply them unless the human asked you to.
 
+## The review report: `--export` / `--export-file`
+
+`--select` alone answers "did the human accept my hunks?". The **review report**
+answers "what did the human *say*?". On quit it emits one JSON object
+(`--export json`), a Markdown digest (`--export markdown`), or both
+(`--export both`); `--export-file <path>` writes to file(s) instead of stdout
+(`both` writes sibling `.json`/`.md` files). Available on `diff` and `serve`.
+
+```bash
+next-hunk diff --export json --export-file review.json
+# human reviews (a/r/u per hunk, `c` to write notes) and quits
+# → review.json holds their verdicts AND their written feedback
+```
+
+JSON shape (a superset of the `--select` output):
+
+```json
+{
+  "accepted": ["src/auth.rs:h1"],
+  "rejected": [],
+  "undecided": ["src/auth.rs:h2"],
+  "comments": [
+    {"id": "user:1", "file": "src/auth.rs", "text": "rename this var", "line": 42, "hunk": null}
+  ],
+  "banner": "fine apart from the naming"
+}
+```
+
+- `accepted` / `rejected` / `undecided` — per-hunk verdicts (everything is
+  `undecided` outside selection mode).
+- `comments` — the human's `c` notes (`user:N` ids) and session comments, plus
+  your own `--note` annotations (`note-N` ids).
+- `banner` — joined banner-note text, if any.
+
+**Workflow:** ask the human to run `next-hunk diff --export json --export-file
+review.json`; when they quit, read the file and treat `comments` as feedback to
+act on. `export_on_quit = "json"` in config.toml makes every review emit the
+report without the flag.
+
 ## Session workflow (live agent control of an open TUI)
 
 For **ongoing** reviews where you expect to iterate (adjust focus, inspect
@@ -264,6 +303,7 @@ the `serve` feature (on by default).
 | Situation | What to do |
 |-----------|------------|
 | Need approval to proceed | `--select` (blocks, get JSON) or `serve` + `decision` (non-blocking) |
+| Need the human's written feedback too | `--export json --export-file review.json` (verdicts + comments in one report) |
 | Just want them informed, you continue | no `--select` (they review, you move on) |
 | Change is small / obvious | describe in chat, don't call next-hunk |
 | `--select` in a non-interactive context | **errors out** — only use when a human is present at a terminal |
