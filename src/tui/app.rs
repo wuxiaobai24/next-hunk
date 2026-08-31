@@ -1882,11 +1882,23 @@ impl App {
         }
         let needle = self.search.query.to_lowercase();
         self.search.matches = self.compute_matches(&needle);
-        self.search.current = 0;
         self.search.active = true;
-        if !self.search.matches.is_empty() {
-            self.jump_to_stream(self.search.matches[0]);
+        if self.search.matches.is_empty() {
+            self.search.current = 0;
+            return;
         }
+        // Keep the pre-reload position: land on the nearest match at/after
+        // the viewport (wrapping), not match 1 — a `--watch` reload would
+        // otherwise yank the viewport to the top of the file.
+        let anchor = self.cursor_stream_row();
+        let idx = self
+            .search
+            .matches
+            .iter()
+            .position(|&r| r >= anchor)
+            .unwrap_or(0);
+        self.search.current = idx;
+        self.jump_to_stream(self.search.matches[idx]);
     }
 
     /// Jump to the next/previous hunk header, scrolling it to the top of the
@@ -4011,6 +4023,40 @@ diff --git a/b.rs b/b.rs
         assert_eq!(s.rejected, vec!["b.rs:h2".to_string()]);
         // The other 2 remain undecided.
         assert_eq!(s.undecided.len(), 2);
+    }
+
+    #[test]
+    fn reload_search_stays_near_the_viewport() {
+        let patch = "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+diff --git a/b.rs b/b.rs
+--- a/b.rs
++++ b/b.rs
+@@ -1 +1 @@
+-foo
++bar value
+";
+        let mut app = App::with_highlighter(parse_unified_diff(patch).unwrap(), highlighter());
+        app.viewport_height = 4;
+        app.handle_key(key(KeyCode::Char('/')));
+        for c in "value".chars() {
+            app.handle_key(char_key(c));
+        }
+        app.handle_key(key(KeyCode::Enter));
+        app.handle_key(key(KeyCode::Char('n'))); // second match (b.rs, row 7)
+        assert_eq!(app.search.current, 1);
+        // A --watch reload of identical content must not yank the viewport
+        // back to match 1: stay on the nearest match at/after the cursor.
+        app.reload_review(patch);
+        assert!(app.search.active);
+        assert_eq!(app.search.matches.len(), 2);
+        assert_eq!(app.search.current, 1, "reload keeps the nearest match");
+        assert_eq!(app.cursor_v, 7);
     }
 
     #[test]
