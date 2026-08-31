@@ -74,6 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match fill pair with their text at ≥ 3:1, light and dark) plus a
   render-level test asserting the marked cells carry the new ink.
 
+### Fixed — difftool review of temp files on Windows
+
+- **`git difftool` (and `next-hunk filediff`) no longer fail when the
+  reviewed files live outside the repository.** The blob-diff pipeline was
+  handed the files' absolute path as the *resource* path; gix validates
+  resource paths by splitting them into components and rejecting
+  non-normal ones — a leading `/` slips through on Unix, but a Windows
+  drive prefix (`C:`) parses as a path prefix and failed with
+  "contains relative or absolute components". The path given to gix now
+  falls back to the bare file name for out-of-repo files (attribute
+  lookups only ever matched on the name), while the diff header keeps the
+  full original label that the difftool relabeling rewrites to the real
+  path. This is the failure that had been red on every `test
+  (windows-latest)` CI run since before 0.5.0.
+
 ## [0.5.0] - 2026-08-31
 
 ### Added — measured head-to-head perf vs hunk 0.20

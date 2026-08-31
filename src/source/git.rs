@@ -86,8 +86,26 @@ pub fn git_file_diff(repo: &Repository, old_path: &Path, new_path: &Path) -> Res
         .unwrap_or(&new_abs)
         .to_string_lossy()
         .replace('\\', "/");
-    let old_rela = BString::from(old_label.as_str());
-    let new_rela = BString::from(new_label.as_str());
+    // gix's resource path must be *relative*: its validation splits the path
+    // into components and rejects non-normal ones. A leading `/` slips
+    // through on Unix (it yields an empty component that is filtered out),
+    // but a Windows drive prefix (`C:`) parses as a path prefix and fails —
+    // which is exactly where git-difftool temp files live, outside the
+    // repo. Display keeps the full label above; the resource path falls
+    // back to the bare file name (attribute lookups only care about the
+    // name anyway).
+    let resource_path = |abs: &std::path::Path| -> BString {
+        match abs.strip_prefix(workdir) {
+            Ok(rel) => BString::from(rel.to_string_lossy().replace('\\', "/")),
+            Err(_) => BString::from(
+                abs.file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "file".into()),
+            ),
+        }
+    };
+    let old_rela = resource_path(&old_abs);
+    let new_rela = resource_path(&new_abs);
 
     let mut out = String::new();
     cache
@@ -109,9 +127,7 @@ pub fn git_file_diff(repo: &Repository, old_path: &Path, new_path: &Path) -> Res
         )
         .context("set new resource")?;
 
-    let old_display = path_display(old_rela.as_ref());
-    let new_display = path_display(new_rela.as_ref());
-    render_file_patch(&mut out, Some(&old_display), Some(&new_display), &mut cache)?;
+    render_file_patch(&mut out, Some(&old_label), Some(&new_label), &mut cache)?;
 
     Ok(out)
 }
