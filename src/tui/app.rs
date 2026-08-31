@@ -1150,13 +1150,24 @@ impl App {
         use crate::tui::keymap::Action;
         match action {
             Action::Quit => {
-                // If a search is active, Esc/q clears it; otherwise quit.
+                // If a search is active, q clears it; a second press quits.
                 if self.search.active {
                     self.search.clear();
                     self.set_success("search cleared");
                 } else {
                     self.should_quit = true;
                 }
+            }
+            Action::Cancel => {
+                // Esc is the cancel key everywhere (search/filter/note
+                // prompts, help overlay); in normal mode it clears transient
+                // state. It never quits — quitting is `q` (or Ctrl+C), so a
+                // muscle-memory Esc can't throw away review state.
+                if self.search.active {
+                    self.search.clear();
+                    self.set_success("search cleared");
+                }
+                self.pending_prefix = None;
             }
             Action::CursorDown => self.move_cursor(1),
             Action::CursorUp => self.move_cursor(-1),
@@ -2241,10 +2252,16 @@ diff --git a/b.rs b/b.rs
     }
 
     #[test]
-    fn quit_on_esc_when_no_search() {
+    fn esc_cancels_but_never_quits_in_normal_mode() {
+        // Esc is the cancel key in every input mode, the help overlay, and
+        // now normal mode: it clears transient state and must not quit —
+        // quitting is `q` (or Ctrl+C), so a muscle-memory Esc can't discard
+        // review state.
         let mut app = two_file_app();
+        app.pending_prefix = Some(']');
         app.handle_key(key(KeyCode::Esc));
-        assert!(app.should_quit);
+        assert!(!app.should_quit, "Esc must not quit in normal mode");
+        assert_eq!(app.pending_prefix, None, "Esc clears the armed prefix");
     }
 
     #[test]

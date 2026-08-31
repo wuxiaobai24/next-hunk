@@ -253,7 +253,8 @@ still requires a git object store (any colocated repo has one).
 | `c` | compose a note on the cursor row (Enter save · Esc cancel) |
 | `o` | open the cursor line in `$EDITOR` (at that line) |
 | `?` | toggle the full-screen keybinding help |
-| `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
+| `q` / `Ctrl+C` | quit (`q` clears the active search first) |
+| `Esc` | cancel — clear the active search / armed key sequence (never quits) |
 
 Every key above (except `1`–`9` and mouse) is remappable via a `[keybindings]`
 table — see [Remapping keys](#remapping-keys). The `?` overlay always lists

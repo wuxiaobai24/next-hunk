@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — Esc cancels instead of quitting
+
+- **`Esc` no longer quits in normal mode.** Esc is the cancel key in every
+  other surface of this TUI (search/filter/note prompts, the help overlay),
+  so Esc-quit was a muscle-memory trap that could throw away review state
+  with one keypress. It now binds a new `cancel` action: clear the active
+  search, drop any armed two-key prefix — never quit. Quitting is `q`
+  (clears an active search first, then quits) or `Ctrl+C`.
+- `cancel` is a regular remappable action (`cancel = "esc"` in
+  `[keybindings]`); users who want the old behavior can bind
+  `quit = ["q", "esc"]`.
+
 ### Fixed — mouse/scroll geometry off-by-ones (pane title row)
 
 - **Mouse clicks landed one row low.** Both panes render a one-row title
