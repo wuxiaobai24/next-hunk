@@ -6,6 +6,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — UI polish: change chips, stat bars, note cards
+
+- **File headers carry a change chip and a stat bar**: `─── M src/a.rs
+  ─────── +12 ██████ ███ −3` — the A/M/D/R chip derives from the IR's
+  old/new paths (`/dev/null` sides classify as add/delete), and a
+  proportional 10-cell bar splits insert vs delete mass (zero sides
+  omitted, like the rail tally). The rule is full-bleed on wide panes.
+- **File rail shows the change kind**: ` 2. D gone.rs  −42`.
+- **Note cards use a tree connector**: `  ╰─ 💬 text` — reads as attached
+  to the line above it.
+- **Help overlay**: rounded, theme-accented border; key column auto-sizes
+  (16–24) and long key lists take their own row so descriptions never clip.
+
 ### Added — CLI parity: skill path, agent-context, difftool, update
 
 - **`nh skill path`** — prints (and on first use materializes under

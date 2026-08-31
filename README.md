@@ -47,6 +47,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] `sidebar` config (hunk-style `true`/`false`/`"auto"`) and `agent_notes` toggle
 - [x] `[keybindings]` remapping — every action name → key list, `?` overlay and hints list the live bindings
 - [x] `nh skill path` + `--agent-context` (embedded agent workflow doc), git-difftool invocation compat, `nh update [--check]`
+- [x] File headers: change-type chips (A/M/D/R) + right-aligned `+ins ███ −del` proportional bars; rail carries the chip; note cards use `╰─` tree connectors; `?` help panel rounded with per-section column sizing
 - [x] jj & Sapling: workspace auto-detection (`.jj` beats colocated `.git`), revset-native `diff`/`show`/`serve`/`inspect`, jj-titled sessions, agent `reload` re-runs the VCS
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk

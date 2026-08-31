@@ -105,6 +105,12 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             // where the change mass sits.
             let (plus, minus) = file_stats_tail(f.inserts, f.deletes);
             let head = format!(" {}. ", i + 1);
+            let kind = ChangeKind::from_file(f);
+            let chip_color = match kind {
+                ChangeKind::Added => app.theme.add,
+                ChangeKind::Deleted => app.theme.delete,
+                ChangeKind::Renamed | ChangeKind::Modified => app.theme.dim,
+            };
             // Note badge: how many agent notes/comments target this file
             // (jump between them with `}`/`{`).
             let badge = match note_counts.get(&i) {
@@ -116,8 +122,15 @@ fn draw_rail(app: &App, frame: &mut Frame, area: Rect) {
             // is measured with unicode-width (💬 is double-width).
             let tail = format!("  {}{}", plus, minus);
             let need_pad = !plus.is_empty() || !minus.is_empty() || !badge.is_empty();
-            let used = head.chars().count() + path.chars().count();
-            let mut spans: Vec<Span> = vec![Span::styled(head, style), Span::styled(path, style)];
+            let used = head.chars().count() + 2 + path.chars().count();
+            let mut spans: Vec<Span> = vec![
+                Span::styled(head, style),
+                Span::styled(
+                    format!("{} ", kind.letter()),
+                    Style::default().fg(chip_color),
+                ),
+                Span::styled(path, style),
+            ];
             if need_pad {
                 let pad = rail_inner_w.saturating_sub(used + tail.chars().count() + badge.width());
                 spans.push(Span::raw(" ".repeat(pad)));
@@ -232,11 +245,18 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                     false,
                     notes,
                     app.theme.note,
+                    app.theme.dim,
                 );
             }
             other => {
                 // Full-width rows (headers) can host an inline annotation.
-                let line = stream_row_to_line(app, other, current_match_row, &match_rows);
+                let line = stream_row_to_line(
+                    app,
+                    other,
+                    current_match_row,
+                    &match_rows,
+                    area.width as usize,
+                );
                 let line = style_cursor(line, is_cursor, app.theme.cursor_bg);
                 let (line, inline_ok) = match notes {
                     Some(notes) => {
@@ -244,7 +264,14 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                     }
                     None => (line, false),
                 };
-                push_line_with_note_fallback(&mut lines, line, inline_ok, notes, app.theme.note);
+                push_line_with_note_fallback(
+                    &mut lines,
+                    line,
+                    inline_ok,
+                    notes,
+                    app.theme.note,
+                    app.theme.dim,
+                );
             }
         }
     }
@@ -424,7 +451,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         } else {
             notes_by_row.get(&abs_row)
         };
-        let line = stream_row_to_line(app, r, current_match_row, &match_rows);
+        let line = stream_row_to_line(app, r, current_match_row, &match_rows, area.width as usize);
         let line = style_cursor(
             line,
             !is_marker && cursor_row == Some(abs_row),
@@ -439,7 +466,14 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
             }
             _ => (line, false),
         };
-        push_line_with_note_fallback(&mut lines, line, inline_ok, notes, app.theme.note);
+        push_line_with_note_fallback(
+            &mut lines,
+            line,
+            inline_ok,
+            notes,
+            app.theme.note,
+            app.theme.dim,
+        );
     }
 
     let mut para = Paragraph::new(lines).block(
@@ -561,6 +595,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     },
                     current_match_row,
                     &match_rows,
+                    area.width as usize,
                 );
                 // Stack columns have no inline margin (blocks are full
                 // width); notes take the dedicated row, kept below the line
@@ -571,6 +606,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     false,
                     notes_by_row.get(abs_row),
                     app.theme.note,
+                    app.theme.dim,
                 );
             }
         }
@@ -610,6 +646,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     },
                     current_match_row,
                     &match_rows,
+                    area.width as usize,
                 );
                 push_line_with_note_fallback(
                     &mut lines,
@@ -617,6 +654,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     false,
                     notes_by_row.get(abs_row),
                     app.theme.note,
+                    app.theme.dim,
                 );
             }
         }
@@ -757,11 +795,11 @@ fn append_inline_notes(
 
 /// A dedicated note row — the fallback when the inline annotation doesn't
 /// fit. A slim note-colored bar marks it as annotation, never diff content.
-fn note_row(text: &str, note_color: Color) -> Line<'static> {
+fn note_row(text: &str, note_color: Color, dim: Color) -> Line<'static> {
     Line::from(vec![
-        Span::styled("▎", Style::default().fg(note_color)),
+        Span::styled("  ╰─ ", Style::default().fg(dim)),
         Span::styled(
-            format!(" 💬 {text}"),
+            format!("💬 {text}"),
             Style::default()
                 .fg(note_color)
                 .add_modifier(Modifier::ITALIC),
@@ -779,12 +817,13 @@ fn push_line_with_note_fallback(
     inline_ok: bool,
     notes: Option<&Vec<String>>,
     note_color: Color,
+    dim_color: Color,
 ) {
     lines.push(line);
     if !inline_ok {
         if let Some(notes) = notes {
             for text in notes {
-                lines.push(note_row(text, note_color));
+                lines.push(note_row(text, note_color, dim_color));
             }
         }
     }
@@ -795,6 +834,9 @@ fn push_line_with_note_fallback(
 enum OwnedRow {
     FileHeader {
         path: String,
+        kind: ChangeKind,
+        inserts: u64,
+        deletes: u64,
         /// Absolute stream row (for `--note` lookup).
         abs_row: usize,
     },
@@ -841,6 +883,40 @@ enum OwnedRow {
     },
 }
 
+/// File-level change classification, from the IR's old/new paths.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+impl ChangeKind {
+    /// The one-letter rail/header chip.
+    fn letter(self) -> char {
+        match self {
+            ChangeKind::Added => 'A',
+            ChangeKind::Modified => 'M',
+            ChangeKind::Deleted => 'D',
+            ChangeKind::Renamed => 'R',
+        }
+    }
+
+    fn from_file(f: &crate::ir::FileDiff) -> ChangeKind {
+        // Unified diffs mark absent sides as `/dev/null`; treat those as
+        // None so added/deleted files classify correctly.
+        let old = f.old_path.as_deref().filter(|p| *p != "/dev/null");
+        let new = f.new_path.as_deref().filter(|p| *p != "/dev/null");
+        match (old, new) {
+            (None, Some(_)) => ChangeKind::Added,
+            (Some(_), None) => ChangeKind::Deleted,
+            (Some(old), Some(new)) if old != new => ChangeKind::Renamed,
+            _ => ChangeKind::Modified,
+        }
+    }
+}
+
 /// One side of a materialized split row.
 struct OwnedSide {
     kind: DiffLineKind,
@@ -854,10 +930,16 @@ struct OwnedSide {
 impl OwnedRow {
     fn from_stream_row(review: &Review, row: StreamRow, abs_row: usize, tab_width: usize) -> Self {
         match row {
-            StreamRow::FileHeader { path, .. } => OwnedRow::FileHeader {
-                path: path.to_string(),
-                abs_row,
-            },
+            StreamRow::FileHeader { file_idx, path } => {
+                let f = &review.files[file_idx];
+                OwnedRow::FileHeader {
+                    path: path.to_string(),
+                    kind: ChangeKind::from_file(f),
+                    inserts: f.inserts,
+                    deletes: f.deletes,
+                    abs_row,
+                }
+            }
             StreamRow::HunkHeader {
                 text,
                 file_idx,
@@ -931,11 +1013,114 @@ impl OwnedRow {
     }
 }
 
+/// Render the file-header rule: change chip, path, and a right-aligned
+/// +ins/−del tally with a proportional mini bar (GitHub-style), tied off
+/// with a full-bleed `─` rule when the width allows.
+fn file_header_line(
+    app: &App,
+    path: &str,
+    kind: ChangeKind,
+    inserts: u64,
+    deletes: u64,
+    width: usize,
+) -> Line<'static> {
+    let header_style = Style::default()
+        .fg(app.theme.file_header)
+        .add_modifier(Modifier::BOLD);
+    let dim = Style::default().fg(app.theme.dim);
+    let chip_color = match kind {
+        ChangeKind::Added => app.theme.add,
+        ChangeKind::Deleted => app.theme.delete,
+        ChangeKind::Renamed | ChangeKind::Modified => app.theme.file_header,
+    };
+
+    let mut spans: Vec<Span<'static>> = vec![Span::styled("─── ", dim)];
+    spans.push(Span::styled(
+        kind.letter().to_string(),
+        Style::default().fg(chip_color).add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(format!(" {path} "), header_style));
+
+    // Stats + proportional bar (skipped for binary/no-line files). Zero
+    // sides are omitted, mirroring the rail's per-file tally.
+    if inserts > 0 || deletes > 0 {
+        let (ins_cells, del_cells) = change_bar_cells(inserts, deletes, 10);
+        let bar_ins = "█".repeat(ins_cells);
+        let bar_del = "█".repeat(del_cells);
+        let mut stats = String::new();
+        if inserts > 0 {
+            stats.push_str(&format!("+{inserts} "));
+        }
+        stats.push_str(&bar_ins);
+        if inserts > 0 && deletes > 0 {
+            stats.push(' ');
+        }
+        stats.push_str(&bar_del);
+        if deletes > 0 {
+            stats.push_str(&format!(" −{deletes}"));
+        }
+        let stats_w = stats.chars().count() + 2;
+        let used = 4 + 1 + 1 + path.chars().count() + 1;
+        // Right-align the stats inside the rule, padded with ─ on wide panes.
+        if width > used + stats_w + 2 {
+            let pad = width - used - stats_w - 2;
+            spans.push(Span::styled("─".repeat(pad), dim));
+        } else {
+            spans.push(Span::styled("─".repeat(2), dim));
+        }
+        spans.push(Span::styled(" ", Style::default()));
+        if inserts > 0 {
+            spans.push(Span::styled(
+                format!("+{inserts} "),
+                Style::default()
+                    .fg(app.theme.add)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::styled(bar_ins, Style::default().fg(app.theme.add)));
+        }
+        if inserts > 0 && deletes > 0 {
+            spans.push(Span::styled(" ", Style::default()));
+        }
+        if deletes > 0 {
+            spans.push(Span::styled(bar_del, Style::default().fg(app.theme.delete)));
+            spans.push(Span::styled(
+                format!(" −{deletes}"),
+                Style::default()
+                    .fg(app.theme.delete)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        }
+    } else {
+        spans.push(Span::styled("───", dim));
+    }
+    Line::from(spans)
+}
+
+/// Split `total` bar cells between insert/delete proportional to the counts,
+/// each side getting at least one cell when it is nonzero.
+fn change_bar_cells(inserts: u64, deletes: u64, total: usize) -> (usize, usize) {
+    let total_n = inserts + deletes;
+    if total_n == 0 {
+        return (0, 0);
+    }
+    let ins = ((inserts as f64 / total_n as f64) * total as f64).round() as usize;
+    let ins = ins.min(total.saturating_sub(if deletes > 0 { 1 } else { 0 }));
+    // A nonzero side always keeps at least one cell.
+    let ins = if inserts > 0 { ins.max(1) } else { 0 };
+    let del = if deletes > 0 {
+        total.saturating_sub(ins).max(1)
+    } else {
+        0
+    };
+    (ins, del)
+}
+
 fn stream_row_to_line(
     app: &mut App,
     row: OwnedRow,
     current_match_row: Option<usize>,
     match_rows: &std::collections::HashSet<usize>,
+    width: usize,
 ) -> Line<'static> {
     let abs_row = match &row {
         OwnedRow::Line { abs_row, .. } => *abs_row,
@@ -945,12 +1130,13 @@ fn stream_row_to_line(
     let is_other_match = !is_current_match && match_rows.contains(&abs_row);
 
     let line = match row {
-        OwnedRow::FileHeader { path, .. } => Line::from(Span::styled(
-            format!("─── {} ───", path),
-            Style::default()
-                .fg(app.theme.file_header)
-                .add_modifier(Modifier::BOLD),
-        )),
+        OwnedRow::FileHeader {
+            path,
+            kind,
+            inserts,
+            deletes,
+            ..
+        } => file_header_line(app, &path, kind, inserts, deletes, width),
         OwnedRow::Unchanged { count, .. } => Line::from(Span::styled(
             format!("  ··· {count} unchanged lines ···"),
             Style::default()
@@ -1558,6 +1744,8 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
 
     let block = Block::default()
         .borders(Borders::ALL)
+        .border_type(ratatui::widgets::BorderType::Rounded)
+        .border_style(Style::default().fg(app.theme.hunk_header))
         .title(Span::styled(
             " next-hunk — keybindings ",
             Style::default()
@@ -1582,14 +1770,14 @@ fn push_help_section(
     key: Style,
     dim: Style,
 ) {
-    // Key column width: at least 16, grown to fit the longest key list so
-    // remapped multi-key lists never collide with their description.
+    // Key column width: 16–24. Longer key lists take their own row (below)
+    // so the description column never gets squeezed into clipping.
     let key_w = rows
         .iter()
         .map(|(k, _)| k.chars().count())
         .max()
         .unwrap_or(0)
-        .max(16);
+        .clamp(16, 24);
     lines.push(Line::from(Span::styled(format!(" {title}"), head)));
     for (k, d) in rows {
         if k.chars().count() > key_w {
@@ -2547,6 +2735,115 @@ diff --git a/a.rs b/a.rs
         assert!(
             !help.contains("a accept"),
             "decision keys should not show outside select mode, got: {help:?}"
+        );
+    }
+
+    // ---- UI polish: change chips + stat bars ----
+
+    fn rendered_lines(mut app: App, w: u16, h: u16) -> String {
+        app.viewport_height = 30;
+        let backend = ratatui::backend::TestBackend::new(w, h);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect()
+    }
+
+    #[test]
+    fn file_headers_show_change_chips_and_bars() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+-old one
++new one
+ context
+diff --git a/added.rs b/added.rs
+new file mode 100644
+--- /dev/null
++++ b/added.rs
+@@ -0,0 +1,2 @@
++one
++two
+diff --git a/gone.rs b/gone.rs
+deleted file mode 100644
+--- a/gone.rs
++++ /dev/null
+@@ -1,3 +0,0 @@
+-a
+-b
+-c
+",
+        )
+        .unwrap();
+        let app = App::with_highlighter(review, highlighter());
+        let rendered = rendered_lines(app, 110, 30);
+
+        // Modified: M chip + both-side stats
+        assert!(rendered.contains("─── M a.rs "), "M header: {rendered:?}");
+        assert!(rendered.contains("+1 █████"), "ins bar: {rendered:?}");
+        assert!(rendered.contains("−1"), "del stat: {rendered:?}");
+        // Added: A chip, no delete side
+        assert!(
+            rendered.contains("─── A added.rs "),
+            "A header: {rendered:?}"
+        );
+        assert!(!rendered.contains("A added.rs ─── +2 █████ █ −0"));
+        // Deleted: D chip, no insert side, no "+0"
+        assert!(
+            rendered.contains("─── D gone.rs "),
+            "D header: {rendered:?}"
+        );
+        assert!(!rendered.contains("D gone.rs ─── +0"), "no +0 noise");
+        assert!(rendered.contains("−3"), "delete stat present");
+        // Rail carries the chips
+        assert!(rendered.contains("M a.rs"), "rail M: {rendered:?}");
+        assert!(rendered.contains("A added.rs"), "rail A: {rendered:?}");
+        assert!(rendered.contains("D gone.rs"), "rail D: {rendered:?}");
+    }
+
+    #[test]
+    fn change_bar_cells_split_proportionally() {
+        assert_eq!(change_bar_cells(1, 4, 10), (2, 8));
+        assert_eq!(change_bar_cells(3, 0, 10), (10, 0));
+        assert_eq!(change_bar_cells(0, 3, 10), (0, 10));
+        assert_eq!(change_bar_cells(0, 0, 10), (0, 0));
+        // tiny counts still show one cell per nonzero side
+        assert_eq!(change_bar_cells(1, 100, 10), (1, 9));
+    }
+
+    #[test]
+    fn note_fallback_row_uses_tree_connector() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-a very long line that leaves no room for an inline annotation in narrow terminals ok
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.notes.push(crate::tui::app::Note {
+            target: crate::tui::app::NoteTarget::Line {
+                path: "a.rs".into(),
+                line: 1,
+            },
+            text: "check this".into(),
+        });
+        let rendered = rendered_lines(app, 40, 12);
+        // 💬 is double-width: the flattened buffer inserts its continuation
+        // cell as a space, so match the connector and text separately.
+        assert!(
+            rendered.contains("╰─ 💬") && rendered.contains("check this"),
+            "note card connector: {rendered:?}"
         );
     }
 

@@ -168,8 +168,9 @@
 - [x] **CLI 细节**：`skill path`（首用时物化到 XDG data）、
   `--agent-context`（内嵌 agent 工作流文档）、difftool 七参调用兼容
   （临时文件重标为真实路径）、`update [--check]`（GitHub release 比对）
-- [ ] **UI 打磨**：文件头 A/M/D/R 徽章 + 增删比例条、文件栏/注释卡片/
-  帮助页分组（对标 hunk 并超越）
+- [x] **UI 打磨**：文件头 A/M/D/R 徽章 + 右对齐 `+ins ███ −del` 比例条
+  （全宽铺满）、文件栏变更字母、注释卡片 `╰─` 树连接、帮助页圆角 +
+  键列自适应（对标 hunk 并超越）
 - [ ] **性能证据**：同机同 diff 实测启动/RSS/滚动 vs hunk 0.20，写入
   PERF.md（引擎已领先，补可复现数字）
 
