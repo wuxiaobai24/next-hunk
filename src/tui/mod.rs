@@ -316,13 +316,12 @@ fn run_loop(
             }
             if let Some(t) = last_event {
                 if t.elapsed() >= DEBOUNCE {
-                    // quiet period elapsed → reload once. Deferred while a
-                    // prompt is open: swapping the review (and re-anchoring
-                    // search/scroll) mid-composition moves the view under
-                    // the draft. The event stays drained, so the reload
-                    // fires on the first idle tick after the prompt closes.
-                    last_event = None;
+                    // Quiet period elapsed → reload once. Deferred while a
+                    // prompt is open: `last_event` stays armed (the tick
+                    // re-checks every loop) so the reload fires on the
+                    // first tick after the prompt closes, never lost.
                     if app.mode == crate::tui::app::InputMode::Normal {
+                        last_event = None;
                         reload_once(app, reloader.as_mut().unwrap());
                     }
                 }

@@ -77,8 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed — `--watch` reloads no longer yank the view mid-review
 
 - A filesystem reload used to fire even while a prompt (`/`, `f`, `c`) was
-  open, swapping the review under the draft; it now waits for the prompt
-  to close (the drained event fires on the first idle tick after).
+  open, swapping the review under the draft; it now stays pending until
+  the prompt closes and fires on the first loop tick after (never lost).
 - After a reload, an active search re-anchors to the nearest match
   at/after the viewport instead of jumping back to match 1 — the viewport
   stays put when the reloaded diff still contains the matches.
@@ -108,10 +108,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed — navigation jumps land centered (vim-style)
 
 - **New `jump_center` config (default `true`)**: `]h`/`[h`, search matches
-  (`n`/`N` and live search), file jumps, and `--focus` now land their
-  target row mid-viewport so the context above it is visible, instead of
-  pinning it to the top edge. Set `jump_center = false` for the old
-  top-pinning behavior.
+  (`n`/`N` and live search), file jumps, note jumps (`}`/`{`), and
+  `--focus` now land their target row mid-viewport so the context above
+  it is visible, instead of pinning it to the top edge. Set
+  `jump_center = false` for the old top-pinning behavior.
 
 ### Added — the help overlay shows toggle state
 
@@ -193,9 +193,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The status message (errors, confirmations) is rendered **right-aligned**
   with the path's budget shrinking to make room, so a narrow terminal can
   no longer clip away the one thing a user most needs to read. When even a
-  4-column path sliver can't save the line, the left side truncates and the
-  toast stays whole. The sticky startup hint keeps the old flow layout — a
-  100-column hint must not evict the path and tallies.
+  4-column path sliver can't save the line, the left side truncates and
+  the toast renders in full (in the degenerate case — a toast longer than
+  the whole line — it still clips). The sticky startup hint keeps the old
+  flow layout — a 100-column hint must not evict the path and tallies.
 
 ### Added — persistent toggle badges in the status bar
 
