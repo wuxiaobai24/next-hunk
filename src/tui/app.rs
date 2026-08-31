@@ -243,6 +243,9 @@ pub struct App {
 
     /// Show the full-screen keybinding help overlay (toggle with `?`).
     pub show_help: bool,
+    /// Remappable keybindings (`[keybindings]` in config.toml). The default
+    /// map reproduces the built-in keys exactly.
+    pub keymap: crate::tui::keymap::Keymap,
 
     /// User's theme choice (dark / light / auto). `theme` is the resolved
     /// palette the view reads from; `t` cycles the mode and refreshes it.
@@ -458,6 +461,27 @@ pub struct Selections {
     pub undecided: Vec<String>,
 }
 
+/// First key bound to an action (fallback: the action's config name), for
+/// one-line hints. Free function so both the constructor path (default
+/// keymap) and `refresh_startup_status` (live keymap) share it.
+fn first_key(keymap: &crate::tui::keymap::Keymap, action: crate::tui::keymap::Action) -> String {
+    keymap
+        .keys_for(action)
+        .first()
+        .cloned()
+        .unwrap_or_else(|| action.name().to_string())
+}
+
+/// The default keymap, materialized once for the constructor's startup hint.
+static KEYMAP_DEFAULT: std::sync::OnceLock<crate::tui::keymap::Keymap> = std::sync::OnceLock::new();
+
+fn self_key(action: crate::tui::keymap::Action) -> String {
+    first_key(
+        KEYMAP_DEFAULT.get_or_init(crate::tui::keymap::Keymap::default_map),
+        action,
+    )
+}
+
 impl App {
     pub fn new(review: Review) -> Self {
         Self::with_highlighter(
@@ -474,6 +498,29 @@ impl App {
         Self::with_theme(review, Arc::new(highlighter), ThemeMode::default())
     }
 
+    /// Rebuild the startup status line against the (possibly remapped)
+    /// keymap. `run_review_tui` calls this after assigning the config
+    /// keymap, so the opening hint never shows stale default keys.
+    pub fn refresh_startup_status(&mut self) {
+        if self.review.is_empty() {
+            return;
+        }
+        self.status = Toast::sticky(format!(
+            "{} file(s) — {} scroll · {}/{} hunk · {}/{} fold · {} context · {} search · {} filter · {} highlight · {} quit",
+            self.review.file_count(),
+            first_key(&self.keymap, crate::tui::keymap::Action::CursorDown),
+            first_key(&self.keymap, crate::tui::keymap::Action::NextHunk),
+            first_key(&self.keymap, crate::tui::keymap::Action::PrevHunk),
+            first_key(&self.keymap, crate::tui::keymap::Action::FoldFile),
+            first_key(&self.keymap, crate::tui::keymap::Action::UnfoldFile),
+            first_key(&self.keymap, crate::tui::keymap::Action::ToggleContextCollapse),
+            first_key(&self.keymap, crate::tui::keymap::Action::Search),
+            first_key(&self.keymap, crate::tui::keymap::Action::FilterPaths),
+            first_key(&self.keymap, crate::tui::keymap::Action::ToggleHighlight),
+            first_key(&self.keymap, crate::tui::keymap::Action::Quit),
+        ));
+    }
+
     /// Construct with an explicit highlighter and theme mode (used by
     /// `run_review_tui` to honor `config.toml`'s `theme`).
     pub fn with_theme(
@@ -484,7 +531,20 @@ impl App {
         let status = if review.is_empty() {
             Toast::sticky("empty diff")
         } else {
-            Toast::sticky(format!("{} file(s) — j/k scroll · ]h/[h hunk · zc/zo fold · zx context · / search · f filter · H highlight · q quit", review.file_count()))
+            Toast::sticky(format!(
+                "{} file(s) — {} scroll · {}/{} hunk · {}/{} fold · {} context · {} search · {} filter · {} highlight · {} quit",
+                review.file_count(),
+                self_key(crate::tui::keymap::Action::CursorDown),
+                self_key(crate::tui::keymap::Action::NextHunk),
+                self_key(crate::tui::keymap::Action::PrevHunk),
+                self_key(crate::tui::keymap::Action::FoldFile),
+                self_key(crate::tui::keymap::Action::UnfoldFile),
+                self_key(crate::tui::keymap::Action::ToggleContextCollapse),
+                self_key(crate::tui::keymap::Action::Search),
+                self_key(crate::tui::keymap::Action::FilterPaths),
+                self_key(crate::tui::keymap::Action::ToggleHighlight),
+                self_key(crate::tui::keymap::Action::Quit),
+            ))
         };
         let theme = theme_mode.to_theme();
         let collapse =
@@ -513,6 +573,7 @@ impl App {
             rail_rect: None,
             stream_rect: None,
             show_help: false,
+            keymap: crate::tui::keymap::Keymap::default_map(),
             theme_mode,
             palette: crate::tui::theme::Palette::default(),
             theme,
@@ -991,66 +1052,57 @@ impl App {
         let half = self.viewport_height.max(1) / 2;
         let full = self.viewport_height.max(1);
 
-        // Vim/less-style page navigation on Ctrl-modified keys. Checked
-        // before the `match key.code` below so the modifier is honored.
-        // (Ctrl+C is handled earlier in `handle_key`.)
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('d') => {
-                    self.move_cursor(half as i64);
-                    return;
-                }
-                KeyCode::Char('u') => {
-                    self.move_cursor(-(half as i64));
-                    return;
-                }
-                KeyCode::Char('f') => {
-                    self.move_cursor(full as i64);
-                    return;
-                }
-                KeyCode::Char('b') => {
-                    self.move_cursor(-(full as i64));
-                    return;
-                }
-                _ => {}
-            }
-        }
-
-        // Two-key sequence handling for `]h` / `[h` (next/prev hunk)
-        // and `zc` / `zo` (fold/unfold current file).
-        // If a prefix is pending, consume it now.
+        // Two-key sequences (`]h`, `zc`, …): a pending prefix consumes the
+        // next key. An unrecognized second key falls through to single-key
+        // dispatch (a lone prefix is simply discarded).
         if let Some(prefix) = self.pending_prefix.take() {
-            match (prefix, key.code) {
-                (']', KeyCode::Char('h')) => {
-                    self.jump_hunk(true);
-                    return;
-                }
-                ('[', KeyCode::Char('h')) => {
-                    self.jump_hunk(false);
-                    return;
-                }
-                ('z', KeyCode::Char('c')) => {
-                    self.fold_current();
-                    return;
-                }
-                ('z', KeyCode::Char('o')) => {
-                    self.unfold_current();
-                    return;
-                }
-                ('z', KeyCode::Char('x')) => {
-                    self.toggle_collapse();
-                    return;
-                }
-                _ => {
-                    // Unrecognized second key: fall through to normal dispatch.
-                    // (A lone `]`/`[`/`z` that isn't followed by a valid second key is discarded.)
-                }
+            if let Some(action) = self.keymap.lookup_sequence(prefix, &key) {
+                self.run_action(action, half, full);
+                return;
             }
         }
 
-        match key.code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                // If a search is active, Esc clears it; otherwise quit.
+        // Single-key dispatch through the (possibly remapped) keymap. Ctrl
+        // keys resolve to their `ctrl-x` specs, so a modifier can never leak
+        // into a plain-char binding.
+        if let Some(action) = self.keymap.lookup(&key) {
+            self.run_action(action, half, full);
+            return;
+        }
+
+        // Non-remappable: number keys 1-9 jump directly to the Nth file
+        // (1-based). A muscle-memory shortcut for large multi-file diffs,
+        // where Tab-cycling to a far-down file is tedious. No-op when the
+        // index is out of range.
+        if let KeyCode::Char(c @ ('1'..='9')) = key.code {
+            let n = (c as u8 - b'0') as usize;
+            if n <= self.review.file_count() {
+                let idx = n - 1;
+                self.selected_file = idx;
+                let row = ViewportQuery::file_start_row(&self.review, idx);
+                self.jump_to_stream(row);
+                self.set_info(format!("→ {}", self.review.display_path(idx)));
+            }
+            return;
+        }
+
+        // Prefix arming: an unbound char that starts some sequence (`]`,
+        // `[`, `z` by default) awaits its second key.
+        if let KeyCode::Char(c) = key.code {
+            if self.keymap.arms_prefix(c) {
+                self.pending_prefix = Some(c);
+                self.set_info(c.to_string());
+            }
+        }
+    }
+
+    /// Execute one interactive action. Every key routes here — the keymap
+    /// decides *which* action a key means, this decides *what it does*.
+    fn run_action(&mut self, action: crate::tui::keymap::Action, half: usize, full: usize) {
+        use crate::tui::keymap::Action;
+        match action {
+            Action::Quit => {
+                // If a search is active, Esc/q clears it; otherwise quit.
                 if self.search.active {
                     self.search.clear();
                     self.set_success("search cleared");
@@ -1058,35 +1110,23 @@ impl App {
                     self.should_quit = true;
                 }
             }
-            // cursor down one (viewport follows only at the edges)
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_cursor(1);
-            }
-            // cursor up one
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_cursor(-1);
-            }
-            // half-page down
-            KeyCode::Char('J') | KeyCode::PageDown => {
-                self.move_cursor(half as i64);
-            }
-            // half-page up
-            KeyCode::Char('K') | KeyCode::PageUp => {
-                self.move_cursor(-(half as i64));
-            }
-            // top / bottom
-            KeyCode::Char('g') | KeyCode::Home => {
+            Action::CursorDown => self.move_cursor(1),
+            Action::CursorUp => self.move_cursor(-1),
+            Action::HalfPageDown => self.move_cursor(half as i64),
+            Action::HalfPageUp => self.move_cursor(-(half as i64)),
+            Action::PageForward => self.move_cursor(full as i64),
+            Action::PageBackward => self.move_cursor(-(full as i64)),
+            Action::GotoTop => {
                 self.set_cursor(0);
                 self.scroll_y = 0;
                 self.sync_selected_file();
             }
-            KeyCode::Char('G') | KeyCode::End => {
+            Action::GotoBottom => {
                 let last_v = self.collapse.virtual_len().saturating_sub(1);
                 self.scroll_y = self.max_scroll();
                 self.set_cursor(last_v);
             }
-            // next / prev file
-            KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => {
+            Action::NextFile => {
                 if let Some((idx, row)) =
                     ViewportQuery::jump_file(&self.review, self.selected_file, true)
                 {
@@ -1095,7 +1135,7 @@ impl App {
                     self.set_info(format!("→ {}", self.review.display_path(idx)));
                 }
             }
-            KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => {
+            Action::PrevFile => {
                 if let Some((idx, row)) =
                     ViewportQuery::jump_file(&self.review, self.selected_file, false)
                 {
@@ -1104,48 +1144,14 @@ impl App {
                     self.set_info(format!("← {}", self.review.display_path(idx)));
                 }
             }
-            // Number keys 1-9 jump directly to the Nth file (1-based). A
-            // muscle-memory shortcut for large multi-file diffs, where
-            // Tab-cycling to a far-down file is tedious. Falls through
-            // (no-op) when the index is out of range.
-            KeyCode::Char(c @ ('1'..='9')) => {
-                let n = (c as u8 - b'0') as usize;
-                if n <= self.review.file_count() {
-                    let idx = n - 1;
-                    self.selected_file = idx;
-                    let row = ViewportQuery::file_start_row(&self.review, idx);
-                    self.jump_to_stream(row);
-                    self.set_info(format!("→ {}", self.review.display_path(idx)));
-                }
-            }
-            // hunk navigation prefixes: `]` / `[` await a following `h`
-            KeyCode::Char(']') => {
-                self.pending_prefix = Some(']');
-                self.set_info("]");
-            }
-            KeyCode::Char('[') => {
-                self.pending_prefix = Some('[');
-                self.set_info("[");
-            }
-            // fold/unfold prefixes: `z` awaits `c` (close) or `o` (open).
-            KeyCode::Char('z') => {
-                self.pending_prefix = Some('z');
-                self.set_info("z");
-            }
-            // space: jump to the next hunk (wraps across files). A fast
-            // single-key alternative to the `]h` two-key sequence.
-            KeyCode::Char(' ') => {
-                self.jump_hunk(true);
-            }
-            // next / previous annotated row (a line or hunk carrying a note)
-            KeyCode::Char('}') => {
-                self.jump_note(true);
-            }
-            KeyCode::Char('{') => {
-                self.jump_note(false);
-            }
-            // toggle highlight
-            KeyCode::Char('H') => {
+            Action::NextHunk => self.jump_hunk(true),
+            Action::PrevHunk => self.jump_hunk(false),
+            Action::NextNote => self.jump_note(true),
+            Action::PrevNote => self.jump_note(false),
+            Action::FoldFile => self.fold_current(),
+            Action::UnfoldFile => self.unfold_current(),
+            Action::ToggleContextCollapse => self.toggle_collapse(),
+            Action::ToggleHighlight => {
                 self.highlight_on = !self.highlight_on;
                 if !self.highlight_on {
                     self.cache.invalidate();
@@ -1154,8 +1160,7 @@ impl App {
                     self.set_success("highlight on");
                 }
             }
-            // toggle line-number gutter
-            KeyCode::Char('#') => {
+            Action::ToggleLineNumbers => {
                 self.line_numbers_on = !self.line_numbers_on;
                 if self.line_numbers_on {
                     self.set_success("line numbers on");
@@ -1163,8 +1168,7 @@ impl App {
                     self.set_info("line numbers off");
                 }
             }
-            // toggle word-level inline diff
-            KeyCode::Char('w') => {
+            Action::ToggleWordDiff => {
                 self.word_diff_on = !self.word_diff_on;
                 if self.word_diff_on {
                     self.set_success("word diff on");
@@ -1172,8 +1176,7 @@ impl App {
                     self.set_info("word diff off");
                 }
             }
-            // toggle ignore-whitespace view (collapse whitespace-only changes)
-            KeyCode::Char('W') => {
+            Action::ToggleIgnoreWhitespace => {
                 self.ignore_ws = !self.ignore_ws;
                 self.apply_ignore_ws();
                 if self.ignore_ws {
@@ -1182,8 +1185,7 @@ impl App {
                     self.set_info("ignore-whitespace off");
                 }
             }
-            // toggle the file-rail sidebar
-            KeyCode::Char('b') => {
+            Action::ToggleRail => {
                 self.show_rail = !self.show_rail;
                 if self.show_rail {
                     self.set_success("rail shown");
@@ -1191,9 +1193,7 @@ impl App {
                     self.set_info("rail hidden");
                 }
             }
-            // cycle layout: unified → split → stack → unified. Rebuilds the
-            // virtual index (pair rows vs line rows) and keeps the anchor.
-            KeyCode::Char('L') => {
+            Action::CycleLayout => {
                 self.layout_mode = match self.layout_mode {
                     LayoutMode::Unified => LayoutMode::Split,
                     LayoutMode::Split => LayoutMode::Stack,
@@ -1203,9 +1203,7 @@ impl App {
                 self.rebuild_collapse();
                 self.set_success(format!("layout: {}", self.layout_mode.as_str()));
             }
-            // cycle theme mode: dark → light → auto → dark (within the
-            // current palette family); reloads the syntect palette to match
-            KeyCode::Char('t') => {
+            Action::CycleThemeMode => {
                 self.theme_mode = self.theme_mode.cycle();
                 self.apply_theme();
                 self.set_info(format!(
@@ -1214,9 +1212,7 @@ impl App {
                     self.theme_mode.name()
                 ));
             }
-            // cycle the palette family: flexoki → catppuccin → gruvbox →
-            // nord → tokyonight → flexoki; keeps the current mode
-            KeyCode::Char('T') => {
+            Action::CyclePalette => {
                 self.palette = self.palette.cycle();
                 self.apply_theme();
                 self.set_info(format!(
@@ -1225,22 +1221,18 @@ impl App {
                     self.theme_mode.name()
                 ));
             }
-            // begin in-stream search
-            KeyCode::Char('/') => {
+            Action::Search => {
                 self.mode = InputMode::Search;
                 self.search.query.clear();
                 self.set_info("search: ");
             }
-            // begin path filter
-            KeyCode::Char('f') => {
+            Action::FilterPaths => {
                 self.mode = InputMode::Filter;
                 self.path_filter.clear();
                 self.set_info("filter: ");
             }
-            // compose a note anchored to the cursor row
-            KeyCode::Char('c') => self.begin_note(),
-            // open the focused line's file in $EDITOR
-            KeyCode::Char('o') => match self.compute_open_target() {
+            Action::ComposeNote => self.begin_note(),
+            Action::OpenEditor => match self.compute_open_target() {
                 Some(t) => {
                     self.set_info(format!("opening {}:{}…", t.path, t.line));
                     self.open_request = Some(t);
@@ -1249,30 +1241,15 @@ impl App {
                     self.set_error("nothing to open here (move to a code line)");
                 }
             },
-            // next / prev search match
-            KeyCode::Char('n') => {
-                self.advance_match(true);
-            }
-            KeyCode::Char('N') => {
-                self.advance_match(false);
-            }
-            // toggle the full-screen keybinding help overlay
-            KeyCode::Char('?') => {
-                self.show_help = !self.show_help;
-            }
-            // --select mode: accept / reject / mark undecided on the current
-            // hunk, then jump to the next. These keys are inert outside select
-            // mode (a/r/u fall through to the no-op catch-all).
-            KeyCode::Char('a') if self.select_mode => {
-                self.decide_current(Decision::Accept);
-            }
-            KeyCode::Char('r') if self.select_mode => {
-                self.decide_current(Decision::Reject);
-            }
-            KeyCode::Char('u') if self.select_mode => {
-                self.decide_current(Decision::Undecided);
-            }
-            _ => {}
+            Action::NextMatch => self.advance_match(true),
+            Action::PrevMatch => self.advance_match(false),
+            Action::Help => self.show_help = !self.show_help,
+            // --select decisions: inert outside select mode, matching the
+            // pre-keymap guards on a/r/u.
+            Action::AcceptHunk if self.select_mode => self.decide_current(Decision::Accept),
+            Action::RejectHunk if self.select_mode => self.decide_current(Decision::Reject),
+            Action::UndecideHunk if self.select_mode => self.decide_current(Decision::Undecided),
+            Action::AcceptHunk | Action::RejectHunk | Action::UndecideHunk => {}
         }
     }
 
@@ -2003,6 +1980,60 @@ diff --git a/b.rs b/b.rs
 
     fn char_key(c: char) -> KeyEvent {
         KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE)
+    }
+
+    /// Override a keymap action from (name, spec) pairs — mirrors how
+    /// `[keybindings]` config resolves.
+    fn remap(app: &mut App, name: &str, spec: &str) {
+        let mut cfg = std::collections::HashMap::new();
+        cfg.insert(name.to_string(), toml::Value::String(spec.to_string()));
+        let (km, warns) = crate::tui::keymap::Keymap::with_overrides(&cfg);
+        assert!(warns.is_empty(), "{warns:?}");
+        app.keymap = km;
+    }
+
+    #[test]
+    fn remapped_quit_key_replaces_the_default() {
+        let mut app = two_file_app();
+        remap(&mut app, "quit", "Q");
+        app.handle_key(char_key('q'));
+        assert!(!app.should_quit, "old default key is unbound");
+        app.handle_key(char_key('Q'));
+        assert!(app.should_quit, "remapped key quits");
+    }
+
+    #[test]
+    fn remapped_sequence_works_end_to_end() {
+        let mut app = two_file_app();
+        remap(&mut app, "next_hunk", "]j");
+        app.handle_key(char_key(']'));
+        assert_eq!(
+            app.pending_prefix,
+            Some(']'),
+            "] arms the remapped sequence"
+        );
+        app.handle_key(char_key('j'));
+        assert!(app.scroll_y > 0, "]j jumped to the next hunk");
+    }
+
+    #[test]
+    fn unbound_action_is_inert() {
+        let mut app = two_file_app();
+        let mut cfg = std::collections::HashMap::new();
+        cfg.insert("help".to_string(), toml::Value::Boolean(false));
+        let (km, warns) = crate::tui::keymap::Keymap::with_overrides(&cfg);
+        assert!(warns.is_empty(), "{warns:?}");
+        app.keymap = km;
+        app.handle_key(char_key('?'));
+        assert!(!app.show_help, "help key unbound does nothing");
+    }
+
+    #[test]
+    fn select_keys_inert_outside_select_mode_even_when_remapped() {
+        let mut app = two_file_app();
+        assert!(!app.select_mode);
+        app.handle_key(char_key('a'));
+        assert!(app.decisions.is_empty(), "a is a no-op without --select");
     }
 
     fn ctrl(c: char) -> KeyEvent {

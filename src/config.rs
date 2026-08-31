@@ -115,6 +115,10 @@ pub struct Config {
     /// Render agent/human notes (💬 rows, inline annotations, rail badges).
     /// `false` = plain diff, no notes. Default `true`.
     pub agent_notes: Option<bool>,
+    /// Keybinding overrides: action name → key list (or `false` to unbind).
+    /// See `tui::keymap` for the spec grammar. The whole table replaces the
+    /// lower layer's (per-action merge is not meaningful for key claims).
+    pub keybindings: Option<std::collections::HashMap<String, toml::Value>>,
 }
 
 impl Config {
@@ -159,6 +163,9 @@ impl Config {
         }
         if other.agent_notes.is_some() {
             self.agent_notes = other.agent_notes;
+        }
+        if other.keybindings.is_some() {
+            self.keybindings = other.keybindings;
         }
         self
     }
@@ -214,6 +221,8 @@ pub struct ResolvedConfig {
     pub sidebar: bool,
     /// Render 💬 notes (agent + human). `false` = plain diff view.
     pub agent_notes: bool,
+    /// Resolved keybindings (defaults when no `[keybindings]` table).
+    pub keymap: crate::tui::keymap::Keymap,
 }
 
 impl Default for ResolvedConfig {
@@ -233,6 +242,7 @@ impl Default for ResolvedConfig {
             tab_width: DEFAULT_TAB_WIDTH,
             sidebar: true,
             agent_notes: true,
+            keymap: crate::tui::keymap::Keymap::default_map(),
         }
     }
 }
@@ -275,6 +285,7 @@ pub struct ViewSettings {
     pub tab_width: u32,
     pub sidebar: bool,
     pub agent_notes: bool,
+    pub keymap: crate::tui::keymap::Keymap,
 }
 
 impl Default for ViewSettings {
@@ -290,6 +301,7 @@ impl Default for ViewSettings {
             tab_width: DEFAULT_TAB_WIDTH,
             sidebar: true,
             agent_notes: true,
+            keymap: crate::tui::keymap::Keymap::default_map(),
         }
     }
 }
@@ -307,6 +319,7 @@ impl From<&ResolvedConfig> for ViewSettings {
             tab_width: r.tab_width,
             sidebar: r.sidebar,
             agent_notes: r.agent_notes,
+            keymap: r.keymap.clone(),
         }
     }
 }
@@ -366,6 +379,18 @@ impl ResolvedConfig {
                 .and_then(coerce_sidebar)
                 .unwrap_or(d.sidebar),
             agent_notes: cfg.agent_notes.unwrap_or(d.agent_notes),
+            keymap: match &cfg.keybindings {
+                Some(overrides) => {
+                    let (km, warnings) = crate::tui::keymap::Keymap::with_overrides(overrides);
+                    // Resolve runs before the TUI takes over the screen, so
+                    // stderr is still visible to the user.
+                    for w in warnings {
+                        eprintln!("warning: {w}");
+                    }
+                    km
+                }
+                None => d.keymap,
+            },
         }
     }
 }
@@ -812,6 +837,53 @@ theme = \"dark\"
         let cfg = Config::load_project(&dir.0);
         let r = ResolvedConfig::resolve(&cfg, &test_flags());
         assert!(!r.agent_notes);
+    }
+
+    #[test]
+    fn keybindings_table_parses_and_resolves() {
+        let (dir, _path) =
+            write_tmp_config("[keybindings]\nquit = [\"Q\", \"ctrl-x\"]\nhelp = false\n");
+        let cfg = Config::load_project(&dir.0);
+        let kb = cfg.keybindings.clone().expect("keybindings table parsed");
+        assert_eq!(kb.len(), 2);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        // resolved keymap reflects the overrides
+        assert_eq!(
+            r.keymap.lookup(&crossterm_key('Q')),
+            Some(crate::tui::keymap::Action::Quit)
+        );
+        assert_eq!(
+            r.keymap.lookup(&crossterm_key('q')),
+            None,
+            "default q unbound by the override"
+        );
+        assert!(
+            r.keymap
+                .keys_for(crate::tui::keymap::Action::Help)
+                .is_empty(),
+            "help unbound"
+        );
+    }
+
+    #[test]
+    fn malformed_keybinding_values_warn_not_crash() {
+        let (dir, _path) = write_tmp_config(
+            "[keybindings]\nquit = [12345]\nteleport = \"x\"\ncursor_down = \"junk-key\"\n",
+        );
+        let cfg = Config::load_project(&dir.0);
+        let r = ResolvedConfig::resolve(&cfg, &test_flags());
+        // junk spec ignored, quit keeps its defaults
+        assert_eq!(
+            r.keymap.lookup(&crossterm_key('q')),
+            Some(crate::tui::keymap::Action::Quit)
+        );
+    }
+
+    fn crossterm_key(c: char) -> crossterm::event::KeyEvent {
+        crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Char(c),
+            crossterm::event::KeyModifiers::NONE,
+        )
     }
 
     #[test]
