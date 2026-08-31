@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — tiny terminals fail fast with a readable message
+
+- Starting a review in a terminal smaller than 20×4 (e.g. a popup pane)
+  used to render an empty screen with no explanation. It now exits with
+  `terminal too small: WxH (need at least 20 columns x 4 rows)` before the
+  TUI takes over.
+
 ### Fixed — a failing `$EDITOR` no longer reports success
 
 - `o` with an editor that exits non-zero (bad args, editor error) rendered
