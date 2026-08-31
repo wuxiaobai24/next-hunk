@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — the help overlay shows toggle state
+
+- Toggle rows in the `?` overlay now carry their live value — e.g.
+  "toggle line wrapping (on)", "toggle ignore-whitespace view (off)" — so
+  the panel answers "what is on right now?" without leaving it. The layout
+  cycle keeps its status badge (a suffix would clip at the overlay's
+  64-column width).
+
 ### Fixed — `--select` keys mark the hunk under the cursor
 
 - With two hunks on screen, `a`/`r`/`u` acted on the first hunk header in

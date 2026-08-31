@@ -1814,7 +1814,7 @@ fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
         .add_modifier(Modifier::BOLD);
 
     use crate::tui::keymap::Action;
-    let rows = |rs: &[HelpRow]| help_rows(&app.keymap, rs);
+    let rows = |rs: &[HelpRow]| help_rows(app, rs);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     push_help_section(
@@ -1970,7 +1970,7 @@ fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
 fn push_help_section(
     lines: &mut Vec<Line<'static>>,
     title: &str,
-    rows: &[(String, &'static str)],
+    rows: &[(String, String)],
     head: Style,
     key: Style,
     dim: Style,
@@ -1991,12 +1991,12 @@ fn push_help_section(
             lines.push(Line::from(Span::styled(format!("  {k}"), key)));
             lines.push(Line::from(vec![
                 Span::raw(" ".repeat(key_w + 3)),
-                Span::styled(*d, dim),
+                Span::styled(d.clone(), dim),
             ]));
         } else {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {k:<key_w$} "), key),
-                Span::styled(*d, dim),
+                Span::styled(d.clone(), dim),
             ]));
         }
     }
@@ -2019,8 +2019,9 @@ enum HelpRow {
 /// Materialize help rows against `keymap`: action keys are looked up live so
 /// the overlay always reflects the user's `[keybindings]`, never stale
 /// defaults.
-fn help_rows(keymap: &crate::tui::keymap::Keymap, rows: &[HelpRow]) -> Vec<(String, &'static str)> {
+fn help_rows(app: &App, rows: &[HelpRow]) -> Vec<(String, String)> {
     use crate::tui::keymap::{Action, Keymap};
+    let keymap = &app.keymap;
     let keys = |a: Action, km: &Keymap| {
         let k = km.keys_for(a);
         (!k.is_empty()).then(|| k.join(" / "))
@@ -2030,21 +2031,54 @@ fn help_rows(keymap: &crate::tui::keymap::Keymap, rows: &[HelpRow]) -> Vec<(Stri
         match row {
             HelpRow::Action(a) => {
                 if let Some(k) = keys(*a, keymap) {
-                    out.push((k, a.describe()));
+                    // Toggles carry their live state, e.g.
+                    // "toggle syntax highlighting (on)" — the overlay then
+                    // answers "what is on right now?" without leaving it.
+                    let desc = match toggle_state(app, *a) {
+                        Some(state) => format!("{} ({})", a.describe(), state),
+                        None => a.describe().to_string(),
+                    };
+                    out.push((k, desc));
                 }
             }
             HelpRow::Pair(a, b, desc) => {
                 // Show whichever side is bound; if both are, join them.
                 match (keys(*a, keymap), keys(*b, keymap)) {
-                    (Some(ka), Some(kb)) => out.push((format!("{ka} / {kb}"), desc)),
-                    (Some(ka), None) | (None, Some(ka)) => out.push((ka, desc)),
+                    (Some(ka), Some(kb)) => out.push((format!("{ka} / {kb}"), desc.to_string())),
+                    (Some(ka), None) | (None, Some(ka)) => out.push((ka, desc.to_string())),
                     (None, None) => {}
                 }
             }
-            HelpRow::Static(k, d) => out.push((k.to_string(), d)),
+            HelpRow::Static(k, d) => out.push((k.to_string(), d.to_string())),
         }
     }
     out
+}
+
+/// The live on/off label for toggle actions, shown in the help overlay.
+/// `None` for actions without a stateful aspect.
+fn toggle_state(app: &App, a: crate::tui::keymap::Action) -> Option<&'static str> {
+    use crate::tui::keymap::Action;
+    Some(match a {
+        Action::ToggleHighlight if app.highlight_on => "on",
+        Action::ToggleHighlight => "off",
+        Action::ToggleLineNumbers if app.line_numbers_on => "on",
+        Action::ToggleLineNumbers => "off",
+        Action::ToggleWordDiff if app.word_diff_on => "on",
+        Action::ToggleWordDiff => "off",
+        Action::ToggleIgnoreWhitespace if app.ignore_ws => "on",
+        Action::ToggleIgnoreWhitespace => "off",
+        Action::ToggleWrap if app.wrap_on => "on",
+        Action::ToggleWrap => "off",
+        Action::ToggleContextCollapse if app.collapse_on => "on",
+        Action::ToggleContextCollapse => "off",
+        Action::ToggleRail if app.show_rail => "on",
+        Action::ToggleRail => "off",
+        // CycleLayout's description already lists its cycle and the effective
+        // layout has its own status badge; a suffix here would clip at the
+        // overlay's 64-column width.
+        _ => return None,
+    })
 }
 
 /// Center a `w × h` rect inside `area` (used by the help overlay).
@@ -2859,6 +2893,43 @@ diff --git a/b.rs b/b.rs
         assert!(
             rendered.contains(" stack"),
             "stack layout badge: {rendered}"
+        );
+    }
+
+    #[test]
+    fn help_overlay_shows_toggle_state() {
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.wrap_on = true;
+        app.show_help = true;
+        let backend = ratatui::backend::TestBackend::new(80, 60);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // Toggles answer "what is on right now?" in the overlay itself.
+        assert!(
+            rendered.contains("toggle line wrapping (on)"),
+            "wrap toggle should show its live state: {rendered}"
+        );
+        assert!(
+            rendered.contains("toggle ignore-whitespace view (off)"),
+            "ws toggle should show its live state: {rendered}"
         );
     }
 
