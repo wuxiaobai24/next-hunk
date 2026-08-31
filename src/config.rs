@@ -155,6 +155,9 @@ pub struct Config {
     /// Collapse unchanged context: runs/gaps of ≥ this many lines render as
     /// one `··· N unchanged lines ···` marker row. `0` disables. Default 8.
     pub context_collapse: Option<usize>,
+    /// Center the row a navigation jump lands on (`]h`, search, file jumps)
+    /// in the viewport instead of pinning it to the top. Default true.
+    pub jump_center: Option<bool>,
     /// Show the review cursor row ("row", default) or hide it ("off").
     pub cursor_line: Option<String>,
     /// Tab-stop width (columns) for rendering tabs in diff lines, 1–16.
@@ -210,6 +213,9 @@ impl Config {
         }
         if other.cursor_line.is_some() {
             self.cursor_line = other.cursor_line;
+        }
+        if other.jump_center.is_some() {
+            self.jump_center = other.jump_center;
         }
         if other.tab_width.is_some() {
             self.tab_width = other.tab_width;
@@ -274,6 +280,9 @@ pub struct ResolvedConfig {
     /// Show the review cursor row (`c` composes a note on it). ON by default;
     /// `cursor_line = "off"` hides the highlight (navigation still works).
     pub cursor_line: bool,
+    /// Center the row a navigation jump lands on. ON by default;
+    /// `jump_center = false` pins jumps to the viewport top.
+    pub jump_center: bool,
     /// Tab-stop width (columns) for render-time tab expansion, 1–16.
     pub tab_width: u32,
     /// Show the file rail (left sidebar) at startup. `b` toggles at runtime.
@@ -301,6 +310,7 @@ impl Default for ResolvedConfig {
             wrap: false,
             context_collapse: DEFAULT_CONTEXT_COLLAPSE,
             cursor_line: true,
+            jump_center: true,
             tab_width: DEFAULT_TAB_WIDTH,
             sidebar: true,
             agent_notes: true,
@@ -342,6 +352,7 @@ pub struct ViewSettings {
     pub line_numbers: bool,
     pub wrap: bool,
     pub context_collapse: usize,
+    pub jump_center: bool,
     pub theme: Option<String>,
     pub layout: LayoutMode,
     pub cursor_line: bool,
@@ -358,6 +369,7 @@ impl Default for ViewSettings {
             line_numbers: true,
             wrap: false,
             context_collapse: DEFAULT_CONTEXT_COLLAPSE,
+            jump_center: true,
             theme: None,
             layout: LayoutMode::Unified,
             cursor_line: true,
@@ -376,6 +388,7 @@ impl From<&ResolvedConfig> for ViewSettings {
             line_numbers: r.line_numbers,
             wrap: r.wrap,
             context_collapse: r.context_collapse,
+            jump_center: r.jump_center,
             theme: r.theme.clone(),
             layout: r.layout,
             cursor_line: r.cursor_line,
@@ -490,6 +503,7 @@ impl ResolvedConfig {
                     v != "off" && v != "false"
                 })
                 .unwrap_or(d.cursor_line),
+            jump_center: cfg.jump_center.unwrap_or(d.jump_center),
             tab_width: clamp_tab_width(cli.tab_width.or(cfg.tab_width)),
             sidebar: cfg
                 .sidebar

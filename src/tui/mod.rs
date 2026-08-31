@@ -200,6 +200,7 @@ pub fn run_review_tui(
     app.keymap = settings.keymap;
     app.refresh_startup_status();
     app.set_context_collapse(settings.context_collapse);
+    app.jump_center = settings.jump_center;
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
     app.focus_target = options.focus;
