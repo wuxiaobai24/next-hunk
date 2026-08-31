@@ -2575,7 +2575,8 @@ diff --git a/a.rs b/a.rs
 ",
         )
         .unwrap();
-        // The default theme is Flexoki light; make it explicit under test.
+        // The app default is Flexoki dark; pin the light palette explicitly
+        // under test.
         let mut app = App::with_highlighter(review, highlighter());
         app.viewport_height = 20;
         app.theme = crate::tui::theme::Theme::light();

@@ -303,7 +303,7 @@ Fields:
 | `layout` | string | `"unified"` | `"unified"` (default, interleaved), `"stack"` (old/new blocks per file), `"split"` (side-by-side columns), or `"auto"` (pick split/stack/unified from the live stream width) |
 | `wrap` | bool | `false` | wrap long lines in the diff stream (default truncates) |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
-| `theme` | string | `"light"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
+| `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
 | `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
 | `sidebar` | bool/string | `true` | show the file rail at startup; accepts hunk-style `"auto"` (treated as `true` — the rail already adapts to the terminal width). `b` toggles at runtime |
 | `agent_notes` | bool | `true` | render 💬 notes (inline annotations, note rows, rail badges); `false` = plain diff view — `}`/`{` and `c` report "notes hidden" instead |

@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a raw byte index mid-char — and keeps the rail's right-aligned
   `+ins/−del` tally aligned for CJK paths.
 
+### Changed — the default theme is now Flexoki dark
+
+- With `theme` unset (or an unknown value) in the config, the review TUI
+  now starts on **Flexoki dark** — the inky look the bare `"flexoki"`
+  preset name has always stood for — instead of flexoki-light, so the
+  product default and the preset vocabulary finally agree. The paper
+  palette remains one keystroke away (`t` cycles dark/light/auto) and
+  `theme = "flexoki-light"` / `"light"` still selects it explicitly.
+
 ### Fixed — readable attention marks on light backgrounds
 
 - **`highlight add` marks no longer vanish into their fill on light

@@ -375,7 +375,7 @@ impl Palette {
 /// names (`catppuccin-mocha`, `gruvbox-dark`, `nord`, `tokyonight`,
 /// `flexoki`/`flexoki-light`), the light variants of those families
 /// (`catppuccin-latte`), and the legacy mode names (`dark`/`light`/`auto`,
-/// Flexoki). Unknown values fall back to the default (Flexoki light), so a
+/// Flexoki). Unknown values fall back to the default (Flexoki dark), so a
 /// typo never breaks the TUI.
 pub fn parse_theme(s: &str) -> (Palette, ThemeMode) {
     match s.trim().to_ascii_lowercase().as_str() {
@@ -389,18 +389,18 @@ pub fn parse_theme(s: &str) -> (Palette, ThemeMode) {
         "gruvbox" | "gruvbox-dark" => (Palette::Gruvbox, ThemeMode::Dark),
         "nord" => (Palette::Nord, ThemeMode::Dark),
         "tokyonight" | "tokyonight-night" => (Palette::TokyoNight, ThemeMode::Dark),
-        _ => (Palette::Flexoki, ThemeMode::Light),
+        _ => (Palette::Flexoki, ThemeMode::Dark),
     }
 }
 
 /// The user's theme choice. `Auto` resolves at startup via `$COLORFGBG`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeMode {
-    /// Flexoki dark palette (black background).
-    Dark,
-    /// Flexoki light palette (paper background). The default — most reviewers
-    /// read diffs on a light terminal.
+    /// Flexoki dark palette (black background) — the default, and the look
+    /// the bare `"flexoki"` preset name stands for.
     #[default]
+    Dark,
+    /// Flexoki light palette (paper background).
     Light,
     /// Resolve via `$COLORFGBG`; fall back to dark when unset/unparseable.
     Auto,
@@ -453,14 +453,14 @@ impl ThemeMode {
     }
 
     /// Parse a config string (`"dark"` / `"light"` / `"auto"`) into a mode.
-    /// Unknown / empty values fall back to [`ThemeMode::Light`] (the default),
+    /// Unknown / empty values fall back to [`ThemeMode::Dark`] (the default),
     /// so a typo never breaks the TUI.
     pub fn parse(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "dark" => ThemeMode::Dark,
             "light" => ThemeMode::Light,
             "auto" => ThemeMode::Auto,
-            _ => ThemeMode::Light,
+            _ => ThemeMode::Dark,
         }
     }
 }
@@ -579,9 +579,9 @@ mod tests {
         // Legacy mode names keep their old meaning (Flexoki + mode).
         assert_eq!(parse_theme("dark"), (Palette::Flexoki, ThemeMode::Dark));
         assert_eq!(parse_theme("auto"), (Palette::Flexoki, ThemeMode::Auto));
-        // Unknown falls back to the default (Flexoki light): a typo never
+        // Unknown falls back to the default (Flexoki dark): a typo never
         // breaks the TUI.
-        assert_eq!(parse_theme("banana"), (Palette::Flexoki, ThemeMode::Light));
+        assert_eq!(parse_theme("banana"), (Palette::Flexoki, ThemeMode::Dark));
     }
 
     #[test]
@@ -750,9 +750,9 @@ mod tests {
         assert_eq!(ThemeMode::parse("dark"), ThemeMode::Dark);
         assert_eq!(ThemeMode::parse("Light"), ThemeMode::Light);
         assert_eq!(ThemeMode::parse("AUTO"), ThemeMode::Auto);
-        // Unknown / empty falls back to the default (Light).
-        assert_eq!(ThemeMode::parse("nonsense"), ThemeMode::Light);
-        assert_eq!(ThemeMode::parse(""), ThemeMode::Light);
+        // Unknown / empty falls back to the default (Dark).
+        assert_eq!(ThemeMode::parse("nonsense"), ThemeMode::Dark);
+        assert_eq!(ThemeMode::parse(""), ThemeMode::Dark);
         assert_eq!(ThemeMode::parse("  auto "), ThemeMode::Auto);
     }
 
