@@ -6,6 +6,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `[keybindings]` remapping
+
+- **Every interactive command is a named, remappable action.** A
+  `[keybindings]` table in config.toml rebinds any of the ~36 actions:
+  `quit = "Q"`, `next_hunk = ["]j", "space"]`, `search = "ctrl-s"`,
+  `help = "f1"`, `prev_match = false` (unbind). Specs cover chars (case
+  sensitive), named keys (f1–f12, esc, pageup, …), `ctrl-<char>`, and
+  two-key sequences (`]h`, `zc`). The default map reproduces the built-in
+  keys exactly.
+- **Exclusive claims with honest warnings.** An override fully replaces an
+  action's keys; stealing a key from another action's defaults warns on
+  stderr before the TUI opens; two overrides fighting over a key resolve
+  first-listed-wins (warned). Invalid specs / unknown action names warn and
+  are ignored — a bad config never bricks the defaults, and a garbage value
+  (`quit = [12345]`) keeps the defaults rather than silently unbinding.
+- **Help that can't lie.** The `?` overlay, the bottom hint line, and the
+  startup status all render from the live keymap, so remapped keys are what
+  you see.
+- Dispatch refactor: `handle_normal_key`'s 300-line `match` became a keymap
+  lookup plus one `run_action` match. Modifier keys no longer leak into
+  plain-char bindings (Ctrl+J used to move the cursor down as `j`).
+
 ### Added — config parity: tab_width, sidebar, agent_notes
 
 - **`tab_width`** (1–16, default 4, `--tab-width` flag) — tabs in diff lines

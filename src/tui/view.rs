@@ -1320,13 +1320,66 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
             )
         }
         InputMode::Normal => {
+            // Keymap-driven: the hint shows the *live* first key of each
+            // action, so a remapped config never makes this line lie. When an
+            // action is unbound entirely, its action name stands in (still
+            // discoverable, never blank).
+            use crate::tui::keymap::Action;
+            let k = |a: Action| {
+                app.keymap
+                    .keys_for(a)
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| a.name().to_string())
+            };
             // In `--select` mode the decision keys (a/r/u) are the primary
             // actions, so lead with them — the long base cheatsheet would push
             // them to the tail, where narrow-terminal truncation hides them.
             if app.select_mode {
-                " a accept · r reject · u undecided · ]h/[h hunk · j/k cursor · c note · / search · ? help · q quit ".to_string()
+                format!(
+                    " {} accept · {} reject · {} undecided · {}/{} hunk · {}/{} cursor · {} note · {} search · {} help · {} quit ",
+                    k(Action::AcceptHunk),
+                    k(Action::RejectHunk),
+                    k(Action::UndecideHunk),
+                    k(Action::NextHunk),
+                    k(Action::PrevHunk),
+                    k(Action::CursorDown),
+                    k(Action::CursorUp),
+                    k(Action::ComposeNote),
+                    k(Action::Search),
+                    k(Action::Help),
+                    k(Action::Quit),
+                )
             } else {
-                " j/k cursor · J/K half-page · g/G top/bottom · ]h/[h hunk · }/{ note · c note here · zc/zo fold · zx ctx · Tab file · b rail · / search · f filter · o open · H hl · # lines · w word · W ws · t theme · ? help · q quit ".to_string()
+                format!(
+                    " {}/{} cursor · {}/{} half-page · {}/{} top/bottom · {}/{} hunk · {}/{} note · {} note here · {}/{} fold · {} ctx · {} file · {} rail · {} search · {} filter · {} open · {} hl · {} lines · {} word · {} ws · {} theme · {} help · {} quit ",
+                    k(Action::CursorDown),
+                    k(Action::CursorUp),
+                    k(Action::HalfPageDown),
+                    k(Action::HalfPageUp),
+                    k(Action::GotoTop),
+                    k(Action::GotoBottom),
+                    k(Action::NextHunk),
+                    k(Action::PrevHunk),
+                    k(Action::NextNote),
+                    k(Action::PrevNote),
+                    k(Action::ComposeNote),
+                    k(Action::FoldFile),
+                    k(Action::UnfoldFile),
+                    k(Action::ToggleContextCollapse),
+                    k(Action::NextFile),
+                    k(Action::ToggleRail),
+                    k(Action::Search),
+                    k(Action::FilterPaths),
+                    k(Action::OpenEditor),
+                    k(Action::ToggleHighlight),
+                    k(Action::ToggleLineNumbers),
+                    k(Action::ToggleWordDiff),
+                    k(Action::ToggleIgnoreWhitespace),
+                    k(Action::CycleThemeMode),
+                    k(Action::Help),
+                    k(Action::Quit),
+                )
             }
         }
     };
@@ -1372,7 +1425,7 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     // A centered panel: up to 64 cols wide and as tall as the content needs,
     // clamped to the terminal with a 1-row margin.
     let width = 64u16.min(area.width.saturating_sub(2));
-    let height = 30u16.min(area.height.saturating_sub(2));
+    let height = 38u16.min(area.height.saturating_sub(2));
     let popup = centered_rect(width, height, area);
 
     // Clear the underlying cells so the overlay reads as a floating panel.
@@ -1386,29 +1439,60 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
         .fg(app.theme.file_header)
         .add_modifier(Modifier::BOLD);
 
+    use crate::tui::keymap::Action;
+    let rows = |rs: &[HelpRow]| help_rows(&app.keymap, rs);
+
     let mut lines: Vec<Line<'static>> = Vec::new();
     push_help_section(
         &mut lines,
         "Navigation",
-        &[
-            ("j / ↓", "cursor down one row"),
-            ("k / ↑", "cursor up one row"),
-            ("J / PgDn", "cursor half a page"),
-            ("K / PgUp", "cursor half a page up"),
-            ("Ctrl-D / Ctrl-U", "cursor half a page down / up"),
-            ("Ctrl-F / Ctrl-B", "cursor a full page down / up"),
-            ("g / Home", "jump to top"),
-            ("G / End", "jump to bottom"),
-            ("]h / [h", "next / previous hunk (wraps files)"),
-            ("} / {", "next / previous note (💬 rows)"),
-            ("SPC", "next hunk"),
-            ("Tab / l", "next file"),
-            ("BackTab / h", "previous file"),
-            ("1-9", "jump to the Nth file"),
-            ("b", "toggle file rail"),
-            ("c", "add a note at the cursor row"),
-            ("o", "open cursor line in $EDITOR"),
-        ],
+        &rows(&[
+            HelpRow::Pair(
+                Action::CursorDown,
+                Action::CursorUp,
+                "cursor down / up one row",
+            ),
+            HelpRow::Pair(
+                Action::HalfPageDown,
+                Action::HalfPageUp,
+                "cursor half a page down / up",
+            ),
+            HelpRow::Pair(
+                Action::PageForward,
+                Action::PageBackward,
+                "cursor a full page down / up",
+            ),
+            HelpRow::Pair(Action::GotoTop, Action::GotoBottom, "jump to top / bottom"),
+            HelpRow::Pair(
+                Action::NextHunk,
+                Action::PrevHunk,
+                "next / previous hunk (wraps files)",
+            ),
+            HelpRow::Pair(Action::NextFile, Action::PrevFile, "next / previous file"),
+            HelpRow::Static("1-9", "jump to the Nth file"),
+        ]),
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "Notes & files",
+        &rows(&[
+            HelpRow::Pair(
+                Action::NextNote,
+                Action::PrevNote,
+                "next / previous note (💬 rows)",
+            ),
+            HelpRow::Action(Action::ComposeNote),
+            HelpRow::Action(Action::OpenEditor),
+            HelpRow::Pair(
+                Action::FoldFile,
+                Action::UnfoldFile,
+                "fold / unfold current file",
+            ),
+            HelpRow::Action(Action::ToggleRail),
+        ]),
         head,
         key,
         dim,
@@ -1416,20 +1500,16 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     push_help_section(
         &mut lines,
         "View",
-        &[
-            ("H", "toggle syntax highlight"),
-            ("#", "toggle line-number gutter"),
-            ("w", "toggle word-level inline diff"),
-            ("W", "toggle ignore-whitespace"),
-            ("t", "cycle theme mode (dark → light → auto)"),
-            (
-                "T",
-                "cycle theme palette (flexoki → catppuccin → gruvbox → nord → tokyonight)",
-            ),
-            ("zc / zo", "fold / unfold current file"),
-            ("zx", "toggle context collapse (··· N unchanged lines ···)"),
-            ("L", "cycle layout (unified → split → stack)"),
-        ],
+        &rows(&[
+            HelpRow::Action(Action::ToggleHighlight),
+            HelpRow::Action(Action::ToggleLineNumbers),
+            HelpRow::Action(Action::ToggleWordDiff),
+            HelpRow::Action(Action::ToggleIgnoreWhitespace),
+            HelpRow::Action(Action::ToggleContextCollapse),
+            HelpRow::Action(Action::CycleLayout),
+            HelpRow::Action(Action::CycleThemeMode),
+            HelpRow::Action(Action::CyclePalette),
+        ]),
         head,
         key,
         dim,
@@ -1437,11 +1517,23 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     push_help_section(
         &mut lines,
         "Search & filter",
-        &[
-            ("/", "search diff content"),
-            ("n / N", "next / previous match"),
-            ("f", "filter files by path substring"),
-        ],
+        &rows(&[
+            HelpRow::Action(Action::Search),
+            HelpRow::Pair(
+                Action::NextMatch,
+                Action::PrevMatch,
+                "next / previous match",
+            ),
+            HelpRow::Action(Action::FilterPaths),
+        ]),
+        head,
+        key,
+        dim,
+    );
+    push_help_section(
+        &mut lines,
+        "Session",
+        &rows(&[HelpRow::Action(Action::Help), HelpRow::Action(Action::Quit)]),
         head,
         key,
         dim,
@@ -1449,14 +1541,18 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
     push_help_section(
         &mut lines,
         "Agent (--select)",
-        &[("a / r / u", "accept / reject / undecided on hunk")],
+        &rows(&[
+            HelpRow::Action(Action::AcceptHunk),
+            HelpRow::Action(Action::RejectHunk),
+            HelpRow::Action(Action::UndecideHunk),
+        ]),
         head,
         key,
         dim,
     );
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " ? / Esc / q / Enter  dismiss this help",
+        " any help key · Esc · Enter  dismiss this help",
         Style::default().fg(app.theme.edit_mode_fg),
     )));
 
@@ -1480,20 +1576,82 @@ fn draw_help_overlay(app: &App, frame: &mut Frame) {
 /// directly (no allocation, no lifetime knot from a closure).
 fn push_help_section(
     lines: &mut Vec<Line<'static>>,
-    title: &'static str,
-    rows: &[(&'static str, &'static str)],
+    title: &str,
+    rows: &[(String, &'static str)],
     head: Style,
     key: Style,
     dim: Style,
 ) {
+    // Key column width: at least 16, grown to fit the longest key list so
+    // remapped multi-key lists never collide with their description.
+    let key_w = rows
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(16);
     lines.push(Line::from(Span::styled(format!(" {title}"), head)));
     for (k, d) in rows {
-        lines.push(Line::from(vec![
-            Span::styled(format!("  {:<14}", k), key),
-            Span::styled(*d, dim),
-        ]));
+        if k.chars().count() > key_w {
+            // Absurdly long key lists (deep remaps): keys on their own row,
+            // description indented below — still readable.
+            lines.push(Line::from(Span::styled(format!("  {k}"), key)));
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(key_w + 3)),
+                Span::styled(*d, dim),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("  {k:<key_w$} "), key),
+                Span::styled(*d, dim),
+            ]));
+        }
     }
     lines.push(Line::from(""));
+}
+
+/// One help row: either a single action (keys come from the live keymap —
+/// unbound actions are omitted), a pair sharing a description, or a static
+/// non-remappable entry (e.g. `1-9`).
+enum HelpRow {
+    Action(crate::tui::keymap::Action),
+    Pair(
+        crate::tui::keymap::Action,
+        crate::tui::keymap::Action,
+        &'static str,
+    ),
+    Static(&'static str, &'static str),
+}
+
+/// Materialize help rows against `keymap`: action keys are looked up live so
+/// the overlay always reflects the user's `[keybindings]`, never stale
+/// defaults.
+fn help_rows(keymap: &crate::tui::keymap::Keymap, rows: &[HelpRow]) -> Vec<(String, &'static str)> {
+    use crate::tui::keymap::{Action, Keymap};
+    let keys = |a: Action, km: &Keymap| {
+        let k = km.keys_for(a);
+        (!k.is_empty()).then(|| k.join(" / "))
+    };
+    let mut out = Vec::new();
+    for row in rows {
+        match row {
+            HelpRow::Action(a) => {
+                if let Some(k) = keys(*a, keymap) {
+                    out.push((k, a.describe()));
+                }
+            }
+            HelpRow::Pair(a, b, desc) => {
+                // Show whichever side is bound; if both are, join them.
+                match (keys(*a, keymap), keys(*b, keymap)) {
+                    (Some(ka), Some(kb)) => out.push((format!("{ka} / {kb}"), desc)),
+                    (Some(ka), None) | (None, Some(ka)) => out.push((ka, desc)),
+                    (None, None) => {}
+                }
+            }
+            HelpRow::Static(k, d) => out.push((k.to_string(), d)),
+        }
+    }
+    out
 }
 
 /// Center a `w × h` rect inside `area` (used by the help overlay).
@@ -2390,6 +2548,55 @@ diff --git a/a.rs b/a.rs
             !help.contains("a accept"),
             "decision keys should not show outside select mode, got: {help:?}"
         );
+    }
+
+    #[test]
+    fn help_overlay_reflects_remapped_keys() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.show_help = true;
+        // Remap quit to Q and search to "ctrl-s"
+        let mut cfg = std::collections::HashMap::new();
+        cfg.insert("quit".to_string(), toml::Value::String("Q".into()));
+        cfg.insert("search".to_string(), toml::Value::String("ctrl-s".into()));
+        let (km, warns) = crate::tui::keymap::Keymap::with_overrides(&cfg);
+        assert!(warns.is_empty(), "{warns:?}");
+        app.keymap = km;
+
+        let backend = ratatui::backend::TestBackend::new(80, 45);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            rendered.contains("Q"),
+            "remapped quit key listed: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("ctrl-s"),
+            "remapped search key listed: {rendered:?}"
+        );
+        // the replaced default for quit (q / esc) no longer shows as quit's keys
+        let quit_row = rendered
+            .lines()
+            .find(|l| l.contains("quit (clears"))
+            .unwrap_or_else(|| panic!("quit row present: {rendered:?}"));
+        assert!(!quit_row.trim_start().starts_with("q"), "{quit_row:?}");
     }
 
     #[test]

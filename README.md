@@ -45,6 +45,7 @@ with a short alias binary `nh` (same program, shorter name).
 - [x] `line_numbers` config (no silent no-op)
 - [x] `tab_width` config + `--tab-width` (render-time tab expansion; keeps split columns aligned)
 - [x] `sidebar` config (hunk-style `true`/`false`/`"auto"`) and `agent_notes` toggle
+- [x] `[keybindings]` remapping — every action name → key list, `?` overlay and hints list the live bindings
 - [x] `include_untracked` config + `--include-untracked` flag (off by default)
 - [x] `next-hunk filediff <old> <new>` — diff two arbitrary files on disk
 - [x] File fold/unfold: `zc` (close) / `zo` (open)
@@ -209,6 +210,33 @@ All forms accept the full binary name too (`next-hunk diff …`).
 | `?` | toggle the full-screen keybinding help |
 | `q` / `Esc` / `Ctrl+C` | quit (`Esc` clears active search first) |
 
+Every key above (except `1`–`9` and mouse) is remappable via a `[keybindings]`
+table — see [Remapping keys](#remapping-keys). The `?` overlay always lists
+the *live* bindings.
+
+### Remapping keys
+
+```toml
+# ~/.config/next-hunk/config.toml
+[keybindings]
+quit = "Q"                       # single key
+next_hunk = ["]j", "space"]      # several keys (a list)
+search = "ctrl-s"                # ctrl-modified
+help = "f1"                      # named keys: f1-f12, esc, enter, tab, …
+prev_match = false               # unbind the action entirely
+```
+
+Key specs: single chars (`q`, `}` — case-sensitive), named keys (`esc`, `enter`,
+`space`, `tab`, `backtab`, `up`, `down`, `left`, `right`, `home`, `end`,
+`pageup`, `pagedown`, `backspace`, `delete`, `insert`, `f1`–`f12`),
+`ctrl-<char>`, and two-key sequences (`]h`, `zc`, `zx`). An override fully
+replaces the action's default keys. Explicit overrides may steal a key from
+another action's defaults (warned on stderr); two overrides claiming one key
+resolve first-listed-wins (warned). Invalid specs and unknown action names
+warn and are ignored — a bad config never bricks the default keys. Run
+`next-hunk --help`-style introspection is unnecessary: press `?` in the TUI
+to see the effective map.
+
 ## Configuration
 
 Persist preferences in a `config.toml` instead of re-typing flags. Two layers,
@@ -234,6 +262,7 @@ Fields:
 | `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
 | `sidebar` | bool/string | `true` | show the file rail at startup; accepts hunk-style `"auto"` (treated as `true` — the rail already adapts to the terminal width). `b` toggles at runtime |
 | `agent_notes` | bool | `true` | render 💬 notes (inline annotations, note rows, rail badges); `false` = plain diff view — `}`/`{` and `c` report "notes hidden" instead |
+| `[keybindings]` | table | — | remap any action's keys; see [Remapping keys](#remapping-keys) |
 
 Example `~/.config/next-hunk/config.toml`:
 

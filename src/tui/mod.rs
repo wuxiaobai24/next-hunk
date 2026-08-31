@@ -29,6 +29,7 @@ use crate::tui::watch::{Watcher, DEBOUNCE};
 
 pub mod app;
 pub mod input;
+pub mod keymap;
 pub mod server;
 pub mod theme;
 pub mod view;
@@ -162,6 +163,8 @@ pub fn run_review_tui(
     app.tab_width = settings.tab_width as usize;
     app.show_rail = settings.sidebar;
     app.show_notes = settings.agent_notes;
+    app.keymap = settings.keymap;
+    app.refresh_startup_status();
     app.set_context_collapse(settings.context_collapse);
     // Inject agent-bridge options, then resolve the startup focus before the
     // first draw so the viewport opens at the agent's intended position.
