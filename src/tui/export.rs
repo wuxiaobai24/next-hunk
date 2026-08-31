@@ -64,18 +64,23 @@ pub fn build_report(
     notes: &[Note],
     user_notes: &HashMap<String, Note>,
 ) -> ReviewReport {
-    let is_human_note = |note: &Note| {
-        user_notes
-            .values()
-            .any(|n| n.target == note.target && n.text == note.text)
-    };
+    // Human notes are already mirrored into `comments` as `user:N`, so each
+    // mirror consumes exactly ONE matching `notes` entry (target + text).
+    // Consuming — rather than matching by value across the whole run — keeps
+    // an agent `--note` with byte-identical target and text from being
+    // swallowed by its human twin.
+    let mut human_mirrors: Vec<&Note> = user_notes.values().collect();
 
     let mut out_comments = comments.to_vec();
     let mut banner_parts: Vec<&str> = Vec::new();
     let mut note_idx = 0usize;
 
     for note in notes {
-        if is_human_note(note) {
+        if let Some(pos) = human_mirrors
+            .iter()
+            .position(|n| n.target == note.target && n.text == note.text)
+        {
+            human_mirrors.swap_remove(pos);
             continue;
         }
         match &note.target {
@@ -155,7 +160,14 @@ pub fn to_markdown(report: &ReviewReport) -> String {
                 }
             };
             out.push_str(&format!("\n### `{}` — {}\n\n", c.id, where_));
-            out.push_str(&c.text);
+            // Blockquote the body: a multi-line note (serve `comment add`
+            // can contain newlines) keeps its line structure, and a line
+            // starting with `#`/`-` can't hijack the report's headings.
+            for line in c.text.lines() {
+                out.push_str("> ");
+                out.push_str(line);
+                out.push('\n');
+            }
             out.push('\n');
         }
     }
@@ -410,8 +422,40 @@ mod tests {
         assert!(md.contains("### Accepted\n\n- `a.rs:h1`\n"));
         assert!(md.contains("### Rejected\n\n_(none)_\n"));
         assert!(md.contains("- `a.rs:h2`\n- `b.rs:h1`\n"));
-        assert!(md.contains("### `user:1` — a.rs:42\n\nlooks wrong"));
-        assert!(md.contains("### `note-0` — b.rs\n\ncheck this"));
+        assert!(md.contains("### `user:1` — a.rs:42\n\n> looks wrong"));
+        assert!(md.contains("### `note-0` — b.rs\n\n> check this"));
+    }
+
+    #[test]
+    fn markdown_body_is_blockquoted_and_multi_line_safe() {
+        let report = ReviewReport {
+            banner: None,
+            comments: vec![
+                CommentEntry {
+                    id: "c1".into(),
+                    file: "a.rs".into(),
+                    text: "line one\n# looks like a heading\nline three".into(),
+                    line: Some(1),
+                    hunk: None,
+                },
+                CommentEntry {
+                    id: "c2".into(),
+                    file: String::new(),
+                    text: String::new(),
+                    line: None,
+                    hunk: None,
+                },
+            ],
+            accepted: vec![],
+            rejected: vec![],
+            undecided: vec![],
+        };
+        let md = to_markdown(&report);
+        // Continuation lines keep their structure and can't hijack headings.
+        assert!(md.contains("> line one\n> # looks like a heading\n> line three"));
+        assert!(!md.contains("\n# looks like a heading"));
+        // An empty body leaves just the heading + blank line: structure intact.
+        assert!(md.contains("### `c2` — banner\n\n"));
     }
 
     #[test]
