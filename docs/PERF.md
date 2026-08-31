@@ -218,9 +218,32 @@ below are measured on the same machine (AMD Ryzen 7 5700X, Linux), same
 
 **Honest caveats**: hunk's interactive startup was not directly measurable
 headlessly (it requires a tty); the `--version` baseline is a lower bound on
-its process startup. hunk ships features next-hunk does not (inline
-annotations beside code, jj/Sapling detection, extension API); see
-`docs/PLAN.md` 0.9 for the tracked parity list.
+its process startup. Parity context lives in `docs/PLAN.md` 0.10 (inline
+annotations, jj/Sapling, keybindings et al. shipped by 0.10).
+
+### Measured head-to-head: startup + RSS (2026-08-31)
+
+Same machine (AMD Ryzen 7 5700X, Linux), hunk 0.20.0 prebuilt vs next-hunk
+release build. TUI numbers taken in an identical `tmux` 200×50 session,
+`sleep 3` after launch, RSS read from `/proc/<pid>/status` of the exact
+binary process (attribution verified by cmdline).
+
+| Measurement | next-hunk (release) | hunk 0.20.0 | Ratio |
+|---|---|---|---|
+| Process baseline (`--version`) | **2 ms** | 203 ms | ~100× |
+| Headless summary, 1.1 MB / 38k-line diff (`nh inspect`) | **6 ms** | n/a (requires a tty) | — |
+| TUI RSS, 1.1 MB / 38k-line diff (200×50) | **25.8 MB** | 115.7 MB | **4.5× less** |
+| TUI RSS, 191 KB / 7.8k-line real diff (200×50) | **32.5 MB** | 177.8 MB | **5.5× less** |
+| Viewport materialization (40-row window over the huge diff) | **~350 µs** (`viewport_huge_h40`; ~0.35 µs/window amortized over 1000 random windows) | not published | — |
+
+Notes on method: RSS is a single sample after 3 s (both tools idle, post
+first paint — neither grows afterwards without input). hunk's Node/OpenTUI
+runtime carries the interpreter baseline (~100 MB) regardless of diff size,
+which is why the smaller real diff shows a *larger* absolute gap than the
+huge one: next-hunk's RSS is dominated by the diff itself (compact IR),
+hunk's by the runtime. Scroll responsiveness follows from the viewport
+bench + the virtual-row scroll model; hunk publishes no equivalent number
+and we did not instrument its renderer.
 
 ---
 
