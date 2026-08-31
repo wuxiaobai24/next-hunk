@@ -238,7 +238,7 @@ still requires a git object store (any colocated repo has one).
 | `zw` | toggle line wrapping (default off; truncates long lines) |
 | `Tab` / `l` / `→` | next file |
 | `Shift+Tab` / `h` / `←` | previous file |
-| `1`–`9` | jump to the Nth file |
+| `1`–`9` | jump to the Nth file (absolute index, even while filtered) |
 | `}` / `{` | next / previous note (💬 rows, wraps) |
 | `b` | toggle the file-rail sidebar |
 | click file rail | select that file |

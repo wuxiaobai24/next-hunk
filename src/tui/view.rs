@@ -1696,15 +1696,15 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                 )
             };
             let (head, tail) = caret(&app.search.query, app.prompt_cursor);
-            format!("/{head}▌{tail}  (Enter confirm · Esc cancel{live})")
+            format!("/{head}▌{tail}  (Enter confirm · Esc cancel · Ctrl-U/W edit{live})")
         }
         InputMode::Filter => {
             let (head, tail) = caret(&app.path_filter, app.prompt_cursor);
-            format!("filter: {head}▌{tail}  (path substring · Enter confirm · Esc cancel)")
+            format!("filter: {head}▌{tail}  (path substring · Enter confirm · Esc cancel · Ctrl-U/W edit)")
         }
         InputMode::Note => {
             let (head, tail) = caret(&app.note_draft, app.prompt_cursor);
-            format!("note: {head}▌{tail}  (anchored to the cursor row · Enter save · Esc cancel)")
+            format!("note: {head}▌{tail}  (anchored to the cursor row · Enter save · Esc cancel · Ctrl-U/W edit)")
         }
         InputMode::Normal => {
             // Keymap-driven: the hint shows the *live* first key of each
@@ -1861,7 +1861,10 @@ fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
                 "next / previous hunk (wraps files)",
             ),
             HelpRow::Pair(Action::NextFile, Action::PrevFile, "next / previous file"),
-            HelpRow::Static("1-9", "jump to the Nth file"),
+            HelpRow::Static(
+                "1-9",
+                "jump to the Nth file (absolute index, even while filtered)",
+            ),
         ]),
         head,
         key,
@@ -1945,7 +1948,7 @@ fn draw_help_overlay(app: &mut App, frame: &mut Frame) {
     );
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        " j/k scroll · any help key · Esc · Enter  dismiss this help",
+        " j/k scroll · ? / Esc / q / Enter / Space  dismiss this help",
         Style::default().fg(app.theme.edit_mode_fg),
     )));
 
