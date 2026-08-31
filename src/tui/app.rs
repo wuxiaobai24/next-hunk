@@ -249,6 +249,10 @@ pub struct App {
     pub show_notes: bool,
     /// Tab-stop width (columns) for render-time tab expansion (1–16).
     pub tab_width: usize,
+    /// Center the row a navigation jump lands on (vim-style) instead of
+    /// pinning it to the viewport top. `jump_center = false` restores the
+    /// top-pinning behavior.
+    pub jump_center: bool,
     /// Last drawn rail *content* area — the list rows below the pane title,
     /// excluding the right border (`None` when the rail is hidden). Set by
     /// `draw_rail`; mouse hit-testing maps rows against it.
@@ -596,6 +600,7 @@ impl App {
             show_rail: true,
             show_notes: true,
             tab_width: crate::config::DEFAULT_TAB_WIDTH as usize,
+            jump_center: true,
             rail_rect: None,
             stream_rect: None,
             rail_list_offset: 0,
@@ -701,8 +706,16 @@ impl App {
     fn jump_to_stream(&mut self, row: usize) {
         self.collapse.expand_at_stream(row);
         let v = self.collapse.virtual_of_stream(row);
-        self.scroll_y = v.min(self.max_scroll());
         self.cursor_v = v.min(self.collapse.virtual_len().saturating_sub(1));
+        // Land the target mid-viewport (vim-style centered jumps) so the
+        // context above it is visible too; `jump_center = false` pins it to
+        // the top as before. Clamping keeps short streams at the top.
+        let top = if self.jump_center {
+            v.saturating_sub(self.viewport_height.saturating_sub(1) / 2)
+        } else {
+            v
+        };
+        self.scroll_y = top.min(self.max_scroll());
         if let Some(idx) = ViewportQuery::file_at_row(&self.review, row) {
             self.selected_file = idx;
         }
@@ -2199,7 +2212,9 @@ diff --git a/b.rs b/b.rs
             "] arms the remapped sequence"
         );
         app.handle_key(char_key('j'));
-        assert!(app.scroll_y > 0, "]j jumped to the next hunk");
+        // Centered jumps keep the header mid-viewport, so the cursor
+        // position (not scroll) shows the jump happened.
+        assert_eq!(app.cursor_v, 1, "]j jumped to the next hunk header");
     }
 
     #[test]
@@ -3769,10 +3784,11 @@ diff --git a/b.rs b/b.rs
         app.reload_review(&after);
         // Focus should still be set (re-applied to new review).
         // apply_focus should scroll to b.rs start.
-        // after: a.rs rows 0-3, b.rs rows 4-8. viewport_height=4 → max_scroll=4.
+        // after: a.rs rows 0-3, b.rs rows 4-8. viewport_height=4 → centered
+        // focus lands b.rs's header one row below the viewport top.
         let b_start = ViewportQuery::file_start_row(&app.review, 1);
         assert_eq!(b_start, 4, "b.rs should start at row 4");
-        assert_eq!(app.scroll_y, 4, "focus should be re-applied after reload");
+        assert_eq!(app.scroll_y, 3, "focus should be re-applied after reload");
     }
 
     // ---- --focus: apply_focus ----
@@ -3865,6 +3881,23 @@ diff --git a/b.rs b/b.rs
         assert_eq!(s.rejected, vec!["b.rs:h2".to_string()]);
         // The other 2 remain undecided.
         assert_eq!(s.undecided.len(), 2);
+    }
+
+    #[test]
+    fn jump_center_lands_the_target_mid_viewport() {
+        let mut app = two_file_app(); // 8 virtual rows, viewport_height 4
+                                      // Centered (the default): b.rs's header (@4) lands one row below
+                                      // the viewport top so the preceding context stays visible.
+        assert!(app.jump_center);
+        app.handle_key(key(KeyCode::Tab));
+        assert_eq!(app.cursor_v, 4);
+        assert_eq!(app.scroll_y, 3);
+        // jump_center = false pins the target to the viewport top.
+        app.jump_center = false;
+        app.handle_key(key(KeyCode::BackTab)); // back to a.rs (@0)
+        app.handle_key(key(KeyCode::Tab)); // b.rs again
+        assert_eq!(app.cursor_v, 4);
+        assert_eq!(app.scroll_y, 4);
     }
 
     #[test]
@@ -4336,8 +4369,10 @@ diff --git a/a.rs b/a.rs
         // The jump expanded the run containing the first match (pad0, row 3):
         // stream 3 now maps to virtual 3 (identity restored for that run).
         assert_eq!(app.collapse.virtual_of_stream(3), 3);
-        // The viewport shows the match row at the top.
-        assert_eq!(app.scroll_y, 3);
+        // Centered: the match row sits mid-viewport (viewport_height 6 →
+        // two context rows above it), with the cursor on it.
+        assert_eq!(app.scroll_y, 1);
+        assert_eq!(app.cursor_v, 3);
     }
 
     #[test]
@@ -4369,12 +4404,14 @@ diff --git a/a.rs b/a.rs
         app.handle_key(char_key('h'));
         app.handle_key(char_key(']'));
         app.handle_key(char_key('h'));
-        assert_eq!(app.scroll_y, 6);
+        // Centered (viewport_height 4): one context row above the header.
+        assert_eq!(app.scroll_y, 5);
+        assert_eq!(app.cursor_v, 6);
         // The row above the header is the gap marker.
         let rows = crate::ir::ViewportQuery::rows_virtual(
             &app.review,
             crate::ir::Viewport {
-                start: app.scroll_y - 1,
+                start: app.scroll_y,
                 height: 2,
             },
             &app.collapse,

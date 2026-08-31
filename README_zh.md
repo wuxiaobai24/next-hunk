@@ -191,6 +191,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `include_untracked` | bool | `false` | 在工作区 diff 中包含未跟踪文件（`--include-untracked`） |
 | `layout` | string | `"unified"` | `"unified"`（默认，交错显示）、`"stack"`（每文件分旧/新两块）、`"split"`（并排两列）、或 `"auto"`（按流面板宽度自动选 split/stack/unified） |
 | `wrap` | bool | `false` | 在 diff 区折行显示长行（默认截断） |
+| `jump_center` | bool | `true` | 导航跳转（`]h`、搜索、文件跳转）落点居中显示；`false` 固定在视口顶部 |
 | `context_collapse` | int | `8` | 未变上下文折叠：≥ N 行的连续未变内容折叠为一行 `··· N unchanged lines ···` 标记（`0` 关闭；运行时 `zx` 切换） |
 | `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`，或预设：`"flexoki"` / `"flexoki-light"`、`"catppuccin-mocha"` / `"catppuccin-latte"`、`"gruvbox-dark"`、`"nord"`、`"tokyonight"`。`t` 循环模式，`T` 循环调色板。 |
 | `export_on_quit` | string | `"none"` | `diff` / `serve` 退出时输出什么：`"json"` / `"markdown"`（`"md"`）/ `"both"` —— 给 agent 的审查报告（决策 + 批注）；`--export` / `--export-file` 可覆盖 |

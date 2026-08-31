@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — navigation jumps land centered (vim-style)
+
+- **New `jump_center` config (default `true`)**: `]h`/`[h`, search matches
+  (`n`/`N` and live search), file jumps, and `--focus` now land their
+  target row mid-viewport so the context above it is visible, instead of
+  pinning it to the top edge. Set `jump_center = false` for the old
+  top-pinning behavior.
+
 ### Added — the help overlay shows toggle state
 
 - Toggle rows in the `?` overlay now carry their live value — e.g.
