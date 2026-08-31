@@ -23,6 +23,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   final diff line on screen (the scrollbar travel was one row off too).
   Both now count only the rows that actually fit under the title.
 
+### Fixed — width-aware text truncation (CJK overflow)
+
+- `truncate_to_width` (the help/prompt hint line and the status-bar search
+  indicator) measured width in *characters*, not display columns — a CJK
+  query or hint painted past its budget and clipped. It now measures with
+  unicode-width, matching the rail/status truncation helpers.
+
 ### Added — review report export on quit (the human→agent feedback loop)
 
 - **`--export json|markdown|both`** (on `diff` / `serve`) — when the human
