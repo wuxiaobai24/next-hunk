@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — `--select` keys mark the hunk under the cursor
+
+- With two hunks on screen, `a`/`r`/`u` acted on the first hunk header in
+  the viewport, which could be a different hunk than the one the cursor
+  was reading. They now act on the hunk containing the review cursor
+  (falling back to the viewport's first hunk when the cursor is between
+  hunks), then still advance to the next hunk.
+
 ### Fixed — the mouse no longer acts while a prompt is open
 
 - Wheel scrolling or clicking while composing a note (or editing a search /
