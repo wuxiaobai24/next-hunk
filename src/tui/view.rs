@@ -1656,6 +1656,15 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
 
 /// Render the help line, or an input prompt when editing search/filter/notes.
 fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
+    // The ▌ caret sits at the prompt cursor (chars from the start), which
+    // Left/Right/Home/End move — split the draft around it.
+    let caret = |draft: &str, cursor: usize| -> (String, String) {
+        let cursor = cursor.min(draft.chars().count());
+        (
+            draft.chars().take(cursor).collect(),
+            draft.chars().skip(cursor).collect(),
+        )
+    };
     let content = match app.mode {
         InputMode::Search => {
             // Live feedback from the incremental search: where you are in
@@ -1671,22 +1680,16 @@ fn draw_help_or_prompt(app: &App, frame: &mut Frame, area: Rect) {
                     app.search.matches.len()
                 )
             };
-            format!(
-                "/{}▌  (Enter confirm · Esc cancel{})",
-                app.search.query, live
-            )
+            let (head, tail) = caret(&app.search.query, app.prompt_cursor);
+            format!("/{head}▌{tail}  (Enter confirm · Esc cancel{live})")
         }
         InputMode::Filter => {
-            format!(
-                "filter: {}▌  (path substring · Enter confirm · Esc cancel)",
-                app.path_filter
-            )
+            let (head, tail) = caret(&app.path_filter, app.prompt_cursor);
+            format!("filter: {head}▌{tail}  (path substring · Enter confirm · Esc cancel)")
         }
         InputMode::Note => {
-            format!(
-                "note: {}▌  (anchored to the cursor row · Enter save · Esc cancel)",
-                app.note_draft
-            )
+            let (head, tail) = caret(&app.note_draft, app.prompt_cursor);
+            format!("note: {head}▌{tail}  (anchored to the cursor row · Enter save · Esc cancel)")
         }
         InputMode::Normal => {
             // Keymap-driven: the hint shows the *live* first key of each
