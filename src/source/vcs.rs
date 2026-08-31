@@ -192,6 +192,7 @@ mod tests {
     /// verified against the stub (no jj/sl install needed in CI). The patch
     /// is embedded as a heredoc — the stub must run under a stripped PATH
     /// where external tools like `cat` don't exist.
+    #[cfg(unix)]
     fn stub_bin(dir: &Path, name: &str, argv_file: &str, patch: &str) {
         // Each patch line becomes one quoted printf argument — printf is a
         // shell builtin, so the stub works under a stripped PATH.
@@ -215,10 +216,13 @@ mod tests {
 
     /// PATH-mutating tests serialize on this mutex (same pattern as the
     /// config env tests).
+    #[cfg(unix)]
     static PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+    #[cfg(unix)]
     const STUB_PATCH: &str = "diff --git a/f b/f\n--- a/f\n+++ b/f\n@@ -1 +1 @@\n-a\n+b";
 
+    #[cfg(unix)]
     fn with_stub_path(name: &str, f: impl FnOnce(&Path)) {
         let _guard = PATH_MUTEX.lock().unwrap();
         let d = tmp(name);
@@ -233,6 +237,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn argv_of(dir: &Path) -> Vec<String> {
         std::fs::read_to_string(dir.join("argv.txt"))
             .unwrap()
@@ -242,6 +247,7 @@ mod tests {
             .collect()
     }
 
+    #[cfg(unix)]
     #[test]
     fn jj_diff_invokes_jj_with_git_output() {
         with_stub_path("jjdiff", |dir| {
@@ -251,6 +257,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn jj_diff_revset_and_paths() {
         with_stub_path("jjrev", |dir| {
@@ -263,6 +270,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn jj_show_uses_show_git_r() {
         with_stub_path("jjshow", |dir| {
@@ -274,6 +282,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn sl_diff_and_show() {
         with_stub_path("slcmds", |dir| {
@@ -284,6 +293,7 @@ mod tests {
         });
     }
 
+    #[cfg(unix)]
     #[test]
     fn missing_binary_is_a_clear_error() {
         with_stub_path("missing", |dir| {
