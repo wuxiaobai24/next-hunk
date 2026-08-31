@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — help/hint text matches actual behavior
+
+- The help overlay's dismiss footer names the real dismiss keys
+  (`? / Esc / q / Enter / Space`) instead of the vague "any help key";
+  the `1-9` rows (overlay + READMEs) say the index is absolute, i.e. it
+  still jumps while a filter hides files; and the prompt hints advertise
+  the `Ctrl-U/W` line-editing keys.
+
 ### Changed — the startup hint survives `--watch` (and shows it)
 
 - Starting with `--watch` used to replace the sticky startup hint with a
