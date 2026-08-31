@@ -60,6 +60,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   palette remains one keystroke away (`t` cycles dark/light/auto) and
   `theme = "flexoki-light"` / `"light"` still selects it explicitly.
 
+### Fixed — readable attention marks on light backgrounds
+
+- **`highlight add` marks no longer vanish into their fill on light
+  palettes**: a mark paints a solid accent background (the deep 600-level
+  red/blue/green of Flexoki-light / Catppuccin-latte) but left the code
+  text's foreground untouched — dark syntax ink on a dark fill was
+  effectively unreadable. Marks now paint their text in a new `on_accent`
+  theme slot (near-white on the light palettes, ink on the dark ones,
+  whose accents are mid-tone); the light-gold warning fill keeps its dark
+  `match_active_fg` pairing. Locked in by a WCAG-contrast regression gate
+  (every palette's `add` / `delete` / `hunk_header` fills and the gold
+  match fill pair with their text at ≥ 3:1, light and dark) plus a
+  render-level test asserting the marked cells carry the new ink.
+
 ## [0.5.0] - 2026-08-31
 
 ### Added — measured head-to-head perf vs hunk 0.20

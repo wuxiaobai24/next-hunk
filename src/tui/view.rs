@@ -2035,19 +2035,24 @@ fn word_emphasis_style(
     style.add_modifier(Modifier::BOLD | Modifier::REVERSED)
 }
 
-/// Background + underline color for an attention-mark tone. Mapped onto
-/// existing theme slots so every palette (flexoki, catppuccin, …) gets a
-/// sensible tone without new per-palette fields.
+/// Background + foreground color for an attention-mark tone, mapped onto
+/// theme slots so every palette (flexoki, catppuccin, …) gets a sensible
+/// tone without new per-palette fields. The text is painted in `on_accent`
+/// — readable over the solid accent fill in *both* background modes (deep
+/// 600-level fills need light text, mid-tone 400-level fills need ink) —
+/// except the light-gold warning fill, which pairs with the dark
+/// `match_active_fg` ink.
 fn tone_overlay(theme: &crate::tui::theme::Theme, tone: &str) -> Style {
-    let color = match tone {
-        "danger" => theme.delete,
-        "info" => theme.hunk_header,
-        "accent" => theme.add,
+    let (bg, fg) = match tone {
+        "danger" => (theme.delete, theme.on_accent),
+        "info" => (theme.hunk_header, theme.on_accent),
+        "accent" => (theme.add, theme.on_accent),
         // "warning" and anything unrecognized: the active-match gold.
-        _ => theme.match_active_bg,
+        _ => (theme.match_active_bg, theme.match_active_fg),
     };
     Style::default()
-        .bg(color)
+        .fg(fg)
+        .bg(bg)
         .add_modifier(Modifier::UNDERLINED)
 }
 
@@ -2550,6 +2555,61 @@ diff --git a/a.rs b/a.rs
         }
         assert_eq!(marked, 5, "exactly the 5 marked chars carry the tone bg");
         assert!(unmarked > 0, "unmarked chars on the row stay plain");
+    }
+
+    #[test]
+    fn attention_mark_text_is_readable_on_light_theme() {
+        // The light palettes fill marks with deep 600-level accents; without
+        // an explicit foreground the code text (dark on light) vanished into
+        // the fill. Every marked cell must now carry the palette's
+        // `on_accent` ink at a WCAG contrast of ≥ 3 against the fill.
+        use crate::tui::theme::test_support::contrast;
+        let review = parse_unified_diff(
+            "\
+diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old value here
++new value here
+",
+        )
+        .unwrap();
+        // The app default is Flexoki dark; pin the light palette explicitly
+        // under test.
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app.theme = crate::tui::theme::Theme::light();
+        app.highlights.push(crate::tui::app::HighlightMark {
+            id: "hl0".into(),
+            file: "a.rs".into(),
+            line: 1,
+            start: 5, // "value"
+            end: 10,
+            tone: "danger".into(),
+        });
+        let backend = ratatui::backend::TestBackend::new(40, 8);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+
+        let buf = terminal.backend().buffer();
+        let (fill, ink) = (app.theme.delete, app.theme.on_accent);
+        assert!(
+            contrast(ink, fill) >= 3.0,
+            "on_accent must contrast the danger fill (got {:.2})",
+            contrast(ink, fill)
+        );
+        let mut marked = 0;
+        for cell in buf.content().iter().skip(3 * buf.area.width as usize) {
+            if cell.bg == fill {
+                marked += 1;
+                assert_eq!(
+                    cell.fg, ink,
+                    "marked cell must paint the on_accent ink, got {cell:?}"
+                );
+            }
+        }
+        assert_eq!(marked, 5, "the 5 marked chars carry the danger fill");
     }
 
     /// The rail should now render a per-file +/- tally alongside each path.

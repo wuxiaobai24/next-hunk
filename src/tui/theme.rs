@@ -62,6 +62,12 @@ pub struct Theme {
     pub status_bg: Color,
     /// Agent annotation text (`--note` rows).
     pub note: Color,
+    /// Foreground that stays readable painted *on top of* a solid accent
+    /// fill (the `add` / `delete` / `hunk_header` slots). Dark palettes pick
+    /// their ink (their accents are mid-tone), light palettes pick a
+    /// near-white (their accents are deep). Not for the gold match fill —
+    /// that pairs with `match_active_fg`, which is dark on every palette.
+    pub on_accent: Color,
 }
 
 impl Theme {
@@ -87,6 +93,7 @@ impl Theme {
             edit_mode_fg: hex(0xDA702C),      // orange-400 (active prompt)
             status_bg: hex(0x282726),         // base-900 (status band)
             note: hex(0x3AA99F),              // cyan-400 (italic agent notes)
+            on_accent: hex(0x100F0F),         // ink over mid-tone 400-level accents
         }
     }
 
@@ -114,6 +121,7 @@ impl Theme {
             edit_mode_fg: hex(0xBC5215),      // orange-600 (active prompt)
             status_bg: hex(0xE6E4D9),         // base-100 (status band)
             note: hex(0x24837B),              // cyan-600 (italic agent notes)
+            on_accent: hex(0xFFFCF0),         // paper over deep 600-level accents
         }
     }
 
@@ -137,6 +145,7 @@ impl Theme {
             edit_mode_fg: hex(0xFAB387),      // peach (active prompt)
             status_bg: hex(0x181825),         // mantle (status band)
             note: hex(0x94E2D5),              // teal (italic agent notes)
+            on_accent: hex(0x11111B),         // crust over light pastel accents
         }
     }
 
@@ -160,6 +169,7 @@ impl Theme {
             edit_mode_fg: hex(0xFE640B),      // peach (active prompt)
             status_bg: hex(0xE6E9EF),         // mantle (status band)
             note: hex(0x179299),              // teal (italic agent notes)
+            on_accent: hex(0xFFFFFF),         // white over deep accent fills
         }
     }
 
@@ -182,6 +192,7 @@ impl Theme {
             edit_mode_fg: hex(0xFE8019),      // orange (active prompt)
             status_bg: hex(0x3C3836),         // bg1 (status band)
             note: hex(0x8EC07C),              // aqua (italic agent notes)
+            on_accent: hex(0x282828),         // bg0 over mid-tone accents
         }
     }
 
@@ -205,6 +216,7 @@ impl Theme {
             edit_mode_fg: hex(0xD08770),      // nord12 (orange, active prompt)
             status_bg: hex(0x3B4252),         // nord1 (status band)
             note: hex(0x88C0D0),              // nord8 (frost cyan, italic notes)
+            on_accent: hex(0x2E3440),         // nord0 over aurora accents
         }
     }
 
@@ -228,6 +240,7 @@ impl Theme {
             edit_mode_fg: hex(0xFF9E64),      // orange (active prompt)
             status_bg: hex(0x16161E),         // bg_dark (status band)
             note: hex(0x7DCFFF),              // cyan (italic agent notes)
+            on_accent: hex(0x1A1B26),         // bg over mid-tone accents
         }
     }
 }
@@ -489,6 +502,40 @@ pub fn background_is_light() -> bool {
     }
 }
 
+/// WCAG-2 relative-luminance contrast helpers shared by the theme and view
+/// test modules — the regression gate for "text stays readable on every
+/// palette's solid fills, light and dark".
+#[cfg(test)]
+pub(crate) mod test_support {
+    use ratatui::style::Color;
+
+    fn channel(v: u8) -> f64 {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+
+    /// WCAG-2 relative luminance. Panics on non-`Rgb` colors: every themed
+    /// slot is `hex(..)`-built, so hitting another variant means a palette
+    /// regressed to an ANSI literal.
+    pub fn relative_luminance(c: Color) -> f64 {
+        let Color::Rgb(r, g, b) = c else {
+            panic!("non-Rgb color {c:?} in a theme slot");
+        };
+        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+    }
+
+    /// WCAG-2 contrast ratio (1.0 = identical, 21.0 = black on white).
+    pub fn contrast(a: Color, b: Color) -> f64 {
+        let (la, lb) = (relative_luminance(a), relative_luminance(b));
+        let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,6 +703,32 @@ mod tests {
         assert_ne!(d.status_bg, l.status_bg); // base-900 vs base-100
         assert_ne!(d.word_add, l.word_add); // green-300 vs green-400
         assert_ne!(d.match_inactive_bg, l.match_inactive_bg); // base-800 vs base-200
+    }
+
+    #[test]
+    fn on_accent_reads_over_every_accent_fill() {
+        use super::test_support::contrast;
+        for (name, t) in [
+            ("flexoki-dark", Theme::dark()),
+            ("flexoki-light", Theme::light()),
+            ("catppuccin-mocha", Theme::catppuccin_mocha()),
+            ("catppuccin-latte", Theme::catppuccin_latte()),
+            ("gruvbox-dark", Theme::gruvbox_dark()),
+            ("nord", Theme::nord()),
+            ("tokyonight", Theme::tokyonight()),
+        ] {
+            for (slot, bg) in [
+                ("add", t.add),
+                ("delete", t.delete),
+                ("hunk_header", t.hunk_header),
+            ] {
+                let ratio = contrast(t.on_accent, bg);
+                assert!(ratio >= 3.0, "{name}: on_accent over {slot} = {ratio:.2}");
+            }
+            // The gold match fill keeps its ink pairing (match_active_fg).
+            let gold = contrast(t.match_active_fg, t.match_active_bg);
+            assert!(gold >= 3.0, "{name}: match fg over gold = {gold:.2}");
+        }
     }
 
     #[test]
