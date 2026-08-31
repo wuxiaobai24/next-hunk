@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — the startup hint survives `--watch` (and shows it)
+
+- Starting with `--watch` used to replace the sticky startup hint with a
+  4-second "watching for changes…" toast; the hint now re-renders with a
+  `watching — ` prefix instead. The two duplicate copies of the hint's
+  format string (constructor vs. refresh) were also merged into one
+  builder so they can't drift apart.
+
 ### Fixed — serve commands no longer reply `ok` when nothing happened
 
 - `next-hunk navigate` to an unknown file/line/hunk, or a hunk ordinal out
