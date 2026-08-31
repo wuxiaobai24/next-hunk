@@ -6,6 +6,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — persistent toggle badges in the status bar
+
+- View transforms now leave a badge in the status bar, so a toggle's effect
+  outlives its 4-second toast: `WS` (ignoring whitespace), `wd−` (word diff
+  off), `zx−` (context collapse off), and `split`/`stack` (side-by-side or
+  stacked layout; unified stays unbadged). `HL` keeps its existing
+  on-badge.
+
 ### Added — fold state visible in the file rail
 
 - Folded files (`zc`/`zo`) now show in the rail: a fold chevron per row

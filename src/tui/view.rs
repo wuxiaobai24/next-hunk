@@ -1560,6 +1560,26 @@ fn draw_status(app: &App, frame: &mut Frame, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    // Toggle-state badges: which view transforms are currently active, so a
+    // toggle's effect outlives its 4-second toast. Each badge is
+    // self-describing — `WS` = ignoring whitespace, `wd−` = word diff off
+    // (on is the default), `zx−` = context collapse off, `split`/`stack` =
+    // side-by-side/stacked layout; `HL` keeps its long-standing on-badge.
+    let badge = Style::default().fg(app.theme.edit_mode_fg);
+    if app.ignore_ws {
+        spans.push(Span::styled(" WS", badge));
+    }
+    if !app.word_diff_on {
+        spans.push(Span::styled(" wd−", badge));
+    }
+    if !app.collapse_on {
+        spans.push(Span::styled(" zx−", badge));
+    }
+    match app.effective_layout() {
+        crate::config::LayoutMode::Split => spans.push(Span::styled(" split", badge)),
+        crate::config::LayoutMode::Stack => spans.push(Span::styled(" stack", badge)),
+        crate::config::LayoutMode::Unified | crate::config::LayoutMode::Auto => {}
+    }
     // Run-mode badges: make the active mode discoverable. SELECT uses the
     // orange edit color (it's an action mode where a/r/u matter); WATCH/SERVE
     // share the cyan note color. Kept short (≤8 chars) so they don't crowd a
@@ -2760,6 +2780,44 @@ diff --git a/b.rs b/b.rs
         };
         assert!(row(1).contains('▸'), "folded a.rs marked ▸: {}", row(1));
         assert!(row(2).contains('▾'), "open b.rs marked ▾: {}", row(2));
+    }
+
+    #[test]
+    fn status_bar_shows_toggle_state_badges() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.ignore_ws = true;
+        app.word_diff_on = false;
+        app.collapse_on = false;
+        app.layout_mode = crate::config::LayoutMode::Stack;
+        let backend = ratatui::backend::TestBackend::new(80, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+        // Every non-default view transform leaves a persistent badge in the
+        // status bar, outliving the toggle's 4-second toast.
+        assert!(rendered.contains(" WS"), "ignore-ws badge: {rendered}");
+        assert!(rendered.contains(" wd−"), "word-diff-off badge: {rendered}");
+        assert!(rendered.contains(" zx−"), "collapse-off badge: {rendered}");
+        assert!(
+            rendered.contains(" stack"),
+            "stack layout badge: {rendered}"
+        );
     }
 
     /// Search for a term, then render and confirm the current-match row's
