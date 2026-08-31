@@ -133,8 +133,9 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
         .iter()
         .map(|&i| {
             let f = &app.review.files[i];
-            let path = short_path(&f.display_path, 24);
-            let style = if i == app.selected_file {
+            let path = short_path(&f.display_path, 22);
+            let folded = app.folded.contains(&i);
+            let mut style = if i == app.selected_file {
                 Style::default()
                     .fg(app.theme.selection_fg)
                     .bg(app.theme.selection_bg)
@@ -142,6 +143,13 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
             } else {
                 Style::default()
             };
+            // Folded files dim and carry a fold chevron, so `zc`'s effect is
+            // visible at a glance instead of only as rows vanishing from the
+            // stream. The chevron is row chrome — always drawn (▾ open /
+            // ▸ folded) so paths stay column-aligned.
+            if folded {
+                style = style.fg(app.theme.dim).add_modifier(Modifier::DIM);
+            }
             // Compact per-file change tally: `+ins` (green) next to `−del`
             // (red), zero sides omitted (e.g. an add-only file shows `+12`,
             // a pure delete `−3`). Colored so a glance at the rail shows
@@ -154,10 +162,27 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
                 ChangeKind::Deleted => app.theme.delete,
                 ChangeKind::Renamed | ChangeKind::Modified => app.theme.dim,
             };
+            // The chip and chevron sit on the selected row's highlight too,
+            // or the selection bar shows a hole at their columns.
+            let chip_style = if i == app.selected_file {
+                Style::default().fg(chip_color).bg(app.theme.selection_bg)
+            } else {
+                Style::default().fg(chip_color)
+            };
+            let chevron_style = if i == app.selected_file {
+                Style::default()
+                    .fg(app.theme.dim)
+                    .bg(app.theme.selection_bg)
+            } else {
+                Style::default().fg(app.theme.dim)
+            };
             // Note badge: how many agent notes/comments target this file
             // (jump between them with `}`/`{`).
+            // No leading space: 💬 is double-width and the pad span (when
+            // there is room) provides the separation — at tight rail widths
+            // the spare column keeps the count from clipping.
             let badge = match note_counts.get(&i) {
-                Some(&n) if n > 0 => format!(" 💬{n}"),
+                Some(&n) if n > 0 => format!("💬{n}"),
                 _ => String::new(),
             };
             // Pad the path so the tally right-aligns within the row. Widths
@@ -165,13 +190,11 @@ fn draw_rail(app: &mut App, frame: &mut Frame, area: Rect) {
             // paths; the badge is measured the same way (💬 is 2 columns).
             let tail = format!("  {}{}", plus, minus);
             let need_pad = !plus.is_empty() || !minus.is_empty() || !badge.is_empty();
-            let used = head.width() + 2 + path.width();
+            let used = head.width() + 2 + 2 + path.width();
             let mut spans: Vec<Span> = vec![
                 Span::styled(head, style),
-                Span::styled(
-                    format!("{} ", kind.letter()),
-                    Style::default().fg(chip_color),
-                ),
+                Span::styled(format!("{} ", kind.letter()), chip_style),
+                Span::styled(if folded { "▸ " } else { "▾ " }, chevron_style),
                 Span::styled(path, style),
             ];
             if need_pad {
@@ -2702,6 +2725,41 @@ diff --git a/b.rs b/b.rs
             rendered.contains("−1"),
             "rail should show −1 tally: {rendered}"
         );
+    }
+
+    #[test]
+    fn rail_marks_folded_files_with_a_chevron() {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1 +1 @@
+-old
++new value
+diff --git a/b.rs b/b.rs
+--- b/b.rs
++++ b/b.rs
+@@ -1,2 +1,2 @@
+-foo
++bar
+ baz
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.folded.insert(0); // a.rs folded, b.rs open
+        let backend = ratatui::backend::TestBackend::new(40, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(&mut app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        // Rail rows start below the pane title (y=0): a.rs at y=1, b.rs at y=2.
+        let row = |y: u16| -> String {
+            (0..14u16)
+                .map(|x| buf[(x, y)].symbol().chars().next().unwrap_or(' '))
+                .collect()
+        };
+        assert!(row(1).contains('▸'), "folded a.rs marked ▸: {}", row(1));
+        assert!(row(2).contains('▾'), "open b.rs marked ▾: {}", row(2));
     }
 
     /// Search for a term, then render and confirm the current-match row's

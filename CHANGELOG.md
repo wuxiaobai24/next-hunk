@@ -6,6 +6,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — fold state visible in the file rail
+
+- Folded files (`zc`/`zo`) now show in the rail: a fold chevron per row
+  (`▾` open / `▸` folded) and a dimmed row for folded files. Previously
+  the only symptom of folding was body rows vanishing from the stream.
+- The per-file 💬 note badge drops its leading space (the double-width
+  glyph carries the separation), so the chevron column doesn't push the
+  count off narrow rails.
+
 ### Changed — incremental search (live matches while typing)
 
 - **Search is now incremental.** Typing in the `/` prompt computes matches
