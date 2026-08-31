@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — `mouse` config (turn off mouse capture)
+
+- **`mouse = false`** (default `true`) stops the TUI from capturing the
+  mouse, so the terminal's native click-drag text selection works and the
+  TUI is driven purely by the keyboard. Capture is also skipped when
+  resuming after the `$EDITOR` round-trip.
+
 ### Added — real line editing in the prompts
 
 - The `/` search, `f` filter, and `c` note prompts now support cursor

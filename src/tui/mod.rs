@@ -107,11 +107,16 @@ fn suspend_tui() -> Result<()> {
 }
 
 /// Re-enter the alternate screen + raw mode and force a full redraw after the
-/// editor returns. Paired with [`suspend_tui`].
-fn resume_tui(terminal: &mut Tui) -> Result<()> {
+/// editor returns. Paired with [`suspend_tui`]. `mouse` re-enables capture
+/// only when the config asked for it.
+fn resume_tui(terminal: &mut Tui, mouse: bool) -> Result<()> {
     enable_raw_mode().context("enable raw mode")?;
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
-        .context("enter alternate screen")?;
+    if mouse {
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+            .context("enter alternate screen")?;
+    } else {
+        execute!(io::stdout(), EnterAlternateScreen).context("enter alternate screen")?;
+    }
     // ratatui diffs against the last buffer, which is now stale; force a full
     // repaint by resizing the backend area to itself (flushes the diff cache).
     let area = terminal.get_frame().area();
@@ -166,8 +171,15 @@ pub fn run_review_tui(
 
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
-    execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
-        .context("enter alternate screen")?;
+                               // Mouse capture is on by default; `mouse = false` leaves the terminal's
+                               // native text selection alone. (DisableMouseCapture on exit is harmless
+                               // when it was never enabled.)
+    if settings.mouse {
+        execute!(io::stdout(), EnterAlternateScreen, EnableMouseCapture)
+            .context("enter alternate screen")?;
+    } else {
+        execute!(io::stdout(), EnterAlternateScreen).context("enter alternate screen")?;
+    }
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend).context("create terminal")?;
@@ -225,9 +237,11 @@ pub fn run_review_tui(
         server.as_ref(),
         Some(hl_worker),
         options.watch,
+        settings.mouse,
     )
 }
 
+#[allow(clippy::too_many_arguments)] // the loop's inputs are distinct concerns
 fn run_loop(
     terminal: &mut Tui,
     app: &mut App,
@@ -236,6 +250,7 @@ fn run_loop(
     #[allow(unused_variables)] server: Option<&ServerArg>,
     hl_worker: Option<crate::highlight::HighlightWorker>,
     watch_enabled: bool,
+    mouse: bool,
 ) -> Result<ReviewReport> {
     // If a reloader was provided, start a filesystem watcher for the current
     // directory. Watcher setup can fail (e.g. feature off, permissions); in
@@ -338,7 +353,7 @@ fn run_loop(
             if let Some(target) = app.open_request.take() {
                 suspend_tui()?;
                 let result = launch_editor(&target, workdir.as_deref());
-                resume_tui(terminal)?;
+                resume_tui(terminal, mouse)?;
                 match result {
                     Ok(msg) => app.set_success(msg),
                     Err(e) => app.set_error(format!("open failed: {e}")),
