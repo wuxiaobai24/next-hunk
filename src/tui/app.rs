@@ -1056,6 +1056,13 @@ impl App {
     /// behavior is exercisable headlessly, the same as keys.
     pub fn handle_mouse(&mut self, ev: MouseEvent) {
         let half = (self.viewport_height.max(1) / 2) as i64;
+        // Text input (search / filter / note composition) owns the keyboard
+        // and the viewport anchor: a wheel or click mid-composition moves
+        // the view under the draft and is almost never intended. Mouse
+        // events wait until the prompt closes.
+        if self.mode != InputMode::Normal {
+            return;
+        }
         // With the help overlay up the wheel scrolls the panel, not the
         // review hidden behind it.
         if self.show_help {
@@ -3974,6 +3981,52 @@ diff --git a/b.rs b/b.rs
         assert_eq!(app.selected_file, 1);
         assert_eq!(app.scroll_y, 4);
         assert!(app.status.contains("b.rs"));
+    }
+
+    #[test]
+    fn mouse_is_ignored_during_text_input() {
+        use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+        use ratatui::layout::Rect;
+
+        let mut app = two_file_app();
+        app.rail_rect = Some(Rect {
+            x: 0,
+            y: 1,
+            width: 20,
+            height: 9,
+        });
+        app.stream_rect = Some(Rect {
+            x: 0,
+            y: 1,
+            width: 80,
+            height: 9,
+        });
+        // Note composition owns the keyboard and the viewport anchor.
+        app.handle_key(char_key('c'));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 30,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0,
+            row: 2,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.mode, InputMode::Note);
+        assert_eq!(app.scroll_y, 0, "wheel must not scroll under the draft");
+        assert_eq!(app.cursor_v, 0, "clicks must not move the anchor");
+        // Back in normal mode the same events work again.
+        app.handle_key(key(KeyCode::Esc));
+        app.handle_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 30,
+            row: 3,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(app.scroll_y, 1);
     }
 
     #[test]

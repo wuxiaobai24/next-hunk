@@ -6,6 +6,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — the mouse no longer acts while a prompt is open
+
+- Wheel scrolling or clicking while composing a note (or editing a search /
+  filter) scrolled the diff under the draft and moved the anchor row. The
+  mouse is now inert during text input and works again once the prompt
+  closes.
+
 ### Fixed — tiny terminals fail fast with a readable message
 
 - Starting a review in a terminal smaller than 20×4 (e.g. a popup pane)
