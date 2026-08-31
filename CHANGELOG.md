@@ -44,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cycle keeps its status badge (a suffix would clip at the overlay's
   64-column width).
 
+### Fixed — rail `+ins/−del` tally was clipped off most terminal widths
+
+- The rail's per-file path was capped at a fixed 22 columns regardless of
+  the rail's actual width, so on an 80-column terminal the right-aligned
+  tally (and often the 💬 badge) painted past the rail's inner edge and
+  was clipped away — visible only on ≳110-column terminals. The path
+  budget is now derived from the row: whatever is left after the index,
+  chip, chevron, tally, and badge. The tally-visibility test now asserts
+  inside the rail area only (it previously passed for the wrong reason:
+  the stream pane's own file-header stats matched the assertion).
+
 ### Fixed — `--select` keys mark the hunk under the cursor
 
 - With two hunks on screen, `a`/`r`/`u` acted on the first hunk header in
