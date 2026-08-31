@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — serve commands no longer reply `ok` when nothing happened
+
+- `next-hunk navigate` to an unknown file/line/hunk, or a hunk ordinal out
+  of range, used to reply `ok` while the TUI silently fell back to the
+  top of the file; it now replies with a `focus not found: …` error.
+- `next-hunk comment add` on an unknown file or an out-of-range hunk used
+  to reply `ok: comment added with id cN` while the note rendered
+  nowhere; it now rejects with the same validation as `comment` batches.
+- `next-hunk navigate --next-note` with notes hidden (`agent_notes =
+  false`) now says so instead of reporting "no notes in this diff".
+
 ### Added — status-bar badge while a two-key sequence is armed
 
 - Pressing `]`, `[`, or `z` (the two-key prefixes) now shows a persistent

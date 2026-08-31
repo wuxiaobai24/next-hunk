@@ -543,13 +543,42 @@ fn apply_server_command(
             ServerReply::Review(server::ReviewSummary::from(&app.review))
         }
         ServerCommand::Navigate { target } => {
-            // Set focus target and apply it (same path as --focus).
+            // Validate before mutating: an unknown target gets an Error
+            // reply, not a silent top-of-file fallback plus a lying `ok`.
+            use crate::tui::app::FocusTarget;
+            let resolves = match &target {
+                FocusTarget::File(p) => {
+                    crate::ir::ViewportQuery::file_index_for_path(&app.review, p).is_some()
+                }
+                FocusTarget::FileLine(p, line) => {
+                    crate::ir::ViewportQuery::file_index_for_path(&app.review, p)
+                        .and_then(|fi| {
+                            crate::ir::ViewportQuery::row_for_new_line(&app.review, fi, *line)
+                        })
+                        .is_some()
+                }
+                FocusTarget::FileHunk(p, h) => {
+                    // CLI hunk ordinals are 1-based.
+                    crate::ir::ViewportQuery::file_index_for_path(&app.review, p)
+                        .map(|fi| *h >= 1 && *h <= app.review.files[fi].hunks.len())
+                        .unwrap_or(false)
+                }
+            };
+            if !resolves {
+                return ServerReply::Error {
+                    message: format!("focus not found: {}", app::focus_display(&target)),
+                };
+            }
             app.focus_target = Some(target);
             app.apply_focus();
             ServerReply::Ok
         }
         ServerCommand::NoteJump { next } => {
-            if app.annotated_rows().is_empty() {
+            if !app.show_notes {
+                ServerReply::Error {
+                    message: "notes are hidden (agent_notes = false)".into(),
+                }
+            } else if app.annotated_rows().is_empty() {
                 ServerReply::Error {
                     message: "no notes in this diff".into(),
                 }
@@ -565,6 +594,28 @@ fn apply_server_command(
             hunk,
             focus,
         } => {
+            // Validate before mutating: an unknown file or out-of-range
+            // hunk is an Error reply, not a note that silently renders
+            // nowhere (same rules as CommentApplyBatch).
+            match crate::ir::ViewportQuery::file_index_for_path(&app.review, &file) {
+                None => {
+                    return ServerReply::Error {
+                        message: format!("comment targets unknown file `{file}`"),
+                    }
+                }
+                Some(fi) => {
+                    let hunk_count = app.review.files[fi].hunks.len();
+                    if let Some(h) = hunk {
+                        if h == 0 || h > hunk_count {
+                            return ServerReply::Error {
+                                message: format!(
+                                    "`{file}` has {hunk_count} hunk(s); hunk {h} is out of range"
+                                ),
+                            };
+                        }
+                    }
+                }
+            }
             use std::sync::atomic::Ordering;
             let id = format!("c{}", COMMENT_SEQ.fetch_add(1, Ordering::SeqCst));
             let entry = crate::tui::app::CommentEntry {
@@ -1812,6 +1863,93 @@ diff --git a/a.rs b/a.rs
         assert_eq!(app.comments.len(), 1);
         // …and `--focus` moved the cursor onto the target row (+new = row 3).
         assert_eq!(app.cursor_v, 3);
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn navigate_unknown_target_replies_error() {
+        use crate::tui::app::FocusTarget;
+        use crate::tui::server::{ServerCommand, ServerReply};
+        let mut app = select_sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::Navigate {
+                target: FocusTarget::File("nope.rs".into()),
+            },
+            None,
+        );
+        assert!(
+            matches!(reply, ServerReply::Error { .. }),
+            "unknown file must error, not lie with ok"
+        );
+        assert!(app.focus_target.is_none(), "invalid target not consumed");
+        // A known target still navigates.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::Navigate {
+                target: FocusTarget::File("a.rs".into()),
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Ok));
+        // An out-of-range hunk errors too.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::Navigate {
+                target: FocusTarget::FileHunk("a.rs".into(), 7),
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Error { .. }));
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn comment_add_validates_file_and_hunk() {
+        use crate::tui::server::{ServerCommand, ServerReply};
+        let mut app = select_sample_app();
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "nope.rs".into(),
+                text: "x".into(),
+                line: None,
+                hunk: None,
+                focus: false,
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Error { .. }));
+        assert!(app.notes.is_empty(), "no note may be created");
+        // Out-of-range hunk ordinal (1-based) errors too.
+        let reply = apply_server_command(
+            &mut app,
+            ServerCommand::CommentAdd {
+                file: "a.rs".into(),
+                text: "x".into(),
+                line: None,
+                hunk: Some(5),
+                focus: false,
+            },
+            None,
+        );
+        assert!(matches!(reply, ServerReply::Error { .. }));
+        assert!(app.comments.is_empty());
+    }
+
+    #[test]
+    #[cfg(all(feature = "serve", unix))]
+    fn note_jump_distinguishes_hidden_from_missing() {
+        use crate::tui::server::{ServerCommand, ServerReply};
+        let mut app = select_sample_app();
+        app.show_notes = false;
+        let reply = apply_server_command(&mut app, ServerCommand::NoteJump { next: true }, None);
+        match reply {
+            ServerReply::Error { message } => {
+                assert!(message.contains("hidden"), "{message}")
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]
