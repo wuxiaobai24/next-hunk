@@ -6,6 +6,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed — a failing `$EDITOR` no longer reports success
+
+- `o` with an editor that exits non-zero (bad args, editor error) rendered
+  a green "success" toast reading `editor exited …`. It now surfaces as a
+  red error toast like every other open failure.
+
 ### Fixed — `zc`/`zo` fold the file the cursor is in, not the rail's
 
 - After a pure scroll (mouse wheel), the rail selection trails the viewport
