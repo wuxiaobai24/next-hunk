@@ -6,6 +6,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed — docs synced with current behavior
+
+- README_zh: added the `T`/`L` keybinding rows, the `cursor_line`,
+  `tab_width`, `sidebar`, `agent_notes`, and `[keybindings]` config rows,
+  and corrected the sessions claim — every interactive review
+  (`diff`/`show`/`serve`) is agent-addressable; `serve` is the persistent
+  variant, not the only sessionful mode.
+- SKILL.md: the human's-keys list now includes `c`, `Esc`, `}`/`{`, `f`,
+  and `?`; the theme-cycle phrasing matches the README.
+- config field docs (`theme`, `layout`, `cursor_line`) now name every
+  accepted value; the `export_on_quit` warning lists the `md` alias.
+
 ### Changed — help/hint text matches actual behavior
 
 - The help overlay's dismiss footer names the real dismiss keys

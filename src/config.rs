@@ -146,9 +146,13 @@ pub struct Config {
     pub line_numbers: Option<bool>,
     /// Include untracked files in worktree diff.
     pub include_untracked: Option<bool>,
-    /// TUI theme name: "dark" / "light" / "auto" (auto = detect via $COLORFGBG).
+    /// TUI theme name: a preset (`flexoki`, `flexoki-light`, `catppuccin`,
+    /// `catppuccin-mocha`, `catppuccin-latte`, `gruvbox`, `nord`,
+    /// `tokyonight`) or the legacy mode names `dark` / `light` / `auto`
+    /// (auto = detect via $COLORFGBG).
     pub theme: Option<String>,
-    /// Layout mode: "unified" (default) or "stack".
+    /// Layout mode: "unified" (default), "stack", "split", or "auto"
+    /// (picks by terminal width).
     pub layout: Option<String>,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: Option<bool>,
@@ -158,7 +162,8 @@ pub struct Config {
     /// Center the row a navigation jump lands on (`]h`, search, file jumps)
     /// in the viewport instead of pinning it to the top. Default true.
     pub jump_center: Option<bool>,
-    /// Show the review cursor row ("row", default) or hide it ("off").
+    /// Show the review cursor row (`"on"`/`"true"`, default) or hide it
+    /// (`"off"`/`"false"`; case-insensitive).
     pub cursor_line: Option<String>,
     /// Tab-stop width (columns) for rendering tabs in diff lines, 1–16.
     /// Default 4. (`--tab-width` overrides.)
@@ -274,10 +279,11 @@ pub struct ResolvedConfig {
     pub line_numbers: bool,
     /// Include untracked files in worktree diff. OFF by default (safe).
     pub include_untracked: bool,
-    /// TUI theme name ("dark" / "light" / "auto"). `None` = use the app default
-    /// (dark). Config-only in this pass — no CLI flag yet.
+    /// TUI theme name (see [`Config::theme`] for the accepted presets).
+    /// `None` = use the app default (flexoki dark).
     pub theme: Option<String>,
-    /// Layout mode for the diff stream: "unified" (default) or "stack".
+    /// Layout mode for the diff stream: "unified" (default), "stack",
+    /// "split", or "auto".
     pub layout: LayoutMode,
     /// Wrap long lines in the diff stream pane. `false` = truncate (default).
     pub wrap: bool,
@@ -453,7 +459,7 @@ fn config_warnings(cfg: &Config, cli_tab_width: Option<u32>) -> Vec<String> {
         let e = e.trim().to_lowercase();
         if !matches!(e.as_str(), "none" | "json" | "markdown" | "md" | "both") {
             out.push(format!(
-                "unknown export_on_quit {e:?} (valid: none, json, markdown, both) — using none"
+                "unknown export_on_quit {e:?} (valid: none, json, markdown/md, both) — using none"
             ));
         }
     }

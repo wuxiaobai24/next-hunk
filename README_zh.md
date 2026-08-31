@@ -163,7 +163,9 @@ nh inspect path/to.patch    # IR 摘要，不开 TUI（脚本用）
 | `#` | 切换行号显示 |
 | `w` | 切换词级行内 diff |
 | `W` | 切换忽略空白（隐藏仅空白变化） |
-| `t` | 循环主题：light → auto → dark |
+| `t` | 循环主题模式：dark → light → auto |
+| `T` | 循环主题调色板：flexoki → catppuccin → gruvbox → nord → tokyonight |
+| `L` | 循环布局：unified → split → stack（auto 按宽度自动选） |
 | `/` | 搜索 diff 内容（`n`/`N` 下一个/上一个） |
 | `f` | 按路径子串过滤文件栏 |
 | `c` | 在光标行写注释（Enter 保存 · Esc 取消） |
@@ -196,6 +198,11 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `context_collapse` | int | `8` | 未变上下文折叠：≥ N 行的连续未变内容折叠为一行 `··· N unchanged lines ···` 标记（`0` 关闭；运行时 `zx` 切换） |
 | `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`，或预设：`"flexoki"` / `"flexoki-light"`、`"catppuccin-mocha"` / `"catppuccin-latte"`、`"gruvbox-dark"`、`"nord"`、`"tokyonight"`。`t` 循环模式，`T` 循环调色板。 |
 | `export_on_quit` | string | `"none"` | `diff` / `serve` 退出时输出什么：`"json"` / `"markdown"`（`"md"`）/ `"both"` —— 给 agent 的审查报告（决策 + 批注）；`--export` / `--export-file` 可覆盖 |
+| `cursor_line` | string | `"on"` | 显示审查光标行（`"off"` 隐藏高亮，导航不受影响） |
+| `tab_width` | int | `4` | 渲染时制表符展开的列宽（1–16；`--tab-width` 可覆盖） |
+| `sidebar` | bool/`"auto"` | `true` | 启动时显示左侧文件栏（`b` 运行时切换） |
+| `agent_notes` | bool | `true` | 渲染 💬 注释（`false` = 纯 diff 视图） |
+| `[keybindings]` | table | — | 重映射任意动作的按键；见 `?` 帮助面板（完整文档见 [README.md](./README.md#remapping-keys)） |
 
 示例 `~/.config/next-hunk/config.toml`:
 
@@ -268,7 +275,7 @@ JSON 形状(`--select` 输出的超集):
 
 ### Server 模式（常驻 TUI + 实时推送）
 
-默认是**无状态**的（每次 `next-hunk diff` 都是一次性进程）。可选 **server 模式**让 agent 把多次更新流式推送到单个常驻 TUI，并实时读取人的决策，无需每次交互重启进程：
+每个交互式审查（`diff` / `show` / `serve`）都是一个 agent 可寻址的会话（`next-hunk list` / `get` / `context` / `review` / `navigate` / `comment` / `reload` 可实时操作）。**server 模式**是其中的常驻变体：agent 把多次更新流式推送到单个持久 TUI，并实时读取人的决策，无需每次交互重启进程：
 
 ```bash
 # 人打开常驻审查 TUI（select 模式自动开启）：

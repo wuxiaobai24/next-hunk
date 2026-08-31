@@ -335,8 +335,13 @@ Once the TUI is open, the human navigates with:
 - `#` — toggle line-number gutter
 - `w` — toggle word-level inline diff
 - `W` — toggle ignore-whitespace
-- `t` — cycle theme (light → auto → dark)
+- `t` — cycle theme (dark → light → auto)
 - `/` — search; `n`/`N` next/prev match
+- `c` — compose a note on the cursor row (Enter save · Esc cancel)
+- `}` / `{` — next / previous note
+- `f` — filter the file rail by path substring
+- `?` — full-screen keybinding help (lists the live bindings)
+- `Esc` — cancel (clears an active search / armed key sequence; never quits)
 - `q` — quit (in `--select`/`serve` mode, emits decisions JSON on quit)
 
 ## Examples

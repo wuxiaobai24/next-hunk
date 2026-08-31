@@ -249,6 +249,7 @@ still requires a git object store (any colocated repo has one).
 | `W` | toggle ignore-whitespace (hide whitespace-only changes) |
 | `t` | cycle theme mode: dark → light → auto |
 | `T` | cycle theme palette: flexoki → catppuccin → gruvbox → nord → tokyonight |
+| `L` | cycle layout: unified → split → stack (auto-resolves by width) |
 | `/` | search diff content (then `n`/`N` next/prev) |
 | `f` | filter file rail by path substring |
 | `c` | compose a note on the cursor row (Enter save · Esc cancel) |
