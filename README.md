@@ -403,6 +403,15 @@ A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when
 and how to call next-hunk — install it into your agent's skills directory. See
 the skill file for the full decision guide and examples.
 
+### pi coding agent extension
+
+For the [pi](https://github.com/earendil-works/pi) coding agent, this repo
+ships a native extension (`pi/next-hunk.ts`) that exposes the session workflow
+as first-class tools (`nh_inspect`, `nh_sessions`, `nh_review`, `nh_context`,
+`nh_navigate`, `nh_comment`, `nh_highlight`, `nh_push`, `nh_reload`,
+`nh_decision`) plus a `/nh` status command — no shell calls or skill loading
+required. See `pi/README.md` for install and usage.
+
 ### Sessions (persistent TUI + live push)
 
 Every interactive review (`diff`, `show`, `serve`) is an **agent-addressable

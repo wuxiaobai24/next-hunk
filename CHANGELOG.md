@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added — pi coding agent extension
+
+- A native extension for the [pi coding agent](https://github.com/earendil-works/pi)
+  (`pi/next-hunk.ts`): the agent-bridge session workflow (inspect, review,
+  context, navigate, comment, highlight, push, reload, decision) is exposed
+  as first-class pi tools with self-describing schemas, plus a `/nh` status
+  command and a session-start check that surfaces a running review. The
+  extension resolves `nh`/`next-hunk` (or `NEXT_HUNK_BIN`), and when no
+  review session is live it tells the model to ask the human to open one
+  instead of failing with a raw socket error. See `pi/README.md`.
+
 ### Fixed — CLI messaging cleanups
 
 - The "`--watch` requires the `watch` feature" note now also prints in
