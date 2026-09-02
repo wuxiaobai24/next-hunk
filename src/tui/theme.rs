@@ -38,6 +38,13 @@ pub struct Theme {
     pub word_add: Color,
     /// Word-level emphasis color for changed words on Delete lines.
     pub word_del: Color,
+    /// Full-row background tint for Add lines — a faint wash of the `add`
+    /// hue so changed rows stand out without hurting syntax colors. Close
+    /// to the terminal background by design; the `+` sign still carries the
+    /// saturated `add` foreground.
+    pub add_bg: Color,
+    /// Full-row background tint for Delete lines.
+    pub del_bg: Color,
     /// Dimmed text: meta (`\`), line-number gutter, normal-mode indicator.
     pub dim: Color,
     /// File header line (`diff --git` / path).
@@ -79,21 +86,27 @@ impl Theme {
             delete: hex(0xD14D41), // red-400
             // Word-level emphasis is rendered reversed+bold, so the brighter
             // 300-level shades become solid color blocks that pop on dark.
-            word_add: hex(0xA0AF54),          // green-300
-            word_del: hex(0xE8705F),          // red-300
+            word_add: hex(0xA0AF54), // green-300
+            word_del: hex(0xE8705F), // red-300
+            // Row tints sit just off the black background (~15% accent mixed
+            // in): enough to spot a changed row, subtle enough for syntax fg.
+            add_bg: hex(0x212415),            // green wash over black
+            del_bg: hex(0x2D1816),            // red wash over black
             dim: hex(0x878580),               // base-500 (gutter, meta, help line)
             file_header: hex(0xCE5D97),       // magenta-400 (bold)
             hunk_header: hex(0x4385BE),       // blue-400 (bold)
             selection_fg: hex(0xFFFCF0),      // paper
-            selection_bg: hex(0x575653),      // base-700 (rail bar)
+            selection_bg: hex(0x403E3C),      // base-800 (rail bar)
             match_active_fg: hex(0x100F0F),   // black
             match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
             match_inactive_bg: hex(0x403E3C), // base-800 (subdued)
-            cursor_bg: hex(0x575653),         // base-700 (review cursor row)
-            edit_mode_fg: hex(0xDA702C),      // orange-400 (active prompt)
-            status_bg: hex(0x282726),         // base-900 (status band)
-            note: hex(0x3AA99F),              // cyan-400 (italic agent notes)
-            on_accent: hex(0x100F0F),         // ink over mid-tone 400-level accents
+            // The review cursor row used base-700 flat gray, which drowned
+            // syntax colors; one step below inactive matches keeps text legible.
+            cursor_bg: hex(0x363531),    // between base-900 and base-800
+            edit_mode_fg: hex(0xDA702C), // orange-400 (active prompt)
+            status_bg: hex(0x282726),    // base-900 (status band)
+            note: hex(0x3AA99F),         // cyan-400 (italic agent notes)
+            on_accent: hex(0x100F0F),    // ink over mid-tone 400-level accents
         }
     }
 
@@ -105,10 +118,13 @@ impl Theme {
     /// pops without fighting the line color.
     pub fn light() -> Self {
         Self {
-            add: hex(0x66800B),               // green-600
-            delete: hex(0xAF3029),            // red-600
-            word_add: hex(0x879A39),          // green-400
-            word_del: hex(0xD14D41),          // red-400
+            add: hex(0x66800B),      // green-600
+            delete: hex(0xAF3029),   // red-600
+            word_add: hex(0x879A39), // green-400
+            word_del: hex(0xD14D41), // red-400
+            // Tints are a faint accent wash over the paper background (~12%).
+            add_bg: hex(0xEDEBD5),            // green wash over paper
+            del_bg: hex(0xF5E1D8),            // red wash over paper
             dim: hex(0x6F6E69),               // base-600 (gutter, meta, help line)
             file_header: hex(0xA02F6F),       // magenta-600 (bold)
             hunk_header: hex(0x205EA6),       // blue-600 (bold)
@@ -116,12 +132,13 @@ impl Theme {
             selection_bg: hex(0xCECDC3),      // base-200 (rail bar)
             match_active_fg: hex(0x100F0F),   // black
             match_active_bg: hex(0xDFB431),   // yellow-300 (gold match)
-            match_inactive_bg: hex(0xCECDC3), // base-200 (subdued)
-            cursor_bg: hex(0xB7B5AC),         // base-300 (review cursor row)
-            edit_mode_fg: hex(0xBC5215),      // orange-600 (active prompt)
-            status_bg: hex(0xE6E4D9),         // base-100 (status band)
-            note: hex(0x24837B),              // cyan-600 (italic agent notes)
-            on_accent: hex(0xFFFCF0),         // paper over deep 600-level accents
+            match_inactive_bg: hex(0xD5D3C8), // between base-200/300 (subdued)
+            // See dark(): the cursor row gets the palest fill so text stays.
+            cursor_bg: hex(0xE6E4D9),    // base-100 (review cursor row)
+            edit_mode_fg: hex(0xBC5215), // orange-600 (active prompt)
+            status_bg: hex(0xE6E4D9),    // base-100 (status band)
+            note: hex(0x24837B),         // cyan-600 (italic agent notes)
+            on_accent: hex(0xFFFCF0),    // paper over deep 600-level accents
         }
     }
 
@@ -133,15 +150,17 @@ impl Theme {
             delete: hex(0xF38BA8),            // red
             word_add: hex(0xA6E3A1),          // green (rendered reversed+bold)
             word_del: hex(0xF38BA8),          // red
+            add_bg: hex(0x333C40),            // washed green over base
+            del_bg: hex(0x3E2E40),            // washed red over base
             dim: hex(0x6C7086),               // overlay0
             file_header: hex(0xCBA6F7),       // mauve (bold)
             hunk_header: hex(0x89B4FA),       // blue (bold)
             selection_fg: hex(0xCDD6F4),      // text
-            selection_bg: hex(0x45475A),      // surface1 (rail bar)
+            selection_bg: hex(0x313244),      // surface0 (rail bar)
             match_active_fg: hex(0x11111B),   // crust
             match_active_bg: hex(0xF9E2AF),   // yellow (gold match)
             match_inactive_bg: hex(0x313244), // surface0 (subdued)
-            cursor_bg: hex(0x45475A),         // surface1 (review cursor row)
+            cursor_bg: hex(0x242631),         // between mantle and surface0
             edit_mode_fg: hex(0xFAB387),      // peach (active prompt)
             status_bg: hex(0x181825),         // mantle (status band)
             note: hex(0x94E2D5),              // teal (italic agent notes)
@@ -157,15 +176,17 @@ impl Theme {
             delete: hex(0xD20F39),            // red
             word_add: hex(0x40A02B),          // green
             word_del: hex(0xD20F39),          // red
+            add_bg: hex(0xD9E6DD),            // washed green over base
+            del_bg: hex(0xEBD5DF),            // washed red over base
             dim: hex(0x6C6F85),               // subtext0
             file_header: hex(0x8839EF),       // mauve (bold)
             hunk_header: hex(0x1E66F5),       // blue (bold)
             selection_fg: hex(0x4C4F69),      // text
-            selection_bg: hex(0xBCC0CC),      // surface1 (rail bar)
+            selection_bg: hex(0xCCD0DA),      // surface0 (rail bar)
             match_active_fg: hex(0x4C4F69),   // text on gold
             match_active_bg: hex(0xDF8E1D),   // yellow (gold match)
             match_inactive_bg: hex(0xCCD0DA), // surface0 (subdued)
-            cursor_bg: hex(0xBCC0CC),         // surface1 (review cursor row)
+            cursor_bg: hex(0xDBDEE3),         // between mantle and surface0
             edit_mode_fg: hex(0xFE640B),      // peach (active prompt)
             status_bg: hex(0xE6E9EF),         // mantle (status band)
             note: hex(0x179299),              // teal (italic agent notes)
@@ -180,15 +201,17 @@ impl Theme {
             delete: hex(0xFB4934),            // red
             word_add: hex(0xB8BB26),          // green
             word_del: hex(0xFB4934),          // red
+            add_bg: hex(0x3D3E28),            // washed green over bg0
+            del_bg: hex(0x482D2A),            // washed red over bg0
             dim: hex(0xA89984),               // fg4 (gutter, meta, help line)
             file_header: hex(0xD3869B),       // purple (bold)
             hunk_header: hex(0x83A598),       // blue (bold)
             selection_fg: hex(0xEBDBB2),      // fg
-            selection_bg: hex(0x504945),      // bg2 (rail bar)
+            selection_bg: hex(0x3C3836),      // bg1 (rail bar)
             match_active_fg: hex(0x282828),   // bg0
             match_active_bg: hex(0xFABD2F),   // yellow (gold match)
             match_inactive_bg: hex(0x3C3836), // bg1 (subdued)
-            cursor_bg: hex(0x504945),         // bg2 (review cursor row)
+            cursor_bg: hex(0x323030),         // between bg0 and bg1
             edit_mode_fg: hex(0xFE8019),      // orange (active prompt)
             status_bg: hex(0x3C3836),         // bg1 (status band)
             note: hex(0x8EC07C),              // aqua (italic agent notes)
@@ -204,15 +227,17 @@ impl Theme {
             delete: hex(0xBF616A),            // nord11 (red)
             word_add: hex(0xA3BE8C),          // nord14
             word_del: hex(0xBF616A),          // nord11
+            add_bg: hex(0x3F434B),            // washed green over polar night
+            del_bg: hex(0x433646),            // washed red over polar night
             dim: hex(0x4C566A),               // nord3 (gutter, meta, help line)
             file_header: hex(0xB48EAD),       // nord15 (purple, bold)
             hunk_header: hex(0x81A1C1),       // nord9 (frost blue, bold)
             selection_fg: hex(0xECEFF4),      // nord6 (snow)
-            selection_bg: hex(0x434C5E),      // nord2 (rail bar)
+            selection_bg: hex(0x3B4252),      // nord1 (rail bar)
             match_active_fg: hex(0x2E3440),   // nord0
             match_active_bg: hex(0xEBCB8B),   // nord13 (gold match)
             match_inactive_bg: hex(0x3B4252), // nord1 (subdued)
-            cursor_bg: hex(0x434C5E),         // nord2 (review cursor row)
+            cursor_bg: hex(0x353B49),         // between nord0 and nord1
             edit_mode_fg: hex(0xD08770),      // nord12 (orange, active prompt)
             status_bg: hex(0x3B4252),         // nord1 (status band)
             note: hex(0x88C0D0),              // nord8 (frost cyan, italic notes)
@@ -228,6 +253,8 @@ impl Theme {
             delete: hex(0xF7768E),            // red
             word_add: hex(0x9ECE6A),          // green
             word_del: hex(0xF7768E),          // red
+            add_bg: hex(0x2E3630),            // washed green over night
+            del_bg: hex(0x3B2936),            // washed red over night
             dim: hex(0x565F89),               // comment (gutter, meta, help line)
             file_header: hex(0xBB9AF7),       // magenta (bold)
             hunk_header: hex(0x7AA2F7),       // blue (bold)
@@ -236,7 +263,7 @@ impl Theme {
             match_active_fg: hex(0x1A1B26),   // bg
             match_active_bg: hex(0xE0AF68),   // yellow (gold match)
             match_inactive_bg: hex(0x414868), // terminal_black (subdued)
-            cursor_bg: hex(0x292E42),         // bg_highlight (review cursor row)
+            cursor_bg: hex(0x20222F),         // between bg_dark and bg_highlight
             edit_mode_fg: hex(0xFF9E64),      // orange (active prompt)
             status_bg: hex(0x16161E),         // bg_dark (status band)
             note: hex(0x7DCFFF),              // cyan (italic agent notes)

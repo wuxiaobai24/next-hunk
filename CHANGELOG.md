@@ -4,6 +4,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added — full-row diff tint
+
+- Added and deleted lines now carry a faint full-row background tint (a wash
+  of the add/delete hue over the background) in every layout — unified,
+  split, and stack — and every theme preset. The tint is painted
+  span-by-span, so it runs from the sign column to the frame edge (including
+  under inline notes and row padding) while the syntax colors on top stay
+  untouched. Span-level paints keep precedence: the active search match still
+  goes gold, agent attention marks still paint their range, and the
+  current-match row reads as a match row rather than a tinted one.
+
+### Changed — calmer chrome so syntax colors survive
+
+- The review-cursor row, the file rail, and the subdued (inactive) search
+  match fills sit one step dimmer in every theme: the cursor row used to
+  carry the same fill as the match highlight and flattened whole rows to a
+  flat gray that erased their syntax coloring.
+
 ## [0.6.0] - 2026-09-02
 
 ### Added — pi coding agent extension
