@@ -4,6 +4,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed — `--include-untracked` now applies to target diffs
+
+- `nh diff <rev> --include-untracked` (and its `--watch` reload) now appends
+  untracked worktree files to the diff as additions. Previously the flag only
+  affected the no-target worktree diff and was silently ignored whenever a
+  target revision was given. Tree-to-tree ranges (`A...B`) and staged diffs
+  keep their git-compatible semantics (no untracked notion). Off by default,
+  as before.
+
 ## [0.6.1] - 2026-09-02
 
 ### Added — full-row diff tint

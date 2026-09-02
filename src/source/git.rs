@@ -161,12 +161,16 @@ pub fn git_diff(
 ///   `git diff --cached <rev>`)
 ///
 /// `pathspecs` filters by path prefix (best-effort); empty means all.
-/// Untracked files are not included (matching `git diff <rev>`).
+/// With `include_untracked`, a single-rev (worktree-side) diff also appends
+/// untracked files as additions — an opt-in beyond `git diff <rev>`, which
+/// never shows them. Tree-to-tree ranges and staged diffs have no untracked
+/// notion and ignore the flag.
 pub fn git_diff_target(
     repo_path: &Path,
     target: &str,
     pathspecs: &[String],
     staged: bool,
+    include_untracked: bool,
 ) -> Result<String> {
     let repo = open_repo(repo_path)?;
     if let Some((a, b, merge_base)) = parse_range(target) {
@@ -176,7 +180,7 @@ pub fn git_diff_target(
     if staged {
         diff_tree_index(&repo, tree, pathspecs)
     } else {
-        diff_tree_worktree(&repo, tree, pathspecs)
+        diff_tree_worktree(&repo, tree, pathspecs, include_untracked)
     }
 }
 
@@ -281,8 +285,15 @@ fn diff_tree_index(repo: &Repository, tree: ObjectId, pathspecs: &[String]) -> R
 /// Considers every blob path in the tree plus every tracked path from the
 /// index (files added since the target commit are tracked too), comparing
 /// the tree blob against the file on disk. Paths unchanged on both sides are
-/// skipped; deleted-on-disk paths render as deletions.
-fn diff_tree_worktree(repo: &Repository, tree: ObjectId, pathspecs: &[String]) -> Result<String> {
+/// skipped; deleted-on-disk paths render as deletions. With
+/// `include_untracked`, files on disk that are neither in the tree nor in the
+/// index join the diff as additions.
+fn diff_tree_worktree(
+    repo: &Repository,
+    tree: ObjectId,
+    pathspecs: &[String],
+    include_untracked: bool,
+) -> Result<String> {
     use std::collections::{BTreeMap, BTreeSet};
 
     let workdir = repo
@@ -408,7 +419,104 @@ fn diff_tree_worktree(repo: &Repository, tree: ObjectId, pathspecs: &[String]) -
         resource_cache.clear_resource_cache_keep_allocation();
     }
 
+    if include_untracked {
+        append_worktree_untracked(repo, &mut resource_cache, &mut out, &tree_side, pathspecs)?;
+    }
+
     Ok(out)
+}
+
+/// Append the untracked worktree files as additions, skipping any path that
+/// is already in `tree_side`: a file removed from the index but still on disk
+/// reads as untracked to the status walk, yet the tree-vs-disk comparison in
+/// the caller already rendered it against its tree blob.
+fn append_worktree_untracked(
+    repo: &Repository,
+    cache: &mut gix::diff::blob::Platform,
+    out: &mut String,
+    tree_side: &std::collections::BTreeMap<BString, (ObjectId, EntryKind)>,
+    pathspecs: &[String],
+) -> Result<()> {
+    let iter = repo
+        .status(gix::progress::Discard)
+        .context("status platform (untracked)")?
+        .untracked_files(UntrackedFiles::Files)
+        .index_worktree_rewrites(None)
+        .into_index_worktree_iter(std::iter::empty::<BString>())
+        .context("index-worktree iterator (untracked)")?;
+    for item in iter {
+        let item = item.context("index-worktree item")?;
+        let IwItem::DirectoryContents {
+            collapsed_directory_status,
+            ..
+        } = &item
+        else {
+            continue; // tracked paths were already handled by the caller
+        };
+        if collapsed_directory_status.is_some() {
+            continue; // collapsed directories are not individual files
+        }
+        let rela_path = item.rela_path().to_owned();
+        if tree_side.contains_key(&rela_path) {
+            continue;
+        }
+        if let Err(e) = append_untracked_patch(repo, cache, out, &rela_path, pathspecs) {
+            eprintln!(
+                "warning: skip untracked file {}: {e:#}",
+                rela_path.as_bstr()
+            );
+        }
+        cache.clear_resource_cache_keep_allocation();
+    }
+    Ok(())
+}
+
+/// Render one untracked worktree file as a pure addition (`/dev/null` → the
+/// file on disk). Shared by the worktree-status walk and the target-vs-
+/// worktree diff.
+fn append_untracked_patch(
+    repo: &Repository,
+    cache: &mut gix::diff::blob::Platform,
+    out: &mut String,
+    rela_path: &[u8],
+    pathspecs: &[String],
+) -> Result<()> {
+    if !pathspec_match(rela_path.as_bstr(), pathspecs) {
+        return Ok(());
+    }
+    let path = path_display(rela_path.as_bstr());
+    let null = repo.object_hash().null();
+    // Untracked file: diff from /dev/null to the file on disk.
+    // Use the worktree root + rela_path to construct the on-disk path,
+    // and set up the resource cache to diff from empty to file content.
+    let worktree_path = repo
+        .workdir()
+        .ok_or_else(|| anyhow!("bare repo has no workdir"))?
+        .join(path.as_str());
+    let disk_content = std::fs::read(&worktree_path)
+        .with_context(|| format!("read untracked file {}", worktree_path.display()))?;
+    let id = gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &disk_content)
+        .with_context(|| format!("hash untracked file {}", worktree_path.display()))?;
+    cache
+        .set_resource(
+            null,
+            EntryKind::Blob,
+            rela_path.as_bstr(),
+            ResourceKind::OldOrSource,
+            &repo.objects,
+        )
+        .context("set old (null) resource for untracked")?;
+    cache
+        .set_resource(
+            id,
+            EntryKind::Blob,
+            rela_path.as_bstr(),
+            ResourceKind::NewOrDestination,
+            &repo.objects,
+        )
+        .context("set new resource for untracked")?;
+    render_file_patch(out, None, Some(&path), cache)?;
+    Ok(())
 }
 
 /// Recursively collect the blob entries of `tree` into `out` (path →
@@ -621,6 +729,7 @@ fn append_worktree_item(
                 | EntryStatus::Conflict { .. }
                 | EntryStatus::NeedsUpdate(_) => {}
             }
+            Ok(())
         }
         IwItem::DirectoryContents {
             collapsed_directory_status,
@@ -630,47 +739,10 @@ fn append_worktree_item(
             if collapsed_directory_status.is_some() {
                 return Ok(());
             }
-            let rela_path = item.rela_path();
-            if !pathspec_match(rela_path, pathspecs) {
-                return Ok(());
-            }
-            let path = path_display(rela_path);
-            let null = repo.object_hash().null();
-            // Untracked file: diff from /dev/null to the file on disk.
-            // Use the worktree root + rela_path to construct the on-disk path,
-            // and set up the resource cache to diff from empty to file content.
-            let worktree_path = repo
-                .workdir()
-                .ok_or_else(|| anyhow!("bare repo has no workdir"))?
-                .join(path.as_str());
-            let disk_content = std::fs::read(&worktree_path)
-                .with_context(|| format!("read untracked file {}", worktree_path.display()))?;
-            let id =
-                gix::objs::compute_hash(repo.object_hash(), gix::objs::Kind::Blob, &disk_content)
-                    .with_context(|| format!("hash untracked file {}", worktree_path.display()))?;
-            cache
-                .set_resource(
-                    null,
-                    EntryKind::Blob,
-                    rela_path,
-                    ResourceKind::OldOrSource,
-                    &repo.objects,
-                )
-                .context("set old (null) resource for untracked")?;
-            cache
-                .set_resource(
-                    id,
-                    EntryKind::Blob,
-                    rela_path,
-                    ResourceKind::NewOrDestination,
-                    &repo.objects,
-                )
-                .context("set new resource for untracked")?;
-            render_file_patch(out, None, Some(&path), cache)?;
+            append_untracked_patch(repo, cache, out, item.rela_path(), pathspecs)
         }
-        IwItem::Rewrite { .. } => {}
+        IwItem::Rewrite { .. } => Ok(()),
     }
-    Ok(())
 }
 
 fn append_index_change(
