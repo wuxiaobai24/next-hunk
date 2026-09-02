@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.0] - 2026-09-02
+## Unreleased
 
 ### Added — full-row diff tint
 
@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   match fills sit one step dimmer in every theme: the cursor row used to
   carry the same fill as the match highlight and flattened whole rows to a
   flat gray that erased their syntax coloring.
+
+## [0.6.0] - 2026-09-02
 
 ### Added — pi coding agent extension
 
