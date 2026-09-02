@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.6.0] - 2026-09-02
 
 ### Added — pi coding agent extension
 
@@ -963,7 +963,8 @@ viewport in sub-microsecond to sub-millisecond range is what makes the tool
 stay responsive on changesets that stall other viewers.
 
 
-[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/wuxiaobai24/next-hunk/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.6.0
 [0.5.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.5.0
 [0.4.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.4.0
 [0.3.0]: https://github.com/wuxiaobai24/next-hunk/releases/tag/v0.3.0
