@@ -1,6 +1,6 @@
 [package]
 name = "next-hunk"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 description = "High-performance terminal review engine for large changesets"
 license = "MIT"
