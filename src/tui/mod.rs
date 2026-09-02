@@ -1674,7 +1674,7 @@ diff --git a/a.rs b/a.rs
     }
 
     #[test]
-    fn cursor_row_gets_highlight_background() {
+    fn cursor_row_keeps_diff_tint_under_cursor() {
         let mut app = select_sample_app();
         // +new is stream row 3 (0 file header, 1 hunk header, 2 -old, 3 +new).
         app.set_cursor(3);
@@ -1685,15 +1685,22 @@ diff --git a/a.rs b/a.rs
         // rail_w = min(32, 60/4).max(12) = 15, so the stream starts at x=15.
         // The pane title occupies the first row, so stream row 3 (+new)
         // draws at y=4; x=16 is past its gutter columns.
-        let cell = &buf[(16u16, 4u16)];
+        //
+        // The diff tint is painted span-by-span, so the cursor no longer
+        // flattens the row to gray: the +new row keeps its add tint, and
+        // the row above (-old) keeps its delete tint.
+        let cursor_cell = &buf[(16u16, 4u16)];
         assert_eq!(
-            cell.style().bg,
-            Some(app.theme.cursor_bg),
-            "cursor row should carry the cursor background"
+            cursor_cell.style().bg,
+            Some(app.theme.add_bg),
+            "cursor must preserve the add tint, not override it"
         );
-        // And a non-cursor code row does not.
-        let other = &buf[(16u16, 3u16)];
-        assert_ne!(other.style().bg, Some(app.theme.cursor_bg));
+        let del_cell = &buf[(16u16, 3u16)];
+        assert_eq!(del_cell.style().bg, Some(app.theme.del_bg));
+        // The line-number gutter column (x=15 is the "+"/"−" sign itself)
+        // carries the same tint.
+        let sign_cell = &buf[(15u16, 4u16)];
+        assert_eq!(sign_cell.style().bg, Some(app.theme.add_bg));
     }
 
     #[test]

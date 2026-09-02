@@ -340,6 +340,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                     notes,
                     app.theme.note,
                     app.theme.dim,
+                    None,
                 );
             }
             other => {
@@ -354,7 +355,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                 let line = style_cursor(line, is_cursor, app.theme.cursor_bg);
                 let (line, inline_ok) = match notes {
                     Some(notes) => {
-                        append_inline_notes(line, notes, area.width as usize, app.theme.note)
+                        append_inline_notes(line, notes, area.width as usize, app.theme.note, None)
                     }
                     None => (line, false),
                 };
@@ -365,6 +366,7 @@ fn draw_stream_split(app: &mut App, frame: &mut Frame, area: Rect) {
                     notes,
                     app.theme.note,
                     app.theme.dim,
+                    None,
                 );
             }
         }
@@ -395,6 +397,7 @@ fn split_side_spans(
     let is_current = current_match_row == Some(side.abs_row);
     let is_other_match = !is_current && match_rows.contains(&side.abs_row);
 
+    let tint = row_tint(&app.theme, side.kind);
     let gutter = match side.line_no {
         Some(n) => format!("{n:>5} "),
         None => " ".repeat(6),
@@ -410,16 +413,21 @@ fn split_side_spans(
         Span::styled(
             gutter,
             if is_current {
-                Style::default()
-                    .fg(app.theme.match_active_fg)
-                    .bg(app.theme.match_active_bg)
+                // The match style is full: fg+bg, so the tint underneath is
+                // hidden. Stack it anyway for symmetry with inactive matches.
+                tint_style(
+                    Style::default()
+                        .fg(app.theme.match_active_fg)
+                        .bg(app.theme.match_active_bg),
+                    tint,
+                )
             } else if is_other_match {
-                Style::default().bg(app.theme.match_inactive_bg)
+                tint_style(Style::default().bg(app.theme.match_inactive_bg), tint)
             } else {
-                Style::default().fg(app.theme.dim)
+                tint_style(Style::default().fg(app.theme.dim), tint)
             },
         ),
-        Span::styled(sign.to_string(), kind_style),
+        Span::styled(sign.to_string(), tint_style(kind_style, tint)),
     ];
 
     // Syntax-highlighted text runs (viewport-only, cached) truncated to the
@@ -475,7 +483,7 @@ fn split_side_spans(
             used += w;
         }
         if !chunk.is_empty() {
-            spans.push(Span::styled(chunk, style));
+            spans.push(Span::styled(chunk, tint_style(style, tint)));
         }
     }
     if used < side.text.width() && width > 0 {
@@ -484,13 +492,17 @@ fn split_side_spans(
         if used < width {
             spans.push(Span::styled(
                 "…".to_string(),
-                Style::default().fg(app.theme.dim),
+                tint_style(Style::default().fg(app.theme.dim), tint),
             ));
             used += 1;
         }
     }
     if used < width {
-        spans.push(Span::raw(" ".repeat(width - used)));
+        let pad = " ".repeat(width - used);
+        spans.push(match tint {
+            Some(t) => Span::styled(pad, t),
+            None => Span::raw(pad),
+        });
     }
     spans
 }
@@ -549,6 +561,13 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         } else {
             notes_by_row.get(&abs_row)
         };
+        // Only +/- lines carry a diff tint; it fills the row's leftover space
+        // so changed rows read as full-width bars rather than isolated glyphs.
+        let row_kind = match &r {
+            OwnedRow::Line { kind, .. } => *kind,
+            _ => DiffLineKind::Context,
+        };
+        let fill = row_fill(app, row_kind, abs_row, current_match_row);
         let line = stream_row_to_line(app, r, current_match_row, &match_rows, area.width as usize);
         let line = style_cursor(
             line,
@@ -560,7 +579,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
         // "rest of the row", so notes always take the fallback row.
         let (line, inline_ok) = match notes {
             Some(notes) if !app.wrap_on => {
-                append_inline_notes(line, notes, area.width as usize, app.theme.note)
+                append_inline_notes(line, notes, area.width as usize, app.theme.note, fill)
             }
             _ => (line, false),
         };
@@ -571,6 +590,7 @@ fn draw_stream_unified(app: &mut App, frame: &mut Frame, area: Rect) {
             notes,
             app.theme.note,
             app.theme.dim,
+            fill.map(|t| (area.width as usize, t)),
         );
     }
 
@@ -702,6 +722,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                 // Stack columns have no inline margin (blocks are full
                 // width); notes take the dedicated row, kept below the line
                 // they annotate — same convention as the other layouts.
+                let fill = row_fill(app, *kind, *abs_row, current_match_row);
                 push_line_with_note_fallback(
                     &mut lines,
                     style_cursor(line, cursor_row == Some(*abs_row), app.theme.cursor_bg),
@@ -709,6 +730,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     notes_by_row.get(abs_row),
                     app.theme.note,
                     app.theme.dim,
+                    fill.map(|t| (area.width as usize, t)),
                 );
             }
         }
@@ -750,6 +772,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     &match_rows,
                     area.width as usize,
                 );
+                let fill = row_fill(app, *kind, *abs_row, current_match_row);
                 push_line_with_note_fallback(
                     &mut lines,
                     style_cursor(line, cursor_row == Some(*abs_row), app.theme.cursor_bg),
@@ -757,6 +780,7 @@ fn draw_stream_stack(app: &mut App, frame: &mut Frame, area: Rect) {
                     notes_by_row.get(abs_row),
                     app.theme.note,
                     app.theme.dim,
+                    fill.map(|t| (area.width as usize, t)),
                 );
             }
         }
@@ -853,13 +877,53 @@ fn map_raw_range(raw: &str, tab_width: usize, start: usize, end: usize) -> (usiz
 
 /// Apply the review-cursor row background to a rendered line. Callers pass
 /// `is_cursor` only for real rows (markers alias the following row's
-/// `abs_row`). Span-level backgrounds (the active search match) still win,
-/// which is the desired precedence: the match highlight is more informative.
+/// `abs_row`). Span-level backgrounds (the diff row tint, the active search
+/// match) still win: the cursor fills only cells whose spans carry no bg —
+/// plus the empty-space padding span appended per row — so it reads as a
+/// frame around the row without drowning the syntax colors.
 fn style_cursor(line: Line<'static>, is_cursor: bool, cursor_bg: Color) -> Line<'static> {
     if is_cursor {
         line.style(Style::default().bg(cursor_bg))
     } else {
         line
+    }
+}
+
+/// Background tint for a changed row, painted span-by-span so a search match
+/// or an attention mark can still override it, and so the row reads as the
+/// accent fill from the sign column all the way to the frame edge. `None`
+/// for context/meta rows — they keep the terminal background.
+fn row_tint(theme: &crate::tui::theme::Theme, kind: DiffLineKind) -> Option<Style> {
+    match kind {
+        DiffLineKind::Add => Some(Style::default().bg(theme.add_bg)),
+        DiffLineKind::Delete => Some(Style::default().bg(theme.del_bg)),
+        DiffLineKind::Context | DiffLineKind::Meta => None,
+    }
+}
+
+/// The fill used behind inline notes and the tail stretch: the diff tint on
+/// plain rows, but on the *current* search-match row the subdued match bg —
+/// that row's restyle repaints every span (gold hit, subdued rest), and the
+/// tint must not re-enter through the filler. Context/meta rows keep `None`.
+fn row_fill(
+    app: &App,
+    kind: DiffLineKind,
+    abs_row: usize,
+    current_match_row: Option<usize>,
+) -> Option<Style> {
+    if current_match_row == Some(abs_row) {
+        return row_tint(&app.theme, kind)
+            .map(|_| Style::default().bg(app.theme.match_inactive_bg));
+    }
+    row_tint(&app.theme, kind)
+}
+
+/// Paint `style` under `base` (base wins on any field it sets), so the tint
+/// is a backdrop for the syntax/mark style rather than replacing it.
+fn tint_style(base: Style, tint: Option<Style>) -> Style {
+    match tint {
+        Some(t) => t.patch(base),
+        None => base,
     }
 }
 
@@ -874,6 +938,7 @@ fn append_inline_notes(
     notes: &[String],
     width: usize,
     note_color: Color,
+    tint: Option<Style>,
 ) -> (Line<'static>, bool) {
     use unicode_width::UnicodeWidthStr;
     let note = format!(" 💬 {}", notes.join(" · "));
@@ -885,12 +950,21 @@ fn append_inline_notes(
     if note_w + 1 > free {
         return (line, false);
     }
-    line.spans.push(Span::raw(" ".repeat(free - note_w)));
+    let pad = free - note_w;
+    if pad > 0 {
+        line.spans.push(match tint {
+            Some(t) => Span::styled(" ".repeat(pad), t),
+            None => Span::raw(" ".repeat(pad)),
+        });
+    }
     line.spans.push(Span::styled(
         note,
-        Style::default()
-            .fg(note_color)
-            .add_modifier(Modifier::ITALIC),
+        tint_style(
+            Style::default()
+                .fg(note_color)
+                .add_modifier(Modifier::ITALIC),
+            tint,
+        ),
     ));
     (line, true)
 }
@@ -915,12 +989,25 @@ fn note_row(text: &str, note_color: Color, dim: Color) -> Line<'static> {
 /// row type never goes inline).
 fn push_line_with_note_fallback(
     lines: &mut Vec<Line<'static>>,
-    line: Line<'static>,
+    mut line: Line<'static>,
     inline_ok: bool,
     notes: Option<&Vec<String>>,
     note_color: Color,
     dim_color: Color,
+    fill_to: Option<(usize, Style)>,
 ) {
+    // When no note went inline, the row stays at its natural length; stretch
+    // the diff tint across the rest of the frame so +/- rows read as bars.
+    if !inline_ok {
+        if let Some((width, tint)) = fill_to {
+            use unicode_width::UnicodeWidthStr;
+            let used: usize = line.spans.iter().map(|s| s.content.width()).sum();
+            if width > used {
+                line.spans
+                    .push(Span::styled(" ".repeat(width - used), tint));
+            }
+        }
+    }
     lines.push(line);
     if !inline_ok {
         if let Some(notes) = notes {
@@ -1362,10 +1449,14 @@ fn stream_row_to_line(
                 runs
             };
 
-            let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 3);
+            // The add/delete row tint goes span-by-span (search-match re-slicing
+            // and marks then patch over it). Padding to the frame edge keeps the
+            // tint running under inline notes and to the end of short rows.
+            let tint = row_tint(&app.theme, kind);
+            let mut spans: Vec<Span> = Vec::with_capacity(runs.len() + 4);
             // Optional line-number gutter: " old new " right-aligned in 5 cols.
             if app.line_numbers_on {
-                let dim = Style::default().fg(app.theme.dim);
+                let dim = tint_style(Style::default().fg(app.theme.dim), tint);
                 let old_s = old_no
                     .map(|n| format!("{n:>5}"))
                     .unwrap_or_else(|| "     ".into());
@@ -1374,9 +1465,12 @@ fn stream_row_to_line(
                     .unwrap_or_else(|| "     ".into());
                 spans.push(Span::styled(format!(" {old_s} {new_s} "), dim));
             }
-            spans.push(Span::styled(prefix.to_string(), kind_style));
+            spans.push(Span::styled(
+                prefix.to_string(),
+                tint_style(kind_style, tint),
+            ));
             for (style, txt) in runs {
-                spans.push(Span::styled(txt, style));
+                spans.push(Span::styled(txt, tint_style(style, tint)));
             }
             Line::from(spans)
         }
@@ -2611,6 +2705,149 @@ mod tests {
             .filter(|c| c.bg == danger)
             .count();
         assert_eq!(marked, 4, "raw 1-char tab mark paints all 4 expanded cells");
+    }
+
+    // ---- diff row tint (add_bg / del_bg) ----
+
+    /// Rendered text rows and per-cell backgrounds as parallel grids
+    /// (`rows[y]` / `bgs[y][x]`), so tests can locate a row by content and
+    /// then inspect the paint that landed on it.
+    fn render_grid(app: &mut App, w: u16, h: u16) -> (Vec<String>, Vec<Vec<Option<Color>>>) {
+        let backend = ratatui::backend::TestBackend::new(w, h);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(app, f)).unwrap();
+        let buf = terminal.backend().buffer();
+        let width = buf.area.width as usize;
+        let cells: Vec<Vec<_>> = buf.content().chunks(width).map(<[_]>::to_vec).collect();
+        let rows = cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
+                    .collect()
+            })
+            .collect();
+        let bgs = cells
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|c| c.style().bg)
+                    .collect::<Vec<Option<Color>>>()
+            })
+            .collect();
+        (rows, bgs)
+    }
+
+    /// `-old` / `+new` / ` ctx`: one row of each kind in a single hunk.
+    fn tint_sample_app() -> App {
+        let review = parse_unified_diff(
+            "diff --git a/a.rs b/a.rs
+--- a/a.rs
++++ b/a.rs
+@@ -1,2 +1,2 @@
+-old
++new
+ ctx
+",
+        )
+        .unwrap();
+        let mut app = App::with_highlighter(review, highlighter());
+        app.viewport_height = 20;
+        app
+    }
+
+    #[test]
+    fn add_del_rows_tint_full_width_in_unified() {
+        let mut app = tint_sample_app();
+        let (add_bg, del_bg) = (app.theme.add_bg, app.theme.del_bg);
+        let (rows, bgs) = render_grid(&mut app, 60, 10);
+        let y_of = |needle: &str| {
+            rows.iter()
+                .position(|r| r.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} row rendered: {rows:?}"))
+        };
+        // The tint stretches from the sign to the right frame edge (the pad
+        // span), so changed rows read as full-width bars.
+        let y_add = y_of("+new");
+        assert_eq!(bgs[y_add][59], Some(add_bg), "add tint reaches the edge");
+        assert!(
+            bgs[y_add].iter().filter(|b| **b == Some(add_bg)).count() > 20,
+            "add tint covers the stream width"
+        );
+        let y_del = y_of("-old");
+        assert_eq!(bgs[y_del][59], Some(del_bg), "del tint reaches the edge");
+        // Context and meta rows keep the terminal background.
+        for needle in ["ctx", "@@"] {
+            let y = y_of(needle);
+            assert!(
+                !bgs[y]
+                    .iter()
+                    .any(|b| *b == Some(add_bg) || *b == Some(del_bg)),
+                "{needle} row must not carry a diff tint"
+            );
+        }
+    }
+
+    #[test]
+    fn split_pair_row_carries_tint_on_both_sides() {
+        let mut app = tint_sample_app();
+        app.layout_mode = crate::config::LayoutMode::Split;
+        let (add_bg, del_bg) = (app.theme.add_bg, app.theme.del_bg);
+        let (rows, bgs) = render_grid(&mut app, 140, 10);
+        // One pair row, two tints: the old side washes red, the new side green.
+        let y_pair = rows
+            .iter()
+            .position(|r| r.contains("-old") && r.contains("+new"))
+            .expect("pair row rendered");
+        assert!(bgs[y_pair].iter().filter(|b| **b == Some(del_bg)).count() > 20);
+        assert!(bgs[y_pair].iter().filter(|b| **b == Some(add_bg)).count() > 20);
+        // The trailing context row renders full-width and untinted.
+        let y_ctx = rows
+            .iter()
+            .position(|r| r.contains("ctx"))
+            .expect("ctx row rendered");
+        assert!(
+            bgs[y_ctx]
+                .iter()
+                .all(|b| *b != Some(add_bg) && *b != Some(del_bg)),
+            "ctx row must not carry a diff tint"
+        );
+    }
+
+    #[test]
+    fn stack_rows_tint_full_width() {
+        let mut app = tint_sample_app();
+        app.layout_mode = crate::config::LayoutMode::Stack;
+        let (add_bg, del_bg) = (app.theme.add_bg, app.theme.del_bg);
+        let (rows, bgs) = render_grid(&mut app, 80, 10);
+        let y_of = |needle: &str| {
+            rows.iter()
+                .position(|r| r.contains(needle))
+                .unwrap_or_else(|| panic!("{needle} row rendered: {rows:?}"))
+        };
+        assert_eq!(bgs[y_of("+new")][79], Some(add_bg));
+        assert_eq!(bgs[y_of("-old")][79], Some(del_bg));
+    }
+
+    #[test]
+    fn active_search_match_overrides_row_tint() {
+        let mut app = tint_sample_app();
+        // Stream rows: 0 file header, 1 hunk header, 2 -old, 3 +new, 4 ctx.
+        app.search.query = "new".into();
+        app.search.matches = vec![3];
+        app.search.current = 0;
+        app.search.active = true;
+        let (match_bg, add_bg) = (app.theme.match_active_bg, app.theme.add_bg);
+        let (rows, bgs) = render_grid(&mut app, 60, 10);
+        let y = rows
+            .iter()
+            .position(|r| r.contains("+new"))
+            .expect("+new row rendered");
+        // The matched substring goes gold, and the match restyle (active bg on
+        // the hit, subdued elsewhere) replaces the tint span-by-span — search
+        // visibility beats the row decoration.
+        assert!(bgs[y].iter().filter(|b| **b == Some(match_bg)).count() >= 3);
+        assert!(!bgs[y].contains(&Some(add_bg)));
     }
 
     #[test]
