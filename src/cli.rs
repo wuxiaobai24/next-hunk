@@ -691,7 +691,13 @@ fn run() -> Result<()> {
             };
 
             let text = match &target {
-                Some(t) => git_diff_target(&repo, t, &pathspecs, resolved.staged)?,
+                Some(t) => git_diff_target(
+                    &repo,
+                    t,
+                    &pathspecs,
+                    resolved.staged,
+                    resolved.include_untracked,
+                )?,
                 None => git_diff(
                     &repo,
                     resolved.staged,
@@ -953,7 +959,7 @@ fn make_diff_reloader(
 ) -> crate::tui::Reloader {
     Box::new(move || {
         match &target {
-            Some(t) => git_diff_target(&repo, t, &extra, staged),
+            Some(t) => git_diff_target(&repo, t, &extra, staged, include_untracked),
             None => git_diff(&repo, staged, &extra, include_untracked),
         }
         .context("re-run git diff for --watch")

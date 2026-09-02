@@ -432,7 +432,7 @@ fn diff_target_head_matches_git() {
     let repo = setup_target_repo();
     let workdir = repo.workdir();
 
-    let text = git_diff_target(&workdir, "HEAD", &[], false).unwrap();
+    let text = git_diff_target(&workdir, "HEAD", &[], false, false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
     let mut paths: Vec<String> = review
         .files
@@ -452,6 +452,50 @@ fn diff_target_head_matches_git() {
     assert_eq!(paths, vec!["a.txt", "b.txt", "c.txt"]);
 }
 
+/// `include_untracked` extends a single-rev (tree vs worktree) diff with the
+/// untracked files as additions — the flag's worktree semantics carried over
+/// to a target diff. Off by default (plain `git diff <rev>` also hides them).
+#[test]
+fn diff_target_head_untracked_included_when_enabled() {
+    let Some(_) = require_git() else { return };
+    let repo = setup_target_repo();
+    write(&repo.path().join("untracked.txt"), "brand new\n");
+
+    let text_without = git_diff_target(&repo.workdir(), "HEAD", &[], false, false).unwrap();
+    let review_without = parse_unified_diff(&text_without).unwrap();
+    assert!(
+        !review_without
+            .files
+            .iter()
+            .any(|f| f.display_path.ends_with("untracked.txt")),
+        "untracked file must stay hidden without include_untracked"
+    );
+
+    let text_with = git_diff_target(&repo.workdir(), "HEAD", &[], false, true).unwrap();
+    let review_with = parse_unified_diff(&text_with).unwrap();
+    let untracked = review_with
+        .files
+        .iter()
+        .find(|f| f.display_path.ends_with("untracked.txt"))
+        .expect("untracked file should appear with include_untracked=true");
+    assert!(
+        untracked
+            .hunks
+            .iter()
+            .flat_map(|h| h.lines.iter())
+            .any(|l| l.kind == DiffLineKind::Add),
+        "untracked file should render as additions"
+    );
+    // The previously verified target diff is otherwise unchanged.
+    let mut paths: Vec<String> = review_with
+        .files
+        .iter()
+        .map(|f| f.display_path.clone())
+        .collect();
+    paths.sort();
+    assert_eq!(paths, vec!["a.txt", "b.txt", "c.txt", "untracked.txt"]);
+}
+
 /// A two-rev range goes through the tree-to-tree path (like `git diff A..B`).
 #[test]
 fn diff_target_range_matches_git() {
@@ -466,7 +510,7 @@ fn diff_target_range_matches_git() {
     git_in(root, &["commit", "-q", "-m", "second"]);
 
     let workdir = repo.workdir();
-    let text = git_diff_target(&workdir, "HEAD~1..HEAD", &[], false).unwrap();
+    let text = git_diff_target(&workdir, "HEAD~1..HEAD", &[], false, false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
     let paths: Vec<&str> = review
         .files
@@ -486,7 +530,7 @@ fn diff_target_staged_ignores_worktree_only_changes() {
     let repo = setup_target_repo();
     let workdir = repo.workdir();
 
-    let text = git_diff_target(&workdir, "HEAD", &[], true).unwrap();
+    let text = git_diff_target(&workdir, "HEAD", &[], true, false).unwrap();
     let review = parse_unified_diff(&text).unwrap();
     let paths: Vec<&str> = review
         .files
