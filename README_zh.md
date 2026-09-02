@@ -269,9 +269,12 @@ JSON 形状(`--select` 输出的超集):
 
 `comments` 携带人的 `c` 批注(`user:N`)与会话评论,以及 agent 自己的 `--note` 注解(`note-N`)。仅 `diff` / `serve` 支持;显式未给格式时 `--export-file` 默认 `json`。
 
-### Agent skill
+### Agent skills
 
-仓库内置一个现成 skill(`skill/next-hunk/SKILL.md`),教 coding agent 何时、如何调用 next-hunk —— 把它装进你的 agent skills 目录即可。完整决策指南和示例见 skill 文件。
+仓库内置两个现成 skill(`skill/` 目录),装进你的 agent skills 目录即可(`npx skills add wuxiaobai24/next-hunk`):
+
+- `skill/next-hunk/SKILL.md` — 教 coding agent 何时、如何调用 next-hunk 展示改动供人审阅:focus、注释、逐 hunk 审批、会话、导出。完整决策指南和示例见 skill 文件。
+- `skill/understand/SKILL.md` — 终端里的「新生成代码讲解」:agent 为关键代码段标注对应需求(找不到依据就标推测)并写一段大白话解释,然后带着这些注释打开 next-hunk,逐条渲染在对应代码行下。触发词:"/understand"、"review 这次改动"、"解释一下新生成的代码"。
 
 ### Server 模式（常驻 TUI + 实时推送）
 

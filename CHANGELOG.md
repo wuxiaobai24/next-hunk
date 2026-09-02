@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — understand skill: terminal walkthrough of fresh changes
+
+- A second bundled agent skill, `skill/understand/SKILL.md`: the agent
+  determines the branch/worktree diff range, traces the key segments back to
+  their requirements (marking pure guesses 【推测】), explains them in plain
+  language, and opens next-hunk with those annotations rendered inline under
+  the exact lines — the terminal replacement for an HTML code-review report,
+  adapted from smallnest/goal-workflow's `understand` skill. Install with
+  `npx skills add wuxiaobai24/next-hunk --skill understand`. The READMEs'
+  Agent skill section now covers both skills.
+
 ### Fixed — `--include-untracked` now applies to target diffs
 
 - `nh diff <rev> --include-untracked` (and its `--watch` reload) now appends
