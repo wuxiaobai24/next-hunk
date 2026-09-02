@@ -397,11 +397,19 @@ JSON shape (a superset of the `--select` output):
 plus the agent's own `--note` annotations (`note-N` ids). Available on `diff`
 and `serve`; without an explicit format, `--export-file` implies `json`.
 
-### Agent skill
+### Agent skills
 
-A ready-made skill (`skill/next-hunk/SKILL.md`) teaches a coding agent when
-and how to call next-hunk — install it into your agent's skills directory. See
-the skill file for the full decision guide and examples.
+Two ready-made skills live in `skill/` — install them into your agent's
+skills directory (`npx skills add wuxiaobai24/next-hunk`):
+
+- `skill/next-hunk/SKILL.md` — when and how to call next-hunk to present
+  changes for review: focus, notes, selection gates, sessions, exports. See
+  the skill file for the full decision guide and examples.
+- `skill/understand/SKILL.md` — a terminal walkthrough of freshly generated
+  (usually AI-written) changes: the agent traces each key segment back to its
+  requirement (or marks it as a guess), explains it in plain language, and
+  opens next-hunk with those annotations rendered inline under the exact
+  lines. Invoke for "/understand", "review 这次改动", "解释一下新生成的代码".
 
 ### pi coding agent extension
 
