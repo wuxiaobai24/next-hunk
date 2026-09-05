@@ -330,7 +330,7 @@ Once the TUI is open, the human navigates with:
 - `]h` / `[h` — next / previous hunk (wraps across files)
 - `Tab` / `h` / `l` — next / previous file
 - `zc` / `zo` — fold / unfold current file
-- `a` / `r` / `u` — (**`--select` / `serve` only**) accept / reject / mark undecided on the current hunk
+- `a` / `r` / `u` — (**`--select` / `serve` only**) accept / reject / mark undecided on the current hunk, then jump to the next hunk — so verdicts can be entered in a loop
 - `o` — open the focused line in `$EDITOR`
 - `#` — toggle line-number gutter
 - `w` — toggle word-level inline diff
