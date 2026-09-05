@@ -26,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keep their git-compatible semantics (no untracked notion). Off by default,
   as before.
 
+### Fixed — deterministic review file order
+
+- Reviews now always present files sorted by path. Previously the order
+  followed whatever the VCS layer emitted, and gix's parallel worktree walk
+  emits completion order — so `nh diff` could list the same changeset in a
+  different file order run to run, breaking muscle memory and session-to-
+  session comparisons.
+
 ## [0.6.1] - 2026-09-02
 
 ### Added — full-row diff tint
