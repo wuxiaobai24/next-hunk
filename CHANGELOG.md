@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different file order run to run, breaking muscle memory and session-to-
   session comparisons.
 
+### Fixed — pure renames are no longer dropped from reviews
+
+- A rename with no content change (`similarity index 100%`) used to be
+  silently dropped from the review stream, so the reviewer was never told
+  the file was renamed — and a diff containing *only* renames errored out
+  as an "empty diff". Renames now appear as a header-only row with the `R`
+  chip, labeled `new path (from old path)` in the file header card.
+  Mode-only changes (same path, no content diff) keep being skipped.
+
 ## [0.6.1] - 2026-09-02
 
 ### Added — full-row diff tint

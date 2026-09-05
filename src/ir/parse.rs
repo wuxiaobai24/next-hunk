@@ -224,10 +224,17 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
     let Some(file) = current.take() else {
         return;
     };
-    // A file with no hunks and no body lines (e.g. pure rename or mode-only
-    // change with no content diff) produces no stream rows and is dropped —
-    // there is nothing to review. This is intentional.
-    if file.hunks.is_empty() && file.body_lines.is_empty() {
+
+    // A file with no hunks and no body lines produces no content diff.
+    // Mode-only changes (same path on both sides) are dropped — there is
+    // nothing to review. Pure renames (different paths) are kept as a
+    // header-only row so the review shows the rename happened: the rail and
+    // header chip derive `R` from the differing paths.
+    let is_rename = matches!(
+        (&file.old_path, &file.new_path),
+        (Some(old), Some(new)) if !old.is_empty() && !new.is_empty() && old != new
+    );
+    if file.hunks.is_empty() && file.body_lines.is_empty() && !is_rename {
         return;
     }
 
@@ -486,6 +493,28 @@ diff --git a/src/a.rs a/src/a.rs
     }
 
     #[test]
+    fn pure_rename_is_kept_as_header_only_file() {
+        // A rename with no content diff used to be dropped entirely, hiding
+        // the rename from the review. It must survive as a header-only row
+        // (`R` chip, no +/- tallies).
+        let patch = "\
+diff --git a/src/old_name.rs b/src/new_name.rs
+similarity index 100%
+rename from src/old_name.rs
+rename to src/new_name.rs
+";
+        let review = parse_unified_diff(patch).unwrap();
+        assert_eq!(review.file_count(), 1);
+        let f = &review.files[0];
+        assert_eq!(f.display_path, "src/new_name.rs");
+        assert_eq!(f.old_path.as_deref(), Some("src/old_name.rs"));
+        assert!(f.hunks.is_empty());
+        assert_eq!(f.stream_len, 1); // file header row only
+        assert_eq!((f.inserts, f.deletes), (0, 0));
+        assert!(review.hunk_starts.is_empty());
+    }
+
+    #[test]
     fn empty_errors() {
         assert!(parse_unified_diff("").is_err());
     }
@@ -546,18 +575,6 @@ rename to new.rs
         // display prefers new path
         assert_eq!(review.files[0].display_path, "new.rs");
         assert_eq!(review.files[0].hunks[0].lines.len(), 2);
-    }
-
-    #[test]
-    fn pure_rename_dropped() {
-        // rename with no content change → nothing to review
-        let patch = "\
-diff --git a/old.rs b/new.rs
-similarity index 100%
-rename from old.rs
-rename to new.rs
-";
-        assert!(parse_unified_diff(patch).is_err());
     }
 
     #[test]

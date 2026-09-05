@@ -1023,6 +1023,8 @@ fn push_line_with_note_fallback(
 enum OwnedRow {
     FileHeader {
         path: String,
+        /// Source path for renames (`R` chips), surfaced as `(from old)`.
+        old_path: Option<String>,
         kind: ChangeKind,
         inserts: u64,
         deletes: u64,
@@ -1123,6 +1125,7 @@ impl OwnedRow {
                 let f = &review.files[file_idx];
                 OwnedRow::FileHeader {
                     path: path.to_string(),
+                    old_path: f.old_path.clone().filter(|p| p != "/dev/null"),
                     kind: ChangeKind::from_file(f),
                     inserts: f.inserts,
                     deletes: f.deletes,
@@ -1208,6 +1211,7 @@ impl OwnedRow {
 fn file_header_line(
     app: &App,
     path: &str,
+    old_path: Option<&str>,
     kind: ChangeKind,
     inserts: u64,
     deletes: u64,
@@ -1229,6 +1233,13 @@ fn file_header_line(
         Style::default().fg(chip_color).add_modifier(Modifier::BOLD),
     ));
     spans.push(Span::styled(format!(" {path} "), header_style));
+    let origin = old_path
+        .filter(|_| kind == ChangeKind::Renamed)
+        .map(|old| format!(" (from {old})"));
+    let origin_w = origin.as_ref().map_or(0, |o| o.chars().count());
+    if let Some(o) = &origin {
+        spans.push(Span::styled(o.clone(), dim));
+    }
 
     // Stats + proportional bar (skipped for binary/no-line files). Zero
     // sides are omitted, mirroring the rail's per-file tally.
@@ -1249,7 +1260,7 @@ fn file_header_line(
             stats.push_str(&format!(" −{deletes}"));
         }
         let stats_w = stats.chars().count() + 2;
-        let used = 4 + 1 + 1 + path.chars().count() + 1;
+        let used = 4 + 1 + 1 + path.chars().count() + origin_w + 1;
         // Right-align the stats inside the rule, padded with ─ on wide panes.
         if width > used + stats_w + 2 {
             let pad = width - used - stats_w - 2;
@@ -1321,11 +1332,20 @@ fn stream_row_to_line(
     let line = match row {
         OwnedRow::FileHeader {
             path,
+            old_path,
             kind,
             inserts,
             deletes,
             ..
-        } => file_header_line(app, &path, kind, inserts, deletes, width),
+        } => file_header_line(
+            app,
+            &path,
+            old_path.as_deref(),
+            kind,
+            inserts,
+            deletes,
+            width,
+        ),
         OwnedRow::Unchanged { count, .. } => Line::from(Span::styled(
             format!("  ··· {count} unchanged lines ···"),
             Style::default()
