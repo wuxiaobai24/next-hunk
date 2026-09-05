@@ -6,3 +6,11 @@ fixtures/small.patch
 fixtures/medium.patch
 fixtures/huge.patch
 docs/plan.md
+
+# Local skill-installer artifacts (`npx skills add` materializes the bundled
+# skills into every agent dir it finds). Machine-local and regenerable — the
+# tracked source of truth lives in `skill/`.
+/.agents/
+/.claude/
+/agent/
+/skills-lock.json
