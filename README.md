@@ -233,6 +233,7 @@ still requires a git object store (any colocated repo has one).
 | `]h` | next hunk (wraps across files) |
 | `[h` | previous hunk (wraps across files) |
 | `Space` | next hunk (quick `]h` alias) |
+| `a` / `r` / `u` | accept / reject / mark undecided on the current hunk (`--select`/serve only; then jumps to the next hunk) |
 | `zc` | fold (collapse) current file |
 | `zo` | unfold (expand) current file |
 | `zw` | toggle line wrapping (default off; truncates long lines) |

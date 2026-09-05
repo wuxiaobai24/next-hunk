@@ -155,9 +155,11 @@ impl Action {
             Action::NextMatch => "next search match",
             Action::PrevMatch => "previous search match",
             Action::Help => "toggle this help overlay",
-            Action::AcceptHunk => "accept the current hunk (--select)",
-            Action::RejectHunk => "reject the current hunk (--select)",
-            Action::UndecideHunk => "mark the current hunk undecided (--select)",
+            Action::AcceptHunk => "accept the current hunk, then jump to the next (--select)",
+            Action::RejectHunk => "reject the current hunk, then jump to the next (--select)",
+            Action::UndecideHunk => {
+                "mark the current hunk undecided, then jump to the next (--select)"
+            }
         }
     }
 
