@@ -39,12 +39,21 @@ fn tiny_simple_parses_two_files() {
 #[test]
 fn tiny_edge_handles_no_newline_binary_rename() {
     let review = parse_unified_diff(&fixture("tiny_edge.patch")).unwrap();
-    // 3 files: no-newline, binary, rename-with-content
+    // 3 files: no-newline, binary, rename-with-content — presented in
+    // deterministic display_path order regardless of patch section order
+    // (gix's parallel worktree walk can emit completion order).
     assert_eq!(review.file_count(), 3);
+    let paths: Vec<&str> = review
+        .files
+        .iter()
+        .map(|f| f.display_path.as_str())
+        .collect();
+    assert_eq!(paths, vec!["bin.dat", "new.rs", "no-newline.txt"]);
 
-    // file 0: no-newline — delete, meta(no-newline), add, meta(no-newline)
-    let f0 = &review.files[0];
-    assert_eq!(f0.display_path, "no-newline.txt");
+    let by_path = |p: &str| review.files.iter().find(|f| f.display_path == p).unwrap();
+
+    // no-newline — delete, meta(no-newline), add, meta(no-newline)
+    let f0 = by_path("no-newline.txt");
     let h0 = &f0.hunks[0];
     assert_eq!(h0.lines.len(), 4);
     assert_eq!(h0.lines[0].kind, DiffLineKind::Delete);
@@ -53,15 +62,13 @@ fn tiny_edge_handles_no_newline_binary_rename() {
     assert_eq!(h0.lines[3].kind, DiffLineKind::Meta);
     assert!(review.text(h0.lines[1].text.clone()).contains("No newline"));
 
-    // file 1: binary-only — file header + 1 meta line
-    let f1 = &review.files[1];
-    assert_eq!(f1.display_path, "bin.dat");
+    // binary-only — file header + 1 meta line
+    let f1 = by_path("bin.dat");
     assert!(f1.hunks.is_empty());
     assert_eq!(f1.stream_len, 2); // header + binary marker
 
-    // file 2: rename — display prefers new path
-    let f2 = &review.files[2];
-    assert_eq!(f2.display_path, "new.rs");
+    // rename — display prefers new path
+    let f2 = by_path("new.rs");
     assert_eq!(f2.hunks[0].lines.len(), 2); // delete + add
 }
 

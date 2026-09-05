@@ -154,6 +154,7 @@ pub fn parse_unified_diff(input: &str) -> Result<Review, ParseError> {
 
     flush_file(&mut review, &mut current, &mut stream_row);
     review.stream_len = stream_row;
+    sort_files_deterministically(&mut review);
 
     if review.files.is_empty() {
         return Err(ParseError::Empty);
@@ -292,6 +293,41 @@ fn flush_file(review: &mut Review, current: &mut Option<FileBuilder>, stream_row
     });
 }
 
+/// Re-order files by `display_path` so the review presents deterministically.
+///
+/// Producers differ: git tree diffs emit path-sorted sections, but gix's
+/// parallel index-worktree walk emits completion order, so the *same* diff
+/// can present in a different file order run to run. Review streams are
+/// positional (`stream_start` / `hunk_starts`), so re-ordering re-walks the
+/// layout — per-file row counts are unchanged, only their start offsets move.
+fn sort_files_deterministically(review: &mut Review) {
+    // Fast path: already sorted (the common case for git-produced patches).
+    if review
+        .files
+        .windows(2)
+        .all(|w| w[0].display_path <= w[1].display_path)
+    {
+        return;
+    }
+    review
+        .files
+        .sort_by(|a, b| a.display_path.cmp(&b.display_path));
+    let mut row = 0usize;
+    review.hunk_starts.clear();
+    for file in &mut review.files {
+        file.stream_start = row;
+        row += 1; // file header row
+        for h in &file.hunks {
+            review.hunk_starts.push(row);
+            row += 1 + h.lines.len();
+        }
+        // Body lines (binary markers) only exist in hunk-less files, so the
+        // recorded per-file length already covers everything.
+        row = file.stream_start + file.stream_len;
+    }
+    review.stream_len = row;
+}
+
 fn push_text(arena: &mut String, s: &str) -> std::ops::Range<usize> {
     let start = arena.len();
     arena.push_str(s);
@@ -395,6 +431,58 @@ diff --git a/src/b.rs b/src/b.rs
         assert!(review.stream_len > 0);
         // first file: header + hunk header + 5 lines = 7, etc.
         assert!(review.files[0].hunks[0].lines.len() >= 4);
+    }
+
+    #[test]
+    fn files_are_sorted_by_display_path() {
+        // Sections arrive out of path order (gix's parallel index-worktree
+        // walk emits completion order). The review must present them sorted,
+        // with stream positions rebuilt so navigation still lands on hunk
+        // header rows.
+        let patch = "\
+diff --git a/src/b.rs b/src/b.rs
+--- a/src/b.rs
++++ b/src/b.rs
+@@ -1,2 +1,3 @@
+ ctx
++added
+ ctx2
+diff --git a/src/a.rs a/src/a.rs
+--- a/src/a.rs
++++ b/src/a.rs
+@@ -1 +1 @@
+-old
++new
+";
+        let review = parse_unified_diff(patch).unwrap();
+        let paths: Vec<&str> = review
+            .files
+            .iter()
+            .map(|f| f.display_path.as_str())
+            .collect();
+        assert_eq!(paths, vec!["src/a.rs", "src/b.rs"]);
+        // Layout rebuilt: strictly ascending hunk starts, each pointing at a
+        // HunkHeader row, files packed without gaps.
+        assert_eq!(review.hunk_starts.len(), 2);
+        for w in review.hunk_starts.windows(2) {
+            assert!(w[0] < w[1], "hunk_starts not ascending");
+        }
+        let f0 = &review.files[0];
+        let f1 = &review.files[1];
+        assert_eq!(f0.stream_start, 0);
+        assert_eq!(f0.stream_start + f0.stream_len, f1.stream_start);
+        assert_eq!(
+            ViewportQuery::locate_hunk(&review, review.hunk_starts[0]),
+            Some((0, 1))
+        );
+        assert_eq!(
+            ViewportQuery::locate_hunk(&review, review.hunk_starts[1]),
+            Some((1, 1))
+        );
+        // Already-sorted input takes the fast path and stays identical.
+        let sorted = parse_unified_diff(SAMPLE).unwrap();
+        assert_eq!(sorted.files[0].display_path, "src/a.rs");
+        assert_eq!(sorted.files[1].display_path, "src/b.rs");
     }
 
     #[test]
