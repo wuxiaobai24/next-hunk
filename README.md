@@ -22,7 +22,7 @@ with a short alias binary `nh` (same program, shorter name).
 
 ## Status
 
-`v0.4-dev` — daily driver for reviewing diffs:
+`v0.6.1` — daily driver for reviewing diffs:
 
 - [x] Project scaffold + compact unified-diff IR (runtime model)
 - [x] Viewport query with binary search on file spans
