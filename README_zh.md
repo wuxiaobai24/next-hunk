@@ -21,7 +21,7 @@
 
 ## 状态
 
-`v0.4-dev` — 日常 review diff 可用：
+`v0.6.1` — 日常 review diff 可用：
 
 - [x] 项目骨架 + 紧凑 unified-diff IR（运行时模型）
 - [x] 视口查询（基于文件 span 的二分查找）
