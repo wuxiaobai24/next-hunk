@@ -6,6 +6,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `theme = "auto"` now actually detects light terminals
+
+- `theme = "auto"` (and `t`-cycling into auto) probes the terminal's real
+  background color with an OSC 11 query at TUI startup, instead of relying
+  only on the `$COLORFGBG` convention — which most modern terminals (foot,
+  alacritty, kitty, ghostty, wezterm, tmux, …) never set, so auto silently
+  stayed dark on light backgrounds. The probe is one-shot and cached, runs
+  before the alternate screen with a 150 ms budget, falls back to
+  `$COLORFGBG` when the terminal doesn't answer (or there is no controlling
+  terminal), and picks the matching syntect syntax theme too.
+
 ### Added — understand skill: terminal walkthrough of fresh changes
 
 - A second bundled agent skill, `skill/understand/SKILL.md`: the agent

@@ -309,7 +309,7 @@ Fields:
 | `jump_center` | bool | `true` | center the row a navigation jump lands on (`]h`, search, file jumps); `false` pins it to the viewport top |
 | `mouse` | bool | `true` | capture the mouse for scrolling/clicks; `false` keeps the terminal's native click-drag text selection |
 | `context_collapse` | int | `8` | collapse unchanged context: runs/gaps of ≥ N lines render as one `··· N unchanged lines ···` marker row (`0` disables; `zx` toggles at runtime) |
-| `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `t` cycles mode, `T` cycles palette. |
+| `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`, or a preset: `"flexoki"` / `"flexoki-light"`, `"catppuccin-mocha"` / `"catppuccin-latte"`, `"gruvbox-dark"`, `"nord"`, `"tokyonight"`. `auto` probes the terminal's real background color (OSC 11; `$COLORFGBG` as legacy fallback), so a light terminal gets the light palette with no configuration. `t` cycles mode, `T` cycles palette. |
 | `tab_width` | int | `4` | tab-stop width (columns) for rendering tabs in diff lines, 1–16 — terminal tab stops (8) break split-column alignment, so tabs are expanded at render time (`--tab-width`) |
 | `sidebar` | bool/string | `true` | show the file rail at startup; accepts hunk-style `"auto"` (treated as `true` — the rail already adapts to the terminal width). `b` toggles at runtime |
 | `agent_notes` | bool | `true` | render 💬 notes (inline annotations, note rows, rail badges); `false` = plain diff view — `}`/`{` and `c` report "notes hidden" instead |

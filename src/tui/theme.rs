@@ -2,8 +2,9 @@
 //!
 //! `view.rs` reads colors from [`Theme`] instead of hardcoding them, so the
 //! chrome adapts to a light vs. dark terminal background. [`ThemeMode`] holds
-//! the user's choice (dark / light / auto); `auto` resolves via the
-//! `$COLORFGBG` convention at startup.
+//! the user's choice (dark / light / auto); `auto` probes the terminal's real
+//! background color once at startup (OSC 11, with the legacy `$COLORFGBG`
+//! convention as fallback — most modern terminals never set that variable).
 //!
 //! The default palette is [Flexoki](https://flexoki.com) — an inky,
 //! contrast-balanced color system by Steph Ango — mapped onto the semantic
@@ -515,14 +516,14 @@ impl ThemeMode {
     }
 }
 
-/// Resolve the `auto` theme from the `$COLORFGBG` environment variable.
+/// Resolve the `auto` theme from the captured background verdict.
 ///
-/// `$COLORFGBG` is a convention (set by some terminals, e.g. xterm, rxvt,
-/// iTerm2) formatted as `"fg;bg"` where each field is a 0–15 ANSI color index.
-/// The standard interpretation: bg index ≥ 7 means a light background.
+/// Prefers the OSC 11 probe (see [`prime_terminal_bg`]); falls back to the
+/// `$COLORFGBG` convention (set by some terminals, e.g. xterm, rxvt, iTerm2,
+/// formatted as `"fg;bg"` where bg index ≥ 7 means a light background).
 ///
-/// Returns [`Theme::dark()`] when the variable is unset or unparseable — this
-/// is best-effort detection with zero I/O, so it never blocks.
+/// Returns [`Theme::dark()`] when neither source knows — best effort, so a
+/// missing probe never blocks or breaks startup.
 pub fn resolve_auto() -> Theme {
     if background_is_light() {
         Theme::light()
@@ -531,10 +532,149 @@ pub fn resolve_auto() -> Theme {
     }
 }
 
-/// Inspect `$COLORFGBG` and decide whether the terminal background looks
-/// light. Exposed for testing (the env-var read is isolated here so tests can
-/// set/unset the var around it).
+/// One-shot OSC 11 background-probe verdict, cached so `t` cycling into
+/// `auto` never re-queries. `None` until [`prime_terminal_bg`] runs (tests,
+/// headless paths), which makes [`background_is_light`] fall through to
+/// `$COLORFGBG`.
+static TERMINAL_BG: std::sync::OnceLock<Option<bool>> = std::sync::OnceLock::new();
+
+/// Probe the terminal's real background color once (OSC 11) and cache the
+/// light/dark verdict. Call before the TUI takes over the terminal; when
+/// never called, [`background_is_light`] falls back to `$COLORFGBG`.
+pub fn prime_terminal_bg() {
+    let _ = TERMINAL_BG.set(query_terminal_background());
+}
+
+/// Query the terminal's background color with the OSC 11 escape sequence
+/// (`ESC ] 11 ; ? ST`). Every modern terminal answers it (xterm, iTerm2,
+/// foot, alacritty, kitty, ghostty, wezterm, tmux), unlike `$COLORFGBG`
+/// which most never set. Returns `None` when there is no controlling
+/// terminal, the reply doesn't arrive within the budget, or it doesn't
+/// parse. Unix only; other platforms keep the `$COLORFGBG` fallback.
+fn query_terminal_background() -> Option<bool> {
+    #[cfg(not(unix))]
+    {
+        None
+    }
+    #[cfg(unix)]
+    {
+        use std::io::{Read, Write};
+
+        // /dev/tty, not stdin/stdout: the query must reach the emulator even
+        // when the process's streams are piped (agent-launched TUI).
+        let mut tty = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .ok()?;
+        // Raw mode so the reply isn't held by the line discipline until a
+        // newline arrives. Only undo it if we turned it on.
+        let raw = crossterm::terminal::enable_raw_mode().is_ok();
+        let answer = (|| {
+            tty.write_all(b"\x1b]11;?\x1b\\").ok()?;
+            tty.flush().ok()?;
+            // Terminals answer in microseconds; the budget only burns on
+            // emulators that never reply. poll(2) keeps the wait bounded
+            // without a leaked reader thread that would steal keystrokes.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_millis(150);
+            let fd = std::os::unix::io::AsRawFd::as_raw_fd(&tty);
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 32];
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() || buf.len() > 128 {
+                    break;
+                }
+                let mut pfd = [libc::pollfd {
+                    fd,
+                    events: libc::POLLIN,
+                    revents: 0,
+                }];
+                let ready =
+                    unsafe { libc::poll(pfd.as_mut_ptr(), 1, remaining.as_millis() as i32) };
+                if ready <= 0 || pfd[0].revents & libc::POLLIN == 0 {
+                    break; // timeout, or the fd woke up without readable data
+                }
+                match tty.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                if let Some(light) = parse_osc11_bg_reply(&buf) {
+                    return Some(light);
+                }
+            }
+            parse_osc11_bg_reply(&buf)
+        })();
+        if raw {
+            let _ = crossterm::terminal::disable_raw_mode();
+        }
+        answer
+    }
+}
+
+/// Parse an OSC 11 reply (`ESC ] 11 ; rgb:RRRR/GGGG/BBBB` + ST or BEL) into
+/// a light/dark verdict at a 0.5 relative-luminance threshold. Accepts 1–4
+/// hex digits per component and the `rgba:` form; tolerates leading junk
+/// (stray keystrokes can share the raw-mode buffer). Returns `None` until a
+/// full three-component payload is present.
+fn parse_osc11_bg_reply(bytes: &[u8]) -> Option<bool> {
+    let rest = &bytes[find(bytes, b"]11;")? + 4..];
+    let after_scheme = &rest[find(rest, b"rgb")? + 3..];
+    // `rgb:` or `rgba:` — the colon is consumed by the scheme.
+    let payload = after_scheme
+        .strip_prefix(b"a:")
+        .or_else(|| after_scheme.strip_prefix(b":"))?;
+    // Components are `/`-separated; stop at the ST/BEL terminator if present
+    // (a truncated reply without one still parses).
+    let payload_len = payload
+        .iter()
+        .position(|b| *b == 0x07 || *b == 0x1b)
+        .unwrap_or(payload.len());
+    let mut rgb = [0u8; 3];
+    let mut comps = payload[..payload_len].split(|b| *b == b'/');
+    for slot in &mut rgb {
+        let comp = comps.next()?;
+        if comp.is_empty() || comp.len() > 4 || !comp.iter().all(u8::is_ascii_hexdigit) {
+            return None;
+        }
+        let value = u32::from_str_radix(std::str::from_utf8(comp).ok()?, 16).ok()?;
+        let max = (1u32 << (4 * comp.len())) - 1;
+        *slot = ((value * 255 + max / 2) / max) as u8;
+    }
+    Some(rgb_luminance(rgb[0], rgb[1], rgb[2]) >= 0.5)
+}
+
+/// First index of `needle` in `haystack` — tiny scan, no memchr dependency.
+fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return None;
+    }
+    haystack.windows(needle.len()).position(|w| w == needle)
+}
+
+/// WCAG-2 relative luminance of an 8-bit RGB triple (the production twin of
+/// the `test_support` helper).
+fn rgb_luminance(r: u8, g: u8, b: u8) -> f64 {
+    let ch = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b)
+}
+
+/// Decide whether the terminal background looks light: the OSC 11 probe's
+/// verdict when one was captured ([`prime_terminal_bg`]), else the legacy
+/// `$COLORFGBG` convention. Exposed for testing (the env-var read is
+/// isolated here so tests can set/unset the var around it).
 pub fn background_is_light() -> bool {
+    if let Some(light) = TERMINAL_BG.get().copied().flatten() {
+        return light;
+    }
     let Some(val) = std::env::var_os("COLORFGBG") else {
         return false;
     };
@@ -591,8 +731,11 @@ mod tests {
     use super::*;
 
     /// Run `body` with `$COLORFGBG` set to `val` (or unset if `None`),
-    /// restoring the previous value afterward.
+    /// restoring the previous value afterward. Serialized: tests run on
+    /// parallel threads, and a concurrent set/unset would race the read.
     fn with_colorfgbg<T>(val: Option<&str>, body: impl FnOnce() -> T) -> T {
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var_os("COLORFGBG");
         match val {
             Some(v) => std::env::set_var("COLORFGBG", v),
@@ -837,6 +980,69 @@ mod tests {
         // Dark/Light are deterministic; Auto depends on env (tested below).
         assert_eq!(ThemeMode::Dark.to_theme().add, Theme::dark().add);
         assert_eq!(ThemeMode::Light.to_theme().add, Theme::light().add);
+    }
+
+    #[test]
+    fn osc11_replies_parse_to_light_or_dark() {
+        // Canonical ST-terminated reply, 4-digit components (xterm form).
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:ffff/ffff/ffff\x1b\\"),
+            Some(true)
+        );
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:0c0c/0c0c/0c0c\x1b\\"),
+            Some(false)
+        );
+        // BEL-terminated reply (some emulators).
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:c7c7/c7c7/c7c7\x07"),
+            Some(true)
+        );
+        // 2- and 1-digit components, plus the rgba: form.
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:ff/80/00\x1b\\"),
+            Some(false) // (255,128,0) luminance ≈ 0.33
+        );
+        assert_eq!(parse_osc11_bg_reply(b"\x1b]11;rgb:f/f/f\x1b\\"), Some(true));
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgba:ffff/ffff/ffff/ffff\x1b\\"),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn osc11_reply_without_terminator_still_parses() {
+        // A truncated read (reply split across chunks, terminator not yet
+        // arrived) parses as soon as all three components are present.
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:fffc/f0f0/eaea"),
+            Some(true)
+        );
+        // Two components is not enough to judge.
+        assert_eq!(parse_osc11_bg_reply(b"\x1b]11;rgb:fffc/f0f0"), None);
+    }
+
+    #[test]
+    fn osc11_reply_with_junk_or_garbage() {
+        // Leading junk (stray keystrokes sharing the raw-mode buffer).
+        assert_eq!(
+            parse_osc11_bg_reply(b"junk\x1b]11;rgb:100f/0f0f/0f0f\x1b\\"),
+            Some(false)
+        );
+        // Missing payload / header / rgb marker: undecidable.
+        assert_eq!(parse_osc11_bg_reply(b"\x1b]11;?\x1b\\"), None);
+        assert_eq!(parse_osc11_bg_reply(b"\x1b]11;rgb:"), None);
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\"),
+            None
+        );
+        // Non-hex components.
+        assert_eq!(parse_osc11_bg_reply(b"\x1b]11;rgb:zz/ff/ff\x1b\\"), None);
+        // Luminance threshold: mid-gray stays dark.
+        assert_eq!(
+            parse_osc11_bg_reply(b"\x1b]11;rgb:8080/8080/8080\x1b\\"),
+            Some(false)
+        );
     }
 
     #[test]

@@ -169,6 +169,12 @@ pub fn run_review_tui(
         anyhow::bail!("terminal too small: {cols}x{rows} (need at least 20 columns x 4 rows)");
     }
 
+    // Probe the terminal's real background once (OSC 11) so `theme = "auto"`
+    // and `t`-cycled auto resolve the right palette even when `$COLORFGBG` is
+    // unset — most modern terminals never set it. Runs before raw mode is
+    // taken over for the UI.
+    theme::prime_terminal_bg();
+
     enable_raw_mode().context("enable raw mode")?;
     let _guard = RawModeGuard; // restore on drop / panic
                                // Mouse capture is on by default; `mouse = false` leaves the terminal's
