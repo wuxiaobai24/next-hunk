@@ -618,6 +618,9 @@ fn query_terminal_background() -> Option<bool> {
 /// hex digits per component and the `rgba:` form; tolerates leading junk
 /// (stray keystrokes can share the raw-mode buffer). Returns `None` until a
 /// full three-component payload is present.
+// The OSC 11 probe itself is unix-only, so non-unix builds see these as dead
+// code; the tests exercise them everywhere, so keep them compiled.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn parse_osc11_bg_reply(bytes: &[u8]) -> Option<bool> {
     let rest = &bytes[find(bytes, b"]11;")? + 4..];
     let after_scheme = &rest[find(rest, b"rgb")? + 3..];
@@ -646,6 +649,7 @@ fn parse_osc11_bg_reply(bytes: &[u8]) -> Option<bool> {
 }
 
 /// First index of `needle` in `haystack` — tiny scan, no memchr dependency.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     if needle.is_empty() || haystack.len() < needle.len() {
         return None;
@@ -655,6 +659,7 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 
 /// WCAG-2 relative luminance of an 8-bit RGB triple (the production twin of
 /// the `test_support` helper).
+#[cfg_attr(not(unix), allow(dead_code))]
 fn rgb_luminance(r: u8, g: u8, b: u8) -> f64 {
     let ch = |v: u8| {
         let v = f64::from(v) / 255.0;
