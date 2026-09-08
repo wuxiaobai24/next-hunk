@@ -55,10 +55,16 @@ thiserror = "2"
 unicode-width = "0.2"
 # toml: parse layered config.toml (user + project). Pure-Rust, small.
 toml = "0.8"
+
 # notify: filesystem watcher for `--watch` mode. Optional behind the `watch`
 # feature so constrained/offline environments can build without it (the `--watch`
 # flag then reports that the feature is not compiled in).
 notify = { version = "6", optional = true }
+
+# Unix-only: poll(2) bounds the OSC 11 terminal-background probe (theme
+# `auto`). Already in the tree as a transitive dependency.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 default = ["highlight", "watch", "serve"]

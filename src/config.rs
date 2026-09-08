@@ -149,7 +149,8 @@ pub struct Config {
     /// TUI theme name: a preset (`flexoki`, `flexoki-light`, `catppuccin`,
     /// `catppuccin-mocha`, `catppuccin-latte`, `gruvbox`, `nord`,
     /// `tokyonight`) or the legacy mode names `dark` / `light` / `auto`
-    /// (auto = detect via $COLORFGBG).
+    /// (auto = probe the terminal background via OSC 11, falling back to
+    /// the legacy $COLORFGBG convention).
     pub theme: Option<String>,
     /// Layout mode: "unified" (default), "stack", "split", or "auto"
     /// (picks by terminal width).

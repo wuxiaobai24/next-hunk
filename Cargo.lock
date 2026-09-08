@@ -1928,6 +1928,7 @@ dependencies = [
  "criterion",
  "crossterm",
  "gix",
+ "libc",
  "notify",
  "ratatui",
  "serde",

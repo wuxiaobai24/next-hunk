@@ -197,7 +197,7 @@ CLI flag  >  .next-hunk/config.toml（项目）  >  ~/.config/next-hunk/config.t
 | `jump_center` | bool | `true` | 导航跳转（`]h`、搜索、文件跳转）落点居中显示；`false` 固定在视口顶部 |
 | `mouse` | bool | `true` | 捕获鼠标用于滚动/点击；`false` 保留终端原生的拖选复制 |
 | `context_collapse` | int | `8` | 未变上下文折叠：≥ N 行的连续未变内容折叠为一行 `··· N unchanged lines ···` 标记（`0` 关闭；运行时 `zx` 切换） |
-| `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`，或预设：`"flexoki"` / `"flexoki-light"`、`"catppuccin-mocha"` / `"catppuccin-latte"`、`"gruvbox-dark"`、`"nord"`、`"tokyonight"`。`t` 循环模式，`T` 循环调色板。 |
+| `theme` | string | `"flexoki"` | `"dark"` / `"light"` / `"auto"`，或预设：`"flexoki"` / `"flexoki-light"`、`"catppuccin-mocha"` / `"catppuccin-latte"`、`"gruvbox-dark"`、`"nord"`、`"tokyonight"`。`auto` 会探测终端真实背景色（OSC 11；旧式 `$COLORFGBG` 作为回退），浅色终端无需配置即可得到浅色主题。`t` 循环模式，`T` 循环调色板。 |
 | `export_on_quit` | string | `"none"` | `diff` / `serve` 退出时输出什么：`"json"` / `"markdown"`（`"md"`）/ `"both"` —— 给 agent 的审查报告（决策 + 批注）；`--export` / `--export-file` 可覆盖 |
 | `cursor_line` | string | `"on"` | 显示审查光标行（`"off"` 隐藏高亮，导航不受影响） |
 | `tab_width` | int | `4` | 渲染时制表符展开的列宽（1–16；`--tab-width` 可覆盖） |
